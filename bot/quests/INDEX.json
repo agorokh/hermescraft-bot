@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "comment": "Quest registry. Each entry: {file, summary, owner (Rosie|Steve|both)}. Quests are loaded by lib/quests.js on bot spawn and evaluated against player events + a 1s tick.",
+  "quests": {
+    "welcome_to_the_village": {
+      "file": "welcome_to_the_village.json",
+      "owner": "Rosie",
+      "summary": "When a kid joins, Rosie greets them and walks them through building 3 village structures together (house → well → garden)."
+    },
+    "treasure_at_the_tower": {
+      "file": "treasure_at_the_tower.json",
+      "owner": "Rosie",
+      "summary": "When a kid chats 'treasure' or 'gold', Rosie builds a small tower nearby and gifts a golden apple after they reach the base."
+    }
+  }
+}

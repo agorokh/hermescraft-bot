@@ -1,0 +1,41 @@
+{
+  "name": "welcome_to_the_village",
+  "owner": "Rosie",
+  "description": "Rosie greets a joining kid and offers to build a 3-structure village with them: a cottage, a well, a garden. Each step waits for a chat keyword so the kid can pace it.",
+  "steps": [
+    {
+      "trigger": { "kind": "player_chat", "regex": "lets? (start|build|do)\\s*(the\\s*)?(village|quest|story|tour)" },
+      "actions": [
+        { "kind": "chat", "text": "yes!! welcome to our little village. step 1: a cottage. stand where you want the door." },
+        { "kind": "chat", "text": "(then say 'rosie cottage here' when ready)" }
+      ]
+    },
+    {
+      "trigger": { "kind": "player_chat", "regex": "(rosie\\s*)?cottage (here|now|please)" },
+      "actions": [
+        { "kind": "chat", "text": "on it — cottage coming up next to you!" },
+        { "kind": "build_schematic", "name": "small_house", "relative_to_player": "@last_chatter", "dx": 2, "dy": 0, "dz": 0 }
+      ]
+    },
+    {
+      "trigger": { "kind": "player_chat", "regex": "(rosie\\s*)?(well|fountain) (here|now|please)" },
+      "actions": [
+        { "kind": "chat", "text": "well comin up — the village needs water!" },
+        { "kind": "build_schematic", "name": "well", "relative_to_player": "@last_chatter", "dx": -4, "dy": 0, "dz": 0 }
+      ]
+    },
+    {
+      "trigger": { "kind": "player_chat", "regex": "(rosie\\s*)?(garden|flowers?) (here|now|please)" },
+      "actions": [
+        { "kind": "chat", "text": "garden time! flowers + a little path!" },
+        { "kind": "build_schematic", "name": "garden", "relative_to_player": "@last_chatter", "dx": 0, "dy": 0, "dz": -6 }
+      ]
+    },
+    {
+      "trigger": { "kind": "player_chat", "regex": "(rosie\\s*)?(done|finished|that\\s*looks\\s*good)" },
+      "actions": [
+        { "kind": "chat", "text": "our village!! that's so cozy. wanna add a campfire spot next?" }
+      ]
+    }
+  ]
+}

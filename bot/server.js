@@ -60,8 +60,10 @@ import {
 import { registerHighLevelSkills } from './lib/skills.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute, ackFor } from './lib/intent_router.js';
+import { installQuestEngine } from './lib/quests.js';
 
 let _bark_tear_down = null;
+let _quest_tear_down = null;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
 const DATA_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'data');
@@ -429,6 +431,18 @@ async function createBot() {
         log(`presence loop installed for ${config.mc.username} (idle barks + gaze on proximity)`);
       } catch (e) {
         log(`presence loop install failed: ${e.message}`);
+      }
+
+      // Quest engine — state-machine driver for kid-play storylines.
+      // Loads vendor/hermescraft/bot/quests/*.json and watches for player
+      // chat, position, item-collect, timer triggers.
+      try {
+        if (_quest_tear_down) _quest_tear_down();
+        installQuestEngine(bot, ACTIONS, log).then((teardown) => {
+          _quest_tear_down = teardown;
+        }).catch((e) => log(`quest engine install failed: ${e.message}`));
+      } catch (e) {
+        log(`quest engine sync failure: ${e.message}`);
       }
 
       // ── Reactive Events ──────────────────────────────

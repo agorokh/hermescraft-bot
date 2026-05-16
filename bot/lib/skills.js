@@ -265,6 +265,19 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
     } catch (e) {}
   }
 
+  // Find the first non-blocked Y level to start from. If our requested
+  // baseY has an existing block (oak_planks from an old test, glass, etc.),
+  // step up until we hit air.
+  let startY = baseY;
+  for (let dy = 0; dy < 6; dy++) {
+    const candY = baseY + dy;
+    const probe = bot.blockAt(new Vec3(baseX, candY, baseZ));
+    if (!probe || probe.name === 'air' || REPLACEABLE_BLOCKS.has(probe.name)) {
+      startY = candY;
+      break;
+    }
+  }
+
   let placed = 0;
   for (let i = 0; i < height; i++) {
     if (bot.interrupt_code) break;
@@ -275,7 +288,7 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
       bot.setControlState('jump', false);
       await sleep(150);
     }
-    const r = await placeOne(bot, material, baseX, baseY + i, baseZ);
+    const r = await placeOne(bot, material, baseX, startY + i, baseZ);
     if (r.ok) placed++;
     // If first placement failed, abort — we can't pillar up from nothing.
     if (i === 0 && !r.ok) break;
@@ -283,10 +296,10 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
 
   return {
     result: placed === height
-      ? `Built ${height}-tall ${material} tower at ${baseX},${baseY},${baseZ}.`
+      ? `Built ${height}-tall ${material} tower at ${baseX},${startY},${baseZ}.`
       : (placed > 0
-          ? `Built ${placed}/${height} ${material} blocks of the tower at ${baseX},${baseY},${baseZ}. (Pillar-up got stuck after block ${placed}.)`
-          : `Couldn't start the tower at ${baseX},${baseY},${baseZ} — first block blocked. Try a different spot.`),
+          ? `Built ${placed}/${height} ${material} blocks of the tower at ${baseX},${startY},${baseZ}. (Pillar-up got stuck after block ${placed}.)`
+          : `Couldn't start the tower at ${baseX},${startY},${baseZ} — every Y from ${baseY} to ${baseY+5} was blocked or unreachable. Try a different spot.`),
   };
 }
 

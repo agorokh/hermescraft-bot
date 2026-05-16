@@ -53,6 +53,99 @@ import { Vec3 } from 'vec3';
 // ── Pattern table ───────────────────────────────────────────────────
 
 const INTENTS = [
+  // The single biggest miss in any kid-targeted bot per the kid-vocab
+  // research agent: a frustrated 9-year-old says "stop" 5x before doing
+  // anything else. This MUST be the first pattern checked.
+  {
+    name: 'stop',
+    patterns: [
+      /^\s*(stop|wait|nevermind|never mind|cancel|halt)[\s!.,?]*$/i,
+      /\bstop (it|that|please|now)\b/i,
+      /\bjust stop\b/i,
+    ],
+    async handler(bot, ctx) {
+      return { action: 'stop', body: {} };
+    },
+  },
+  {
+    name: 'report_position',
+    patterns: [
+      /\bwhere are you\b/i,
+      /\bwhere r u\b/i,
+      /\bwheres? (rosie|steve|you)\b/i,
+      /\bwhats? your (pos|position|spot|coords?)\b/i,
+    ],
+    async handler(bot, ctx) {
+      const p = bot.entity.position;
+      const msg = `at ${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}`;
+      return { action: 'chat', body: { text: msg } };
+    },
+  },
+  {
+    name: 'report_inventory',
+    patterns: [
+      /\bwhat (do you|u) have\b/i,
+      /\bwhats? in your (inv|inventory|stuff|bag)\b/i,
+      /\bshow me (your|ur) (stuff|items|inv|inventory)\b/i,
+    ],
+    async handler(bot, ctx) {
+      const items = bot.inventory.items().slice(0, 5)
+        .map((i) => `${i.name}x${i.count}`).join(', ');
+      const msg = items ? `got ${items}` : 'empty hands';
+      return { action: 'chat', body: { text: msg } };
+    },
+  },
+  {
+    name: 'emote_wave',
+    patterns: [
+      /\bwave( at me)?\b/i,
+      /\bsay hi\b.*\bwith.*\b(wave|hand)\b/i,
+    ],
+    async handler(bot, ctx) {
+      // Simple wave: swing arm 3 times
+      try { for (let i = 0; i < 3; i++) { bot.swingArm('right'); await new Promise(r=>setTimeout(r,300)); } } catch {}
+      return { action: 'chat', body: { text: '👋' } };
+    },
+  },
+  {
+    name: 'emote_jump',
+    patterns: [
+      /\bjump( around|for me|please|now)?\b/i,
+      /\bdo a jump\b/i,
+    ],
+    async handler(bot, ctx) {
+      try {
+        for (let i = 0; i < 3; i++) {
+          bot.setControlState('jump', true);
+          await new Promise(r=>setTimeout(r,120));
+          bot.setControlState('jump', false);
+          await new Promise(r=>setTimeout(r,250));
+        }
+      } catch {}
+      return { action: 'chat', body: { text: '🦘' } };
+    },
+  },
+  {
+    name: 'gather_block',
+    patterns: [
+      /\b(get|grab|chop|mine|fetch|bring)\b.*\b(me )?(some |a few )?(\d+)?\s*(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i,
+      /\b(I need|i want)\b.*\b(wood|logs?|dirt|stone|cobble|sand)\b/i,
+    ],
+    async handler(bot, ctx) {
+      const m = ctx.body.match(/\b(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i);
+      if (!m) return null;
+      const raw = m[1].toLowerCase();
+      const blockMap = {
+        wood: 'oak_log', logs: 'oak_log', log: 'oak_log', oak: 'oak_log',
+        dirt: 'dirt', stone: 'stone', cobble: 'cobblestone',
+        cobblestone: 'cobblestone', sand: 'sand',
+      };
+      const block = blockMap[raw] || 'oak_log';
+      const countMatch = ctx.body.match(/\b(\d+)\s*(wood|logs?|dirt|stone|cobble|sand)/i);
+      const count = countMatch ? parseInt(countMatch[1], 10) : 4;
+      return { action: 'bg_collect', body: { block, count: Math.min(count, 16) } };
+    },
+  },
   {
     name: 'torch_near_me',
     patterns: [
@@ -163,6 +256,11 @@ const INTENTS = [
     async handler(bot, ctx) {
       const m = ctx.body.match(/\b(\-?\d+)\s+(\-?\d+)\s+(\-?\d+)\b/);
       if (!m) return null;
+      // Stay with `goto` (15s sync timeout, foreground) — even if the
+      // race target is far, the 15s of visible bot motion + the honest
+      // progress message is the right kid experience. Long-haul races
+      // would need a /task background variant that bg_goto would call;
+      // not worth the complexity for the kid use case.
       return {
         action: 'goto',
         body: { x: parseInt(m[1], 10), y: parseInt(m[2], 10), z: parseInt(m[3], 10) },

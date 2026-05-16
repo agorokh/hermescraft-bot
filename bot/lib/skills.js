@@ -28,13 +28,25 @@ import { Vec3 } from 'vec3';
 // ── helpers ──────────────────────────────────────────────────────────
 
 function findPlayerEntity(bot, name) {
+  // Mindcraft pattern: bot.players is the server roster (populated on
+  // playerJoined); bot.players[name].entity is the live entity if the
+  // player is loaded in our view. Case-insensitive name match per
+  // Floodgate's leading-dot Bedrock-prefix convention.
+  if (!name) return null;
   const lname = name.toLowerCase();
-  return Object.values(bot.entities).find((e) => {
+  for (const [n, p] of Object.entries(bot.players || {})) {
+    if (n === bot.username) continue;
+    if (n.toLowerCase() === lname || n.toLowerCase().replace(/^\./, '') === lname) {
+      if (p.entity) return p.entity;
+    }
+  }
+  // Fallback: scan bot.entities for visible player entities.
+  return Object.values(bot.entities || {}).find((e) => {
     if (e === bot.entity) return false;
     if (e.type !== 'player') return false;
-    return (e.username || '').toLowerCase() === lname
-        || (e.name || '').toLowerCase() === lname;
-  });
+    const en = (e.username || '').toLowerCase();
+    return en === lname || en.replace(/^\./, '') === lname;
+  }) || null;
 }
 
 function findInventoryItem(bot, itemName) {
@@ -230,35 +242,51 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
   if (x == null || y == null || z == null) return { result: `build_tower needs x, y, z` };
   height = Math.max(1, Math.min(20, Math.floor(height)));
 
-  // First: go stand near the base so place_block actually works.
+  // Path to a spot 2 blocks away from the build column so we don't end up
+  // standing on the column ourselves (which would block placeBlock at the
+  // first y level).
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
   try {
-    const goal = new goals.GoalNear(baseX, baseY, baseZ, 1);
-    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000));
+    const goal = new goals.GoalNear(baseX, baseY, baseZ, 2);
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000));
     await Promise.race([bot.pathfinder.goto(goal), timeout]);
   } catch (e) {
     // Continue — might still be close enough.
   }
   if (bot.interrupt_code) return { result: `build_tower interrupted` };
 
+  // If we ended up standing on the column itself, step one block aside.
+  const myPos = bot.entity.position;
+  if (Math.abs(myPos.x - baseX) < 0.6 && Math.abs(myPos.z - baseZ) < 0.6) {
+    try {
+      const aside = new goals.GoalNear(baseX + 2, baseY, baseZ, 1);
+      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000));
+      await Promise.race([bot.pathfinder.goto(aside), timeout]);
+    } catch (e) {}
+  }
+
   let placed = 0;
   for (let i = 0; i < height; i++) {
     if (bot.interrupt_code) break;
-    // Move on top of the previous block by jumping.
+    // Move on top of the previous block by jumping (only after the first).
     if (i > 0) {
       bot.setControlState('jump', true);
-      await sleep(120);
+      await sleep(150);
       bot.setControlState('jump', false);
+      await sleep(150);
     }
     const r = await placeOne(bot, material, baseX, baseY + i, baseZ);
     if (r.ok) placed++;
-    // Don't retry — failure means we replan.
+    // If first placement failed, abort — we can't pillar up from nothing.
+    if (i === 0 && !r.ok) break;
   }
 
   return {
     result: placed === height
       ? `Built ${height}-tall ${material} tower at ${baseX},${baseY},${baseZ}.`
-      : `Tower attempt placed ${placed}/${height} ${material} blocks at ${baseX},${baseY},${baseZ}. Some failed (block occluded or out of material).`,
+      : (placed > 0
+          ? `Built ${placed}/${height} ${material} blocks of the tower at ${baseX},${baseY},${baseZ}. (Pillar-up got stuck after block ${placed}.)`
+          : `Couldn't start the tower at ${baseX},${baseY},${baseZ} — first block blocked. Try a different spot.`),
   };
 }
 

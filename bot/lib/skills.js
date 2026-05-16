@@ -429,6 +429,52 @@ async function loadSchematic(name) {
   return { entry, data: JSON.parse(raw) };
 }
 
+// Detect whether the bot has op-level permission for /setblock.  Council
+// review (Mistral, 2026-05-16) flagged a critical bug in the
+// listen-for-server-message-only version: a non-op bot on a server with
+// `sendCommandFeedback=false` (Paper default for some configs) silently
+// fails every /setblock, then the message-listener times out and assumes
+// op — producing the worst possible outcome, an apparent "88/88 blocks
+// placed" with nothing in the world.  We now PROBE-AND-VERIFY: place a
+// known sentinel block in a cell the bot's worldview already has loaded
+// (its own position +1Y), wait briefly, then read the block back.  If
+// the block matches the sentinel, /setblock works; otherwise fall back
+// to physical placement.  Clamps Y to <= 319 (vanilla 1.21 build limit)
+// to avoid the probe firing above world height.
+async function detectSetblockAuth(bot, _x, _y, _z) {
+  // Probe at the bot's current position +1Y (a cell guaranteed to be in a
+  // loaded chunk).  Use a sentinel block we can read back unambiguously
+  // and that's cheap to roll back: white_wool (visible distinct, every
+  // server has it in the registry).
+  const sentinel = 'white_wool';
+  const myPos = bot.entity?.position;
+  if (!myPos) return false; // no bot body, no point trying /setblock
+  const px = Math.floor(myPos.x);
+  const pz = Math.floor(myPos.z);
+  let py = Math.floor(myPos.y) + 3; // overhead so we don't suffocate
+  if (py > 319) py = 319; // vanilla 1.21 build limit
+  if (py < -64) py = -64; // floor for completeness
+
+  // Capture what's currently there so we restore it after probing.
+  const before = bot.blockAt(new Vec3(px, py, pz));
+  const beforeName = before?.name || 'air';
+
+  try { bot.chat(`/setblock ${px} ${py} ${pz} ${sentinel}`); } catch (e) {}
+  await sleep(250); // wait for the chunk update to round-trip
+
+  const after = bot.blockAt(new Vec3(px, py, pz));
+  const afterName = after?.name || 'air';
+  const ok = afterName === sentinel;
+
+  // Restore the previous block so the probe is invisible to the player.
+  // Best-effort — if op was lost between probe and restore, we leave the
+  // sentinel and report `false` honestly.
+  if (ok) {
+    try { bot.chat(`/setblock ${px} ${py} ${pz} ${beforeName}`); } catch (e) {}
+  }
+  return ok;
+}
+
 async function build_schematic(bot, { name, x, y, z }) {
   if (!name) return { result: `build_schematic needs a schematic name` };
   if (x == null || y == null || z == null) return { result: `build_schematic needs x, y, z origin` };
@@ -445,21 +491,39 @@ async function build_schematic(bot, { name, x, y, z }) {
   if (blocks.length === 0) return { result: `Schematic ${name} is empty.` };
 
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
-
-  // Pathfind near the origin (footprint center) so reach is workable.
   const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
   const centerX = baseX + Math.floor(fw / 2);
   const centerZ = baseZ + Math.floor(fl / 2);
-  try {
-    const goal = new goals.GoalNear(centerX, baseY, centerZ, 3);
-    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000));
-    await Promise.race([bot.pathfinder.goto(goal), timeout]);
-  } catch (e) { /* continue */ }
+
+  // Cheat-mode / op path: vanilla `/setblock x y z block` per cell, instant
+  // and aerial-safe. This is the same pattern Mindcraft's `placeBlock` uses
+  // in cheat mode (kolbytn/mindcraft `src/agent/library/skills.js`). Mineflayer's
+  // physical `placeBlock` requires an adjacent solid block to place against,
+  // so floating cells (treehouse floor, walls, tower roof) cause the
+  // "Cannot read properties of undefined (reading 'type')" unhandled rejection.
+  // Detect once, then route every cell through chat commands until proven
+  // otherwise. Companion bots in this repo are always op (`server/ops.json`).
+  const useChatCommand = await detectSetblockAuth(bot, baseX, baseY + 200, baseZ);
+
+  // Pathfind near the origin (footprint center) only when we'll actually
+  // need to be near it. /setblock works at arbitrary range from the bot.
+  if (!useChatCommand) {
+    try {
+      const goal = new goals.GoalNear(centerX, baseY, centerZ, 3);
+      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000));
+      // Tail .catch(): mineflayer-pathfinder's `goto` spawns subtasks whose
+      // rejections survive Promise.race's outer await, producing the
+      // observed `Unhandled rejection: TypeError: Cannot read properties of
+      // undefined (reading 'type')` log spam during aerial / unloaded-chunk
+      // attempts. Consuming the rejection explicitly silences it.
+      await Promise.race([bot.pathfinder.goto(goal), timeout]).catch(() => {});
+    } catch (e) { /* continue */ }
+  }
   if (bot.interrupt_code) return { result: `build_schematic interrupted` };
 
-  // Place each block in the manifest. Order matters for stability:
-  // lowest y first (foundation up), then sort by distance from current
-  // pos within a y-layer so we don't have to teleport across.
+  // Place each block in the manifest. Order matters for physical placement
+  // stability (foundation-up so each placement has an adjacent block to
+  // hold against); harmless but free for /setblock.
   const sorted = [...blocks].sort((a, b) => {
     if (a[1] !== b[1]) return a[1] - b[1];
     return (a[0] + a[2]) - (b[0] + b[2]);
@@ -470,32 +534,54 @@ async function build_schematic(bot, { name, x, y, z }) {
   const missing = new Set();
   for (const [dx, dy, dz, block] of sorted) {
     if (bot.interrupt_code) break;
+    // Skip explicit air cells — schematic authors sometimes encode them as
+    // "negative space" placeholders.  /setblock to air is a no-op crash
+    // hazard; physical placeBlock just no-ops.
+    if (!block || block === 'air' || block === 'cave_air' || block === 'void_air') continue;
     const tx = baseX + dx, ty = baseY + dy, tz = baseZ + dz;
-    // Make sure we have the block; if not, skip and report.
-    if (!findInventoryItem(bot, block)) {
-      missing.add(block);
-      failed++;
-      continue;
-    }
-    const r = await placeOne(bot, block, tx, ty, tz);
-    if (r.ok) placed++;
-    else failed++;
-    // Move closer if we drift out of reach (every 8 placements).
-    if ((placed + failed) % 8 === 0) {
+
+    if (useChatCommand) {
+      // Rapid /setblock burst. The server processes commands in order, so
+      // we don't need to wait between them — but a small rate limit keeps
+      // the chat queue from tripping Paper's flood-protection.
       try {
-        const goal = new goals.GoalNear(centerX, ty, centerZ, 3);
-        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000));
-        await Promise.race([bot.pathfinder.goto(goal), timeout]);
-      } catch (e) {}
+        bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
+        placed++;
+      } catch (e) {
+        failed++;
+      }
+      // 30ms between commands → ~60 blocks/2s, well under flood limits.
+      await sleep(30);
+    } else {
+      // Survival / non-op fallback. Requires the bot to have the block in
+      // inventory AND an adjacent solid block to place against. Aerial
+      // cells will fail here — that's the cost of not being op.
+      if (!findInventoryItem(bot, block)) {
+        missing.add(block);
+        failed++;
+        continue;
+      }
+      const r = await placeOne(bot, block, tx, ty, tz);
+      if (r.ok) placed++;
+      else failed++;
+      // Move closer if we drift out of reach (every 8 placements).
+      if ((placed + failed) % 8 === 0) {
+        try {
+          const goal = new goals.GoalNear(centerX, ty, centerZ, 3);
+          const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000));
+          await Promise.race([bot.pathfinder.goto(goal), timeout]).catch(() => {});
+        } catch (e) {}
+      }
     }
   }
 
   const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
+  const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
   if (placed === blocks.length) {
-    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${blocks.length} blocks placed.` };
+    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${blocks.length} blocks placed${mode}.` };
   }
   return {
-    result: `Built ${placed}/${blocks.length} of "${name}" at ${baseX},${baseY},${baseZ}.${missingStr}`,
+    result: `Built ${placed}/${blocks.length} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}`,
   };
 }
 

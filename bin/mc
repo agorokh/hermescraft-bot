@@ -979,6 +979,48 @@ ENVIRONMENT:
 EOF
         ;;
 
+    # ── High-level skill primitives (square-zero rebuild 2026-05-16) ──
+    # Mindcraft-shaped intent verbs. The body server loops the low-level
+    # Mineflayer calls internally and returns an English sentence describing
+    # what happened, designed for the next LLM turn to read.
+
+    place_near_player|pnp)
+        PLAYER="${1:?Usage: mc place_near_player PLAYER ITEM [direction]}"
+        ITEM="${2:?Usage: mc place_near_player PLAYER ITEM [direction]}"
+        DIR="${3:-side}"
+        pretty "$(api_post '/action/place_near_player' "{\"player\":\"$PLAYER\",\"item\":\"$ITEM\",\"direction\":\"$DIR\"}")"
+        ;;
+
+    give_to_player|give)
+        PLAYER="${1:?Usage: mc give_to_player PLAYER ITEM [count]}"
+        ITEM="${2:?Usage: mc give_to_player PLAYER ITEM [count]}"
+        COUNT="${3:-1}"
+        pretty "$(api_post '/action/give_to_player' "{\"player\":\"$PLAYER\",\"item\":\"$ITEM\",\"count\":$COUNT}")"
+        ;;
+
+    build_tower|tower)
+        X="${1:?Usage: mc build_tower X Y Z [height] [material]}"
+        Y="${2:?Usage: mc build_tower X Y Z [height] [material]}"
+        Z="${3:?Usage: mc build_tower X Y Z [height] [material]}"
+        HEIGHT="${4:-5}"
+        MATERIAL="${5:-oak_planks}"
+        pretty "$(api_post '/action/build_tower' "{\"x\":$X,\"y\":$Y,\"z\":$Z,\"height\":$HEIGHT,\"material\":\"$MATERIAL\"}")"
+        ;;
+
+    light_area|lit)
+        CX="${1:?Usage: mc light_area CX CY CZ [radius]}"
+        CY="${2:?Usage: mc light_area CX CY CZ [radius]}"
+        CZ="${3:?Usage: mc light_area CX CY CZ [radius]}"
+        RADIUS="${4:-6}"
+        pretty "$(api_post '/action/light_area' "{\"cx\":$CX,\"cy\":$CY,\"cz\":$CZ,\"radius\":$RADIUS}")"
+        ;;
+
+    follow_player_v2|fpv2)
+        PLAYER="${1:?Usage: mc follow_player_v2 PLAYER [distance]}"
+        DISTANCE="${2:-3}"
+        pretty "$(api_post '/action/follow_player_v2' "{\"player\":\"$PLAYER\",\"distance\":$DISTANCE}")"
+        ;;
+
     *)
         echo "Unknown command: $CMD"
         echo "Run 'mc help' for usage."

@@ -53,6 +53,14 @@ import {
   summarizeVisibleBlocks,
   summarizeSceneText,
 } from './lib/perception.js';
+// Square-zero rebuild (2026-05-16): high-level Mindcraft-shaped skill
+// primitives + idle bark / presence loop. Each module is self-contained;
+// wiring below registers skills with ACTIONS map and installs the bark
+// loop on first spawn.
+import { registerHighLevelSkills } from './lib/skills.js';
+import { installBarksAndPresence } from './lib/barks.js';
+
+let _bark_tear_down = null;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
 const DATA_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'data');
@@ -334,6 +342,26 @@ async function createBot() {
         startAt: 14,
         bannedFood: [],
       };
+
+      // ── Square-zero rebuild: register high-level skill primitives
+      // (Mindcraft-shaped, return English sentences) and install the
+      // scripted idle-bark / gaze-on-proximity / event-reaction loop
+      // (zero LLM calls; pure scripted "feel-alive" behavior). The bark
+      // loop only fires when a player is nearby so empty-world idle
+      // doesn't burn anything.
+      try {
+        registerHighLevelSkills(ACTIONS, ensureBot);
+        log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2');
+      } catch (e) {
+        log(`skill registration failed: ${e.message}`);
+      }
+      try {
+        if (_bark_tear_down) _bark_tear_down();
+        _bark_tear_down = installBarksAndPresence(bot, { characterName: config.mc.username });
+        log(`presence loop installed for ${config.mc.username} (idle barks + gaze on proximity)`);
+      } catch (e) {
+        log(`presence loop install failed: ${e.message}`);
+      }
 
       // ── Reactive Events ──────────────────────────────
 

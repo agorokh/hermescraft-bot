@@ -66,16 +66,36 @@ function findBuildOffBlock(bot, x, y, z) {
   return null;
 }
 
+// Blocks that vanilla placement replaces silently — same set Minecraft uses.
+// If we try to place at a coord occupied by one of these, the place call
+// just works (the existing block becomes the drop).
+const REPLACEABLE_BLOCKS = new Set([
+  'air', 'cave_air', 'void_air', 'water', 'lava',
+  'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
+  'dead_bush', 'seagrass', 'tall_seagrass',
+  'dandelion', 'poppy', 'blue_orchid', 'allium', 'azure_bluet',
+  'red_tulip', 'orange_tulip', 'white_tulip', 'pink_tulip',
+  'oxeye_daisy', 'cornflower', 'lily_of_the_valley',
+  'snow', 'vine', 'glow_lichen', 'hanging_roots',
+]);
+
 // Core place primitive. Returns true on success.
 async function placeOne(bot, itemName, x, y, z) {
   const targetPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
-  // Already occupied?
+  // Already occupied? (treat plant/decoration blocks as replaceable per vanilla)
   const existing = bot.blockAt(targetPos);
-  if (existing && existing.name !== 'air' && existing.name !== itemName) {
-    return { ok: false, reason: `${existing.name} already at ${targetPos.x},${targetPos.y},${targetPos.z}` };
-  }
   if (existing && existing.name === itemName) {
     return { ok: true, reason: `already placed at ${targetPos.x},${targetPos.y},${targetPos.z}` };
+  }
+  if (existing && !REPLACEABLE_BLOCKS.has(existing.name) && (existing.boundingBox === 'block')) {
+    return { ok: false, reason: `${existing.name} already at ${targetPos.x},${targetPos.y},${targetPos.z}` };
+  }
+  // If a replaceable plant is in the way, break it first so the place call
+  // doesn't no-op or fail (placeBlock on tall_grass works in vanilla, but
+  // Mineflayer is inconsistent across versions; explicit dig is safest).
+  if (existing && REPLACEABLE_BLOCKS.has(existing.name) && existing.name !== 'air' && existing.name !== 'cave_air' && existing.name !== 'void_air') {
+    try { await bot.dig(existing); } catch (e) { /* swallow */ }
+    await sleep(120);
   }
   const item = findInventoryItem(bot, itemName);
   if (!item) return { ok: false, reason: `no ${itemName} in inventory` };

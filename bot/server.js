@@ -59,6 +59,7 @@ import {
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
 import { installBarksAndPresence } from './lib/barks.js';
+import { tryRoute, ackFor } from './lib/intent_router.js';
 
 let _bark_tear_down = null;
 
@@ -248,6 +249,43 @@ async function handleChat(username, message) {
     
     // If directly addressed (Name: msg format), queue as command
     if (!routing.isBroadcast) {
+      // ── Speculative intent router (square-zero rebuild 2026-05-16):
+      // try to match the kid's message to a known intent (build_tower,
+      // place_near_player, give_to_player, etc.) and fire the matching
+      // primitive WITHOUT waiting for the LLM brain. <500ms response.
+      // Safe-by-design: only reversible/non-destructive actions route.
+      try {
+        const route = await tryRoute(bot, routing.body, username);
+        if (route.matched) {
+          const ack = ackFor(route.intent_name);
+          if (ack) {
+            try { bot.chat(ack); } catch {}
+          }
+          log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
+          if (ACTIONS[route.action]) {
+            // Fire-and-forget — long-running actions don't block chat thread.
+            ACTIONS[route.action](route.body).then((result) => {
+              if (result && result.result) {
+                try { bot.chat(String(result.result).slice(0, 80)); } catch {}
+              }
+            }).catch((e) => {
+              log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
+              try { bot.chat(`hm, couldn't pull that off — ${e.message.slice(0, 50)}`); } catch {}
+            });
+            // Skip the queue: the kid is taken care of by the router. The
+            // LLM brain doesn't need to see this directive.
+            rememberSocialEvent({ actor: username, kind: 'heard',
+                                  channel: routing.channel,
+                                  command: true, intent_matched: route.intent_name,
+                                  message: routing.body });
+            return;
+          }
+        }
+      } catch (e) {
+        log(`[IntentRouter] error: ${e.message}`);
+        // Fall through to normal queue path.
+      }
+
       commandQueue.push({
         time: Date.now(),
         from: username,
@@ -265,6 +303,34 @@ async function handleChat(username, message) {
       if (mention) {
         const command = stripMentionPrefix(routing.body, mention);
         if (command) {
+          // Try intent router FIRST (same as direct-address path above) —
+          // kids almost always address with "Rosie do X" which hits this
+          // branch, NOT the direct-name-colon branch. <500ms response with
+          // no LLM round-trip when a keyword pattern matches.
+          try {
+            const route = await tryRoute(bot, command, username);
+            if (route.matched && ACTIONS[route.action]) {
+              const ack = ackFor(route.intent_name);
+              if (ack) { try { bot.chat(ack); } catch {} }
+              log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
+              ACTIONS[route.action](route.body).then((result) => {
+                if (result && result.result) {
+                  try { bot.chat(String(result.result).slice(0, 80)); } catch {}
+                }
+              }).catch((e) => {
+                log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
+                try { bot.chat(`hm, couldn't pull that off`); } catch {}
+              });
+              rememberSocialEvent({ actor: username, kind: 'heard',
+                                    channel: 'public_mention',
+                                    command: true, intent_matched: route.intent_name,
+                                    message: command });
+              return; // skip queue — handled by router
+            }
+          } catch (e) {
+            log(`[IntentRouter via mention] error: ${e.message}`);
+          }
+
           commandQueue.push({
             time: Date.now(),
             from: username,

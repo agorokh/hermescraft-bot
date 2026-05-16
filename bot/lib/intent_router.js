@@ -39,6 +39,8 @@ function intFromMatch(text, regex) {
   return m ? parseInt(m[1], 10) : null;
 }
 
+import { Vec3 } from 'vec3';
+
 // ── Pattern table ───────────────────────────────────────────────────
 
 const INTENTS = [
@@ -85,9 +87,31 @@ const INTENTS = [
       const buildables = ['oak_planks', 'cobblestone', 'stone', 'oak_log', 'dirt', 'spruce_planks'];
       const found = bot.inventory.items().find((i) => buildables.includes(i.name));
       const material = found ? found.name : 'oak_planks';
+      // Find a clear spot ≥2 blocks from the kid: scan the 4 cardinal
+      // directions at +2/-2 offset, pick the first one where the air block
+      // above the surface is actually air (not torch/sapling from a prior
+      // prompt). Falls back to +2x if no clear spot found.
+      const baseY = Math.floor(p.y);
+      const offsets = [[2, 0], [-2, 0], [0, 2], [0, -2], [3, 0], [-3, 0]];
+      let chosen = offsets[0];
+      for (const [dx, dz] of offsets) {
+        const targetX = Math.floor(p.x) + dx;
+        const targetZ = Math.floor(p.z) + dz;
+        const at = bot.blockAt(new Vec3(targetX, baseY, targetZ));
+        if (!at || at.name === 'air' || at.name === 'short_grass' || at.name === 'tall_grass') {
+          chosen = [dx, dz];
+          break;
+        }
+      }
       return {
         action: 'build_tower',
-        body: { x: Math.floor(p.x) + 1, y: Math.floor(p.y), z: Math.floor(p.z), height, material },
+        body: {
+          x: Math.floor(p.x) + chosen[0],
+          y: baseY,
+          z: Math.floor(p.z) + chosen[1],
+          height,
+          material,
+        },
       };
     },
   },

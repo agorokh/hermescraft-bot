@@ -266,6 +266,7 @@ async function handleChat(username, message) {
             // Fire-and-forget — long-running actions don't block chat thread.
             ACTIONS[route.action](route.body).then((result) => {
               if (result && result.result) {
+                log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                 try { bot.chat(String(result.result).slice(0, 80)); } catch {}
               }
             }).catch((e) => {
@@ -315,6 +316,7 @@ async function handleChat(username, message) {
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
               ACTIONS[route.action](route.body).then((result) => {
                 if (result && result.result) {
+                  log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                   try { bot.chat(String(result.result).slice(0, 80)); } catch {}
                 }
               }).catch((e) => {

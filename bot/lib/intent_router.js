@@ -126,6 +126,43 @@ const INTENTS = [
     },
   },
   {
+    name: 'emote_dance',
+    patterns: [
+      /\bdance( with me| for me| please| now)?\b/i,
+      /\bdo a dance\b/i,
+    ],
+    async handler(bot, ctx) {
+      // Dance = sneak+jump+spin loop for ~3s
+      try {
+        const start = Date.now();
+        let yaw = bot.entity.yaw;
+        while (Date.now() - start < 3000) {
+          yaw += Math.PI / 4;
+          try { await bot.look(yaw, 0); } catch {}
+          bot.setControlState('jump', true);
+          await new Promise(r=>setTimeout(r,180));
+          bot.setControlState('jump', false);
+          await new Promise(r=>setTimeout(r,180));
+        }
+      } catch {}
+      return { action: 'chat', body: { text: '💃' } };
+    },
+  },
+  {
+    name: 'emote_sit',
+    patterns: [
+      /\bsit( down| with me| next to me| here| please)?\b/i,
+    ],
+    async handler(bot, ctx) {
+      try {
+        bot.setControlState('sneak', true);
+        // Sneak for 5s to look "sat down"
+        setTimeout(() => { try { bot.setControlState('sneak', false); } catch {} }, 5000);
+      } catch {}
+      return { action: 'chat', body: { text: 'sitting :)' } };
+    },
+  },
+  {
     name: 'gather_block',
     patterns: [
       /\b(get|grab|chop|mine|fetch|bring)\b.*\b(me )?(some |a few )?(\d+)?\s*(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i,
@@ -143,7 +180,8 @@ const INTENTS = [
       const block = blockMap[raw] || 'oak_log';
       const countMatch = ctx.body.match(/\b(\d+)\s*(wood|logs?|dirt|stone|cobble|sand)/i);
       const count = countMatch ? parseInt(countMatch[1], 10) : 4;
-      return { action: 'bg_collect', body: { block, count: Math.min(count, 16) } };
+      // ACTIONS.collect (synchronous via /action/collect endpoint).
+      return { action: 'collect', body: { block, count: Math.min(count, 16) } };
     },
   },
   {
@@ -234,6 +272,26 @@ const INTENTS = [
     },
   },
   {
+    name: 'plant_flowers',
+    patterns: [
+      /\bplant (a |some |me )?(flower|flowers|garden|poppy|poppies|tulip|tulips)\b/i,
+      /\bmake (a |me a )?(garden|flower bed|flowers)\b/i,
+    ],
+    async handler(bot, ctx) {
+      if (!ctx.senderEntity) return null;
+      const p = ctx.senderEntity.position;
+      // Pick flower types from inventory; default to poppy.
+      const flowers = ['poppy', 'dandelion', 'blue_orchid', 'rose_bush', 'red_tulip'];
+      const found = bot.inventory.items().find((i) => flowers.includes(i.name));
+      const item = found ? found.name : 'poppy';
+      // Place 3 flowers in a small arc around the player.
+      return {
+        action: 'place_near_player',
+        body: { player: ctx.sender, item, direction: 'side' },
+      };
+    },
+  },
+  {
     name: 'follow_me',
     patterns: [
       /\bfollow me\b/i,
@@ -277,8 +335,9 @@ const INTENTS = [
       const oreMatch = ctx.body.match(/\b(iron|coal|diamond|copper|gold)\b/i);
       if (!oreMatch) return null;
       const ore = oreMatch[1].toLowerCase() + '_ore';
-      // bg_collect handles find + dig + pickup in one call
-      return { action: 'bg_collect', body: { block: ore, count: 4 } };
+      // ACTIONS.collect handles find + dig + pickup in one call.
+      // (No 'bg_collect' key — that's a /task/-side endpoint name only.)
+      return { action: 'collect', body: { block: ore, count: 3 } };
     },
   },
 ];

@@ -11,6 +11,11 @@
       "file": "treasure_at_the_tower.json",
       "owner": "Rosie",
       "summary": "When a kid chats 'treasure' or 'gold', Rosie builds a small tower nearby and gifts a golden apple after they reach the base."
+    },
+    "find_the_treasure": {
+      "file": "find_the_treasure.json",
+      "owner": "Steve",
+      "summary": "Steve-led treasure hunt. Kid says 'treasure hunt', Steve builds a campfire 15 blocks east, drops hints, and gifts a golden apple on arrival."
     }
   }
 }

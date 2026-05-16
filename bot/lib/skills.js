@@ -92,7 +92,10 @@ const REPLACEABLE_BLOCKS = new Set([
 ]);
 
 // Core place primitive. Returns true on success.
-async function placeOne(bot, itemName, x, y, z) {
+// allowReachRecover: if true, when placeBlock fails due to reach distance,
+// move the bot closer and retry once. Skill loops set this to true; raw
+// callers may set false to avoid the pathfind overhead.
+async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
   const targetPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
   // Already occupied? (treat plant/decoration blocks as replaceable per vanilla)
   const existing = bot.blockAt(targetPos);
@@ -108,6 +111,25 @@ async function placeOne(bot, itemName, x, y, z) {
   if (existing && REPLACEABLE_BLOCKS.has(existing.name) && existing.name !== 'air' && existing.name !== 'cave_air' && existing.name !== 'void_air') {
     try { await bot.dig(existing); } catch (e) { /* swallow */ }
     await sleep(120);
+  }
+
+  // If bot is too far for reach, pathfind closer once before placing.
+  // Mineflayer's place-block reach is ~5 blocks from eye height.
+  if (allowReachRecover) {
+    const myPos = bot.entity.position;
+    const eye = new Vec3(myPos.x, myPos.y + 1.62, myPos.z);
+    const dist = Math.sqrt(
+      (eye.x - targetPos.x - 0.5) ** 2 +
+      (eye.y - targetPos.y - 0.5) ** 2 +
+      (eye.z - targetPos.z - 0.5) ** 2
+    );
+    if (dist > 4.5) {
+      try {
+        const goal = new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2);
+        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000));
+        await Promise.race([bot.pathfinder.goto(goal), timeout]);
+      } catch (e) { /* continue and try place anyway */ }
+    }
   }
   const item = findInventoryItem(bot, itemName);
   if (!item) return { ok: false, reason: `no ${itemName} in inventory` };

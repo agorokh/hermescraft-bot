@@ -36,6 +36,13 @@
       "height": 1,
       "summary": "Outdoor sit-down spot — cobblestone fire ring + 4 oak-log seats",
       "materials": {"cobblestone": 8, "oak_log": 4, "campfire": 1}
+    },
+    "treehouse": {
+      "file": "treehouse.json",
+      "footprint": [5, 5],
+      "height": 9,
+      "summary": "5x5 oak treehouse on 4 oak-log stilts (Y+5 platform, Y+8 roof, oak-fence railings)",
+      "materials": {"oak_log": 24, "oak_planks": 50, "oak_fence": 14}
     }
   }
 }

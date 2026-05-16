@@ -238,68 +238,93 @@ async function give_to_player(bot, { player, item, count = 1 }) {
 // growing pillar. Returns "Built N-tall <material> tower at X,Y,Z (placed
 // k/N blocks)."
 
+// build_tower — pillar-up implementation (Minecraft classic technique).
+//
+// The kid's request: "build a 5-tall tower right here".
+// Mechanic: bot pathfinds onto the column base, then for each layer:
+//   1. Look straight down (so placeBlock targets the block-below).
+//   2. Jump — bot's feet leave the floor.
+//   3. While airborne, place a block at feet level (referenced from the
+//      block-below; faceVec=(0,1,0) means "the face above the ref").
+//   4. Land on the new block (one Y higher than before).
+//   5. Repeat.
+//
+// This is the standard speedrun "block-up" — Mineflayer handles it via
+// placeBlock when the ref is exactly below feet.
+
 async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }) {
   if (x == null || y == null || z == null) return { result: `build_tower needs x, y, z` };
   height = Math.max(1, Math.min(20, Math.floor(height)));
 
-  // Path to a spot 2 blocks away from the build column so we don't end up
-  // standing on the column ourselves (which would block placeBlock at the
-  // first y level).
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
+
+  // Pathfind to STAND ON the column position. GoalNear with range 0 forces
+  // exact tile occupancy. The bot's feet should end up at (baseX, baseY,
+  // baseZ) standing on the ground block at (baseX, baseY-1, baseZ).
   try {
-    const goal = new goals.GoalNear(baseX, baseY, baseZ, 2);
+    const goal = new goals.GoalNear(baseX, baseY, baseZ, 0);
     const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000));
     await Promise.race([bot.pathfinder.goto(goal), timeout]);
-  } catch (e) {
-    // Continue — might still be close enough.
-  }
+  } catch (e) { /* continue — close-enough is fine */ }
   if (bot.interrupt_code) return { result: `build_tower interrupted` };
 
-  // If we ended up standing on the column itself, step one block aside.
-  const myPos = bot.entity.position;
-  if (Math.abs(myPos.x - baseX) < 0.6 && Math.abs(myPos.z - baseZ) < 0.6) {
-    try {
-      const aside = new goals.GoalNear(baseX + 2, baseY, baseZ, 1);
-      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000));
-      await Promise.race([bot.pathfinder.goto(aside), timeout]);
-    } catch (e) {}
-  }
-
-  // Find the first non-blocked Y level to start from. If our requested
-  // baseY has an existing block (oak_planks from an old test, glass, etc.),
-  // step up until we hit air.
-  let startY = baseY;
-  for (let dy = 0; dy < 6; dy++) {
-    const candY = baseY + dy;
-    const probe = bot.blockAt(new Vec3(baseX, candY, baseZ));
-    if (!probe || probe.name === 'air' || REPLACEABLE_BLOCKS.has(probe.name)) {
-      startY = candY;
-      break;
-    }
+  // Verify we have material.
+  const matItem = findInventoryItem(bot, material);
+  if (!matItem) return { result: `No ${material} in my inventory.` };
+  try { await bot.equip(matItem, 'hand'); } catch (e) {
+    return { result: `Couldn't equip ${material}: ${e.message}` };
   }
 
   let placed = 0;
   for (let i = 0; i < height; i++) {
     if (bot.interrupt_code) break;
-    // Move on top of the previous block by jumping (only after the first).
-    if (i > 0) {
-      bot.setControlState('jump', true);
-      await sleep(150);
-      bot.setControlState('jump', false);
-      await sleep(150);
+
+    // Find the block directly below feet — that's our reference for
+    // placing the new block at feet level.
+    const feetY = Math.floor(bot.entity.position.y);
+    const refPos = new Vec3(Math.floor(bot.entity.position.x), feetY - 1, Math.floor(bot.entity.position.z));
+    const refBlock = bot.blockAt(refPos);
+    if (!refBlock || refBlock.boundingBox !== 'block') {
+      // We're floating — can't place. Bail.
+      break;
     }
-    const r = await placeOne(bot, material, baseX, startY + i, baseZ);
-    if (r.ok) placed++;
-    // If first placement failed, abort — we can't pillar up from nothing.
-    if (i === 0 && !r.ok) break;
+
+    // Look straight down.
+    try { await bot.look(bot.entity.yaw, Math.PI / 2, true); } catch (e) {}
+    await sleep(80);
+
+    // Jump + place at feet (the cell above ref). Apex timing matters:
+    // - 0-90ms after jump-start: bot still rising fast; placeBlock too early may collide with bot's hitbox.
+    // - 90-200ms: at/near apex (~1.25 block above floor). Block placement fits in the cell-just-vacated.
+    // - 200ms+: starting to fall; risk of placing AT bot's feet which won't fit.
+    bot.setControlState('jump', true);
+    await sleep(180);  // peak of the jump
+    let ok = false;
+    try {
+      await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
+      ok = true;
+    } catch (err) {
+      // Sometimes the apex window is wrong; retry with one re-jump cycle.
+      bot.setControlState('jump', false);
+      await sleep(250);  // land
+      bot.setControlState('jump', true);
+      await sleep(180);
+      try {
+        await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
+        ok = true;
+      } catch (err2) {}
+    }
+    bot.setControlState('jump', false);
+    if (ok) placed++;
+    await sleep(450);  // wait for landing on the new block (longer = safer)
   }
 
   return {
     result: placed === height
-      ? `Built ${height}-tall ${material} tower at ${baseX},${startY},${baseZ}.`
+      ? `Built ${height}-tall ${material} tower at ${baseX},${baseY},${baseZ}.`
       : (placed > 0
-          ? `Built ${placed}/${height} ${material} blocks of the tower at ${baseX},${startY},${baseZ}. (Pillar-up got stuck after block ${placed}.)`
-          : `Couldn't start the tower at ${baseX},${startY},${baseZ} — every Y from ${baseY} to ${baseY+5} was blocked or unreachable. Try a different spot.`),
+          ? `Built ${placed}/${height} ${material} blocks of the tower at ${baseX},${baseY},${baseZ}.`
+          : `Couldn't start the tower at ${baseX},${baseY},${baseZ} — pillar-up failed (likely no solid ground or bot can't reach position).`),
   };
 }
 

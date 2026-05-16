@@ -1021,6 +1021,10 @@ EOF
         pretty "$(api_post '/action/follow_player_v2' "{\"player\":\"$PLAYER\",\"distance\":$DISTANCE}")"
         ;;
 
+    perceive|sense)
+        pretty "$(api_post '/action/perceive' '{}')"
+        ;;
+
     build_schematic|schem|bsch)
         NAME="${1:?Usage: mc build_schematic NAME X Y Z}"
         X="${2:?Usage: mc build_schematic NAME X Y Z}"

@@ -1378,6 +1378,64 @@ function generateLookAround() {
 // ═══════════════════════════════════════════════════════════════════
 
 const ACTIONS = {
+  // ── Perception (council-converged structural fix, 2026-05-16) ────────
+  //
+  // Per Gemini + Mistral council + SOTA research: bots' chat-theater
+  // failure mode is information asymmetry, not prompt failure. The LLM
+  // can't promise what it doesn't know it can do. This aggregates
+  // getFullState + nearby + inventory into a compact Voyager-shaped
+  // English block — meant to be the FIRST tool call every action turn.
+  //
+  // Voyager's `action_template.txt` fields: biome, time, position, HP,
+  // hunger, equipment, inventory, nearby blocks, nearby entities, chat,
+  // task. Compact YAML keeps the token budget low.
+  async perceive(_body) {
+    const b = ensureBot();
+    const state = getFullState();
+    const data = state.data || state;
+    const pos = data.position || {};
+    const lines = [];
+    lines.push(`## you are at ${fmt(pos.x)},${fmt(pos.y)},${fmt(pos.z)} in ${data.biome || 'unknown'}; time=${data.time || '?'} (${data.timePhase || '?'}); hp=${data.health || '?'}/20 food=${data.food || '?'}/20; weather=${data.weather || 'clear'}`);
+    // Inventory
+    const inv = (data.inventory || []).slice(0, 12);
+    if (inv.length === 0) {
+      lines.push('## inventory: EMPTY');
+    } else {
+      lines.push('## inventory: ' + inv.map(i => `${i.name}x${i.count}`).join(', '));
+    }
+    // Holding
+    if (data.holding) {
+      const h = typeof data.holding === 'object' ? `${data.holding.name}x${data.holding.count}` : data.holding;
+      lines.push(`## holding: ${h}`);
+    }
+    // Nearby blocks (aggregate counts)
+    const nearby = getNearby(16);
+    const blocks = nearby.blocks || nearby.blocks_by_type || [];
+    if (Array.isArray(blocks)) {
+      const summary = blocks.slice(0, 12).map(b => `${b.name}x${b.count || 1}${b.nearest ? `@(${b.nearest.x},${b.nearest.y},${b.nearest.z})` : ''}`).join(', ');
+      lines.push(`## nearby blocks (r=16): ${summary || 'none notable'}`);
+    }
+    // Nearby entities (players + mobs)
+    const ents = (data.entities || []).slice(0, 8);
+    if (ents.length > 0) {
+      lines.push('## nearby entities: ' + ents.map(e => `${e.username || e.type}@${e.distance}m`).join(', '));
+    }
+    // Recent chat (last 5 lines for context)
+    const chat = data.chat_log || data.recentChat || [];
+    if (Array.isArray(chat) && chat.length > 0) {
+      lines.push('## recent chat:');
+      for (const m of chat.slice(-5)) {
+        const txt = typeof m === 'string' ? m : `<${m.from || '?'}> ${m.message || m.text || ''}`;
+        lines.push(`  - ${txt.slice(0, 120)}`);
+      }
+    }
+    // Pending commands (kid requests waiting for action)
+    if (data.pending_commands && data.pending_commands > 0) {
+      lines.push(`## pending kid requests: ${data.pending_commands} (run mc commands to drain)`);
+    }
+    return { result: lines.join('\n') };
+  },
+
   // ── Movement ─────────────────────────────────────
   async goto({ x, y, z }) {
     const b = ensureBot();
@@ -1828,7 +1886,60 @@ const ACTIONS = {
     const total = (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
     if (total > 500) throw new Error(`Area too large (${total} blocks, max 500). Split into smaller fills.`);
 
-    // Build position list, hollow only places outer shell
+    // Strategy A — vanilla /fill via chat.  Op'd companion bots (Rosie, Steve
+    // in `server/ops.json`) can run /fill directly; this works for aerial
+    // placement (floors, walls, treehouse cantilevers) where mineflayer's
+    // physical `placeBlock` fails because there's no adjacent solid block
+    // to place against.  The earlier physical-placement path threw a stream
+    // of `TypeError: Cannot read properties of undefined (reading 'type')`
+    // unhandled rejections from inside mineflayer when asked to place into
+    // air — `vendor.../bot/server.js#place_fill` rewrite 2026-05-16.
+    //
+    // We listen for the next Server confirmation line ("Successfully
+    // filled N block(s)") and resolve with the count.  If we don't get a
+    // confirmation within 4s OR we receive "Unknown or incomplete
+    // command" (non-op fallback path), we fall through to physical
+    // placement.
+    const fillResult = await new Promise((resolve) => {
+      const cmd = `/fill ${minX} ${minY} ${minZ} ${maxX} ${maxY} ${maxZ} ${blockName}${hollow ? ' hollow' : ''}`;
+      let resolved = false;
+      const onMsg = (jsonMsg) => {
+        if (resolved) return;
+        let txt = '';
+        try { txt = (jsonMsg && typeof jsonMsg.toString === 'function') ? jsonMsg.toString() : ''; } catch { txt = ''; }
+        if (!txt) return;
+        const m = txt.match(/Successfully filled (\d+) block/);
+        if (m) {
+          resolved = true;
+          b.removeListener('message', onMsg);
+          resolve({ ok: true, placed: Number(m[1]), via: 'vanilla_fill' });
+          return;
+        }
+        // Common rejection / non-op fallbacks
+        if (/Unknown or incomplete command|requires.*permission|don't have permission|No targets matched/i.test(txt)) {
+          resolved = true;
+          b.removeListener('message', onMsg);
+          resolve({ ok: false, reason: 'not_authorized_or_unknown', via: 'vanilla_fill' });
+        }
+      };
+      b.on('message', onMsg);
+      try { b.chat(cmd); } catch (e) { /* fall through */ }
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          b.removeListener('message', onMsg);
+          resolve({ ok: false, reason: 'timeout', via: 'vanilla_fill' });
+        }
+      }, 4000);
+    });
+
+    if (fillResult.ok) {
+      return { result: `Filled ${fillResult.placed} ${blockName} blocks via /fill (${hollow ? 'hollow' : 'solid'})` };
+    }
+
+    // Strategy B — physical mineflayer placement (fallback when /fill not
+    // available; e.g. non-op bot, surviving the original 2025 contract).
+    // Aerial cells will silently fail here — that's the cost of not being op.
     const positions = [];
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
@@ -1851,7 +1962,7 @@ const ACTIONS = {
 
       const item = b.inventory.items().find(i => i.name === blockName);
       if (!item) throw new Error(`Out of ${blockName} (placed ${placed}/${positions.length})`);
-      await b.equip(item, 'hand');
+      try { await b.equip(item, 'hand'); } catch {}
 
       if (b.entity.position.distanceTo(new Vec3(pos.x, pos.y, pos.z)) > 4.5) {
         try { await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)); } catch {}
@@ -1863,12 +1974,12 @@ const ACTIONS = {
           try {
             await b.placeBlock(ref, new Vec3(-dx, -dy, -dz));
             placed++;
-          } catch {}
+          } catch { /* swallow — usually no-LOS or out-of-reach */ }
           break;
         }
       }
     }
-    return { result: `Placed ${placed}/${positions.length} ${blockName} blocks (${hollow ? 'hollow' : 'solid'})` };
+    return { result: `Placed ${placed}/${positions.length} ${blockName} blocks via physical placement (${hollow ? 'hollow' : 'solid'}; /fill unavailable: ${fillResult.reason})` };
   },
 
   async interact({ x, y, z }) {

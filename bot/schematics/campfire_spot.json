@@ -1,0 +1,17 @@
+{
+  "_note": "5x5 campfire spot with stone fire ring and oak-log seats at 4 cardinal points.",
+  "footprint": [5, 5],
+  "height": 2,
+  "blocks": [
+    [1, 0, 1, "cobblestone"], [2, 0, 1, "cobblestone"], [3, 0, 1, "cobblestone"],
+    [1, 0, 2, "cobblestone"], [3, 0, 2, "cobblestone"],
+    [1, 0, 3, "cobblestone"], [2, 0, 3, "cobblestone"], [3, 0, 3, "cobblestone"],
+
+    [2, 0, 0, "oak_log"],
+    [0, 0, 2, "oak_log"],
+    [4, 0, 2, "oak_log"],
+    [2, 0, 4, "oak_log"],
+
+    [2, 1, 2, "campfire"]
+  ]
+}

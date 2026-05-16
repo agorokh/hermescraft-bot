@@ -1,0 +1,30 @@
+{
+  "_note": "3x3 cobblestone watch-tower, 6 tall, with oak-fence battlements on top.",
+  "footprint": [3, 3],
+  "height": 7,
+  "blocks": [
+    [0, 0, 0, "cobblestone"], [1, 0, 0, "cobblestone"], [2, 0, 0, "cobblestone"],
+    [0, 0, 1, "cobblestone"], [1, 0, 1, "cobblestone"], [2, 0, 1, "cobblestone"],
+    [0, 0, 2, "cobblestone"], [1, 0, 2, "cobblestone"], [2, 0, 2, "cobblestone"],
+
+    [0, 1, 0, "cobblestone"], [2, 1, 0, "cobblestone"],
+    [0, 1, 2, "cobblestone"], [2, 1, 2, "cobblestone"],
+
+    [0, 2, 0, "cobblestone"], [2, 2, 0, "cobblestone"],
+    [0, 2, 2, "cobblestone"], [2, 2, 2, "cobblestone"],
+
+    [0, 3, 0, "cobblestone"], [2, 3, 0, "cobblestone"],
+    [0, 3, 2, "cobblestone"], [2, 3, 2, "cobblestone"],
+
+    [0, 4, 0, "cobblestone"], [2, 4, 0, "cobblestone"],
+    [0, 4, 2, "cobblestone"], [2, 4, 2, "cobblestone"],
+
+    [0, 5, 0, "cobblestone"], [1, 5, 0, "cobblestone"], [2, 5, 0, "cobblestone"],
+    [0, 5, 1, "cobblestone"], [2, 5, 1, "cobblestone"],
+    [0, 5, 2, "cobblestone"], [1, 5, 2, "cobblestone"], [2, 5, 2, "cobblestone"],
+
+    [0, 6, 0, "oak_fence"], [1, 6, 0, "oak_fence"], [2, 6, 0, "oak_fence"],
+    [0, 6, 1, "oak_fence"], [2, 6, 1, "oak_fence"],
+    [0, 6, 2, "oak_fence"], [1, 6, 2, "oak_fence"], [2, 6, 2, "oak_fence"]
+  ]
+}

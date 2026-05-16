@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "comment": "Curated kid-friendly schematic library. Each entry is a JSON file under this dir, structured as { footprint: [w, l], height, materials: {block:count}, blocks: [[dx, dy, dz, block_name], ...] }. The bot loads the file and place_one's each entry at (origin + offset). Replaces real .schem/.litematic until we curate proper community schematics — but the contract is identical (origin + offset placements), so swap-in later is one wrapper.",
+  "schematics": {
+    "small_house": {
+      "file": "small_house.json",
+      "footprint": [5, 5],
+      "height": 4,
+      "summary": "5x5 oak cottage with door, roof, and one window",
+      "materials": {"oak_planks": 60, "oak_door": 1, "glass_pane": 1, "torch": 1}
+    },
+    "well": {
+      "file": "well.json",
+      "footprint": [3, 3],
+      "height": 4,
+      "summary": "3x3 cobblestone well with water and pillar supports",
+      "materials": {"cobblestone": 16, "water_bucket": 1}
+    },
+    "garden": {
+      "file": "garden.json",
+      "footprint": [5, 5],
+      "height": 1,
+      "summary": "5x5 flower patch with grass path",
+      "materials": {"poppy": 4, "dandelion": 4, "blue_orchid": 1, "stone": 5}
+    },
+    "small_tower": {
+      "file": "small_tower.json",
+      "footprint": [3, 3],
+      "height": 6,
+      "summary": "3x3 cobblestone tower with battlements, 6 blocks tall",
+      "materials": {"cobblestone": 36, "oak_fence": 8}
+    },
+    "campfire_spot": {
+      "file": "campfire_spot.json",
+      "footprint": [5, 5],
+      "height": 1,
+      "summary": "Outdoor sit-down spot — cobblestone fire ring + 4 oak-log seats",
+      "materials": {"cobblestone": 8, "oak_log": 4, "campfire": 1}
+    }
+  }
+}

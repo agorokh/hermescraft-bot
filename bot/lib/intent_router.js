@@ -213,6 +213,44 @@ const INTENTS = [
     },
   },
   {
+    name: 'build_schematic',
+    patterns: [
+      /\b(build|make|put up|build me)\b.*\b(house|cottage|home|cabin)\b/i,
+      /\b(build|make|put up)\b.*\b(well|fountain)\b/i,
+      /\b(make|build|plant)\b.*\b(garden|flower bed|flower patch)\b/i,
+      /\b(build|make)\b.*\b(tower|watchtower|outpost)\b.*\b(big|tall|fancy|with battlements)\b/i,
+      /\b(build|make|set up)\b.*\b(campfire|fire pit|firepit|sit spot|hangout)\b/i,
+      /\bwhat (can|could) you build\b/i,
+      /\bshow me your (builds|schematics|templates)\b/i,
+    ],
+    async handler(bot, ctx) {
+      if (!ctx.senderEntity) return null;
+      // Map kid keywords → schematic names. Falls through if no match.
+      const body = ctx.body.toLowerCase();
+      let name = null;
+      if (/\b(house|cottage|home|cabin)\b/.test(body)) name = 'small_house';
+      else if (/\b(well|fountain)\b/.test(body)) name = 'well';
+      else if (/\b(garden|flower bed|flower patch)\b/.test(body)) name = 'garden';
+      else if (/\b(tower|watchtower|outpost)\b/.test(body) && /\b(big|tall|fancy|battlement)\b/.test(body)) name = 'small_tower';
+      else if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(body)) name = 'campfire_spot';
+      else if (/\b(what can|show me|list)\b/.test(body)) {
+        return { action: 'list_schematics', body: {} };
+      }
+      if (!name) return null;
+      const p = ctx.senderEntity.position;
+      // Origin = 2 blocks away from the kid, ground level.
+      return {
+        action: 'build_schematic',
+        body: {
+          name,
+          x: Math.floor(p.x) + 2,
+          y: Math.floor(p.y),
+          z: Math.floor(p.z),
+        },
+      };
+    },
+  },
+  {
     name: 'build_tower',
     patterns: [
       /\b(build|put up|make|raise)\b.*\b(tower|pillar|column|spire)\b/i,

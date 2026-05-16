@@ -371,6 +371,125 @@ async function follow_player_v2(bot, { player, distance = 3 }) {
   return { result: `Following ${player} (will stay within ${distance} blocks). Use mc stop to stop.` };
 }
 
+// ── build_schematic(name, x, y, z) ──────────────────────────────────
+//
+// Loads a JSON template from vendor/hermescraft/bot/schematics/<name>.json
+// and places each block at (origin + offset). This is the foundation for
+// the operator's storytelling/quest/village vision — same contract a
+// real .schem loader would use, just with a JSON manifest backend until
+// we curate community schematics (mineflayer-schem is installed and ready
+// for that swap).
+
+import { readFile } from 'fs/promises';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
+
+let _schem_index_cache = null;
+async function loadSchematicIndex() {
+  if (_schem_index_cache) return _schem_index_cache;
+  const raw = await readFile(join(SCHEMATICS_DIR, 'INDEX.json'), 'utf8');
+  _schem_index_cache = JSON.parse(raw);
+  return _schem_index_cache;
+}
+
+async function loadSchematic(name) {
+  const idx = await loadSchematicIndex();
+  const entry = idx.schematics?.[name];
+  if (!entry) {
+    const available = Object.keys(idx.schematics || {}).join(', ');
+    return { error: `Unknown schematic "${name}". Available: ${available}` };
+  }
+  const raw = await readFile(join(SCHEMATICS_DIR, entry.file), 'utf8');
+  return { entry, data: JSON.parse(raw) };
+}
+
+async function build_schematic(bot, { name, x, y, z }) {
+  if (!name) return { result: `build_schematic needs a schematic name` };
+  if (x == null || y == null || z == null) return { result: `build_schematic needs x, y, z origin` };
+
+  let loaded;
+  try {
+    loaded = await loadSchematic(name);
+  } catch (e) {
+    return { result: `Couldn't load schematic ${name}: ${e.message}` };
+  }
+  if (loaded.error) return { result: loaded.error };
+  const { entry, data } = loaded;
+  const blocks = data.blocks || [];
+  if (blocks.length === 0) return { result: `Schematic ${name} is empty.` };
+
+  const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
+
+  // Pathfind near the origin (footprint center) so reach is workable.
+  const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
+  const centerX = baseX + Math.floor(fw / 2);
+  const centerZ = baseZ + Math.floor(fl / 2);
+  try {
+    const goal = new goals.GoalNear(centerX, baseY, centerZ, 3);
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000));
+    await Promise.race([bot.pathfinder.goto(goal), timeout]);
+  } catch (e) { /* continue */ }
+  if (bot.interrupt_code) return { result: `build_schematic interrupted` };
+
+  // Place each block in the manifest. Order matters for stability:
+  // lowest y first (foundation up), then sort by distance from current
+  // pos within a y-layer so we don't have to teleport across.
+  const sorted = [...blocks].sort((a, b) => {
+    if (a[1] !== b[1]) return a[1] - b[1];
+    return (a[0] + a[2]) - (b[0] + b[2]);
+  });
+
+  let placed = 0;
+  let failed = 0;
+  const missing = new Set();
+  for (const [dx, dy, dz, block] of sorted) {
+    if (bot.interrupt_code) break;
+    const tx = baseX + dx, ty = baseY + dy, tz = baseZ + dz;
+    // Make sure we have the block; if not, skip and report.
+    if (!findInventoryItem(bot, block)) {
+      missing.add(block);
+      failed++;
+      continue;
+    }
+    const r = await placeOne(bot, block, tx, ty, tz);
+    if (r.ok) placed++;
+    else failed++;
+    // Move closer if we drift out of reach (every 8 placements).
+    if ((placed + failed) % 8 === 0) {
+      try {
+        const goal = new goals.GoalNear(centerX, ty, centerZ, 3);
+        const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000));
+        await Promise.race([bot.pathfinder.goto(goal), timeout]);
+      } catch (e) {}
+    }
+  }
+
+  const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
+  if (placed === blocks.length) {
+    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${blocks.length} blocks placed.` };
+  }
+  return {
+    result: `Built ${placed}/${blocks.length} of "${name}" at ${baseX},${baseY},${baseZ}.${missingStr}`,
+  };
+}
+
+// List schematics — useful for the LLM and for `mc schematics` cmd.
+async function list_schematics(bot, _body) {
+  try {
+    const idx = await loadSchematicIndex();
+    const names = Object.entries(idx.schematics || {}).map(
+      ([name, entry]) => `${name} (${entry.footprint?.join('x')}x${entry.height}: ${entry.summary})`
+    );
+    return { result: names.length > 0 ? names.join('; ') : 'No schematics available.' };
+  } catch (e) {
+    return { result: `Couldn't load schematic index: ${e.message}` };
+  }
+}
+
 // ── Public registration helper ──────────────────────────────────────
 
 export function registerHighLevelSkills(ACTIONS, ensureBot) {
@@ -379,5 +498,7 @@ export function registerHighLevelSkills(ACTIONS, ensureBot) {
   ACTIONS.build_tower       = async (body) => build_tower(ensureBot(), body);
   ACTIONS.light_area        = async (body) => light_area(ensureBot(), body);
   ACTIONS.follow_player_v2  = async (body) => follow_player_v2(ensureBot(), body);
+  ACTIONS.build_schematic   = async (body) => build_schematic(ensureBot(), body);
+  ACTIONS.list_schematics   = async (body) => list_schematics(ensureBot(), body);
   return ACTIONS;
 }

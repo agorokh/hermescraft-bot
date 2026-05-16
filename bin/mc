@@ -1021,6 +1021,18 @@ EOF
         pretty "$(api_post '/action/follow_player_v2' "{\"player\":\"$PLAYER\",\"distance\":$DISTANCE}")"
         ;;
 
+    build_schematic|schem|bsch)
+        NAME="${1:?Usage: mc build_schematic NAME X Y Z}"
+        X="${2:?Usage: mc build_schematic NAME X Y Z}"
+        Y="${3:?Usage: mc build_schematic NAME X Y Z}"
+        Z="${4:?Usage: mc build_schematic NAME X Y Z}"
+        pretty "$(api_post '/action/build_schematic' "{\"name\":\"$NAME\",\"x\":$X,\"y\":$Y,\"z\":$Z}")"
+        ;;
+
+    list_schematics|schematics|schems)
+        pretty "$(api_post '/action/list_schematics' '{}')"
+        ;;
+
     *)
         echo "Unknown command: $CMD"
         echo "Run 'mc help' for usage."

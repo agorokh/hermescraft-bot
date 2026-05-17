@@ -128,6 +128,22 @@ const MAX_QUEUE = 20;
 let actionHistory = []; // { action, status, time }
 const MAX_ACTION_HISTORY = 10;
 
+// ── Voice wire (issue #54) ────────────────────────────────────────
+// Monotonic envelope id stamped on every commandQueue.push so a reply can
+// be correlated back to its originating utterance (chat OR voice).
+let _envelopeCounter = 0;
+function nextEnvelopeId() { return ++_envelopeCounter; }
+// Pending voice turns waiting for the brain's reply. Map<id, {resolve, timer, kid, ts}>
+// where `resolve` is the HTTP response resolver and `timer` is the fail-closed
+// timeout handle. When ACTIONS.chat fires while a voice turn is in flight,
+// the message is routed here INSTEAD of bot.chat() — voice replies never
+// leak into public Minecraft chat (council's fail-closed rule).
+const _pendingVoiceTurns = new Map();
+const VOICE_TURN_TIMEOUT_MS = 75000;
+// Auto-correlate window: if /action/chat fires without in_reply_to, route
+// to the oldest voice turn dispatched within this window.
+const VOICE_AUTOCORRELATE_MS = 60000;
+
 // ═══════════════════════════════════════════════════════════════════
 // Fair Play Mode — perception constraints for realistic gameplay
 // ═══════════════════════════════════════════════════════════════════
@@ -290,10 +306,12 @@ async function handleChat(username, message) {
       }
 
       commandQueue.push({
+        id: nextEnvelopeId(),
         time: Date.now(),
         from: username,
         command: routing.body,
         channel: routing.channel,
+        source: 'chat',
         originalMessage: message,
         status: 'pending',
       });
@@ -336,10 +354,12 @@ async function handleChat(username, message) {
           }
 
           commandQueue.push({
+            id: nextEnvelopeId(),
             time: Date.now(),
             from: username,
             command,
             channel: 'public_mention',
+            source: 'chat',
             originalMessage: message,
             status: 'pending',
           });
@@ -461,7 +481,9 @@ async function createBot() {
         if (chatLog.length > MAX_LOG) chatLog.shift();
         log(`[Whisper] <${username}> ${message}`);
         commandQueue.push({
+          id: nextEnvelopeId(),
           time: Date.now(), from: username, command: message,
+          channel: 'whisper', source: 'chat',
           originalMessage: message, status: 'pending',
         });
         if (commandQueue.length > MAX_QUEUE) commandQueue.shift();
@@ -2000,7 +2022,41 @@ const ACTIONS = {
   },
 
   // ── Utility ──────────────────────────────────────
-  async chat({ message }) {
+  async chat({ message, in_reply_to }) {
+    // Voice-source routing (issue #54): if this reply addresses a pending
+    // voice turn — either explicitly via in_reply_to, or auto-correlated to
+    // the oldest dispatched voice turn within VOICE_AUTOCORRELATE_MS — route
+    // the text to the voice loop's HTTP response. Fail-closed: voice replies
+    // NEVER also fan out to public Minecraft chat (council 2026-05-17). Kids
+    // hear the reply through their speaker; chat HUD stays clean.
+    let voiceTurn = null;
+    if (typeof in_reply_to === 'number' && _pendingVoiceTurns.has(in_reply_to)) {
+      voiceTurn = _pendingVoiceTurns.get(in_reply_to);
+    } else if (in_reply_to === undefined) {
+      // Auto-correlate: find the oldest voice turn that was dispatched to the
+      // brain (via /commands or /status) within the window and still pending.
+      const now = Date.now();
+      let oldestId = null;
+      let oldestTs = Infinity;
+      for (const [id, turn] of _pendingVoiceTurns.entries()) {
+        if (turn.dispatched_ts && (now - turn.dispatched_ts) <= VOICE_AUTOCORRELATE_MS && turn.ts < oldestTs) {
+          oldestId = id; oldestTs = turn.ts;
+        }
+      }
+      if (oldestId !== null) voiceTurn = _pendingVoiceTurns.get(oldestId);
+    }
+    if (voiceTurn) {
+      // Resolve the held HTTP request from /chat/voice
+      clearTimeout(voiceTurn.timer);
+      _pendingVoiceTurns.delete(voiceTurn.id);
+      const qEntry = commandQueue.find(c => c.id === voiceTurn.id);
+      if (qEntry) qEntry.status = 'completed';
+      rememberSocialEvent({ actor: getMyName(), target: voiceTurn.kid, kind: 'sent', channel: 'voice', message });
+      try { voiceTurn.resolve({ ok: true, reply: message, in_reply_to: voiceTurn.id }); } catch (e) { log(`[voice] resolver throw: ${e.message}`); }
+      log(`[voice→] (id=${voiceTurn.id}, kid=${voiceTurn.kid}) ${message.slice(0, 80)}`);
+      return { result: `Spoke to ${voiceTurn.kid} via voice (id=${voiceTurn.id})` };
+    }
+    // Default path: public Minecraft chat
     const b = ensureBot();
     b.chat(message);
     rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
@@ -2781,8 +2837,18 @@ const httpServer = http.createServer(async (req, res) => {
       }
 
       if (path === '/commands') {
-        // Get pending commands queued by in-game chat
+        // Get pending commands queued by in-game chat OR voice (issue #54).
         const pending = commandQueue.filter(c => c.status === 'pending');
+        // Mark any voice turns as dispatched the first time the brain reads
+        // them, so auto-correlate in ACTIONS.chat can match the next reply
+        // to the right pending voice turn.
+        const now = Date.now();
+        for (const entry of pending) {
+          if (entry.source === 'voice' && _pendingVoiceTurns.has(entry.id)) {
+            const turn = _pendingVoiceTurns.get(entry.id);
+            if (!turn.dispatched_ts) turn.dispatched_ts = now;
+          }
+        }
         return respond(res, 200, { ok: true, data: { commands: pending } });
       }
 
@@ -2816,6 +2882,61 @@ const httpServer = http.createServer(async (req, res) => {
     // ── POST endpoints (actions) ────────────────
     if (req.method === 'POST') {
       const body = await parseBody(req);
+
+      // Voice utterance from the kid's mic — long-poll until the brain
+      // replies via /action/chat or VOICE_TURN_TIMEOUT_MS elapses. Wire
+      // contract matches scripts/voice/replies_stub.py so live_loop.py can
+      // point its --delegate-url here as a drop-in replacement (issue #54).
+      // Body: {transcript: string, kid?: string, character?: string}
+      // Returns: {ok: true, reply: string, in_reply_to: id} on brain response
+      //          {ok: false, error: "brain_timeout", id} on timeout (fail-closed)
+      if (path === '/chat/voice') {
+        const transcript = String(body.transcript || '').trim();
+        if (!transcript) {
+          return respond(res, 400, { ok: false, error: 'transcript required' });
+        }
+        const kid = String(body.kid || body.from || 'voice').trim().slice(0, 32) || 'voice';
+        const id = nextEnvelopeId();
+        const ts = Date.now();
+        commandQueue.push({
+          id, time: ts, from: kid, command: transcript,
+          channel: 'voice', source: 'voice',
+          originalMessage: transcript, status: 'pending',
+        });
+        if (commandQueue.length > MAX_QUEUE) commandQueue.shift();
+        rememberSocialEvent({ actor: kid, kind: 'heard', channel: 'voice', command: true, message: transcript });
+        log(`[voice←] (id=${id}, kid=${kid}) ${transcript.slice(0, 80)}`);
+
+        // Hold the HTTP response open until ACTIONS.chat resolves us OR we
+        // hit the fail-closed timeout. The resolver writes the response.
+        let responded = false;
+        const resolveOnce = (payload) => {
+          if (responded) return;
+          responded = true;
+          const status = payload.ok ? 200 : 504;
+          respond(res, status, payload);
+        };
+        const timer = setTimeout(() => {
+          _pendingVoiceTurns.delete(id);
+          const qEntry = commandQueue.find(c => c.id === id);
+          if (qEntry && qEntry.status === 'pending') qEntry.status = 'timeout';
+          log(`[voice✗] (id=${id}) brain_timeout after ${VOICE_TURN_TIMEOUT_MS}ms`);
+          resolveOnce({ ok: false, error: 'brain_timeout', id });
+        }, VOICE_TURN_TIMEOUT_MS);
+        _pendingVoiceTurns.set(id, { id, kid, ts, dispatched_ts: null, timer, resolve: resolveOnce });
+        // Client may give up before us (live_loop.py timeout is 90s); detect
+        // and clean up so the resolver doesn't fire on a dead socket.
+        req.on('close', () => {
+          if (!responded) {
+            clearTimeout(timer);
+            _pendingVoiceTurns.delete(id);
+            const qEntry = commandQueue.find(c => c.id === id);
+            if (qEntry && qEntry.status === 'pending') qEntry.status = 'client_closed';
+            log(`[voice✗] (id=${id}) client closed before reply`);
+          }
+        });
+        return; // do not call respond() now; resolver writes the response
+      }
 
       // Cancel current task
       if (path === '/task/cancel') {

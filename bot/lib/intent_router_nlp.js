@@ -35,12 +35,38 @@ import { Vec3 } from 'vec3';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, 'intent_corpus.json');
 
-// Confidence floor. Below this we return matched=false and let the brain
-// handle it as free chat. Tuned empirically against the 6 kid-build prompts
-// — 0.72 was the lowest confidence on a correct classification (torch
-// prompt with 30 training utterances). 0.70 gives a small safety margin
-// while still rejecting OOV like "what's the weather today" (0.62).
-const MATCH_THRESHOLD = 0.70;
+// CLARIFICATION DEADZONE (council 2026-05-17, Gemini + Mistral consensus):
+// - ACT_THRESHOLD (>=): fire the skill. High-confidence intent match.
+// - CLARIFY_THRESHOLD (>=): don't act; return matched=false so the brain
+//   can ask "did you want me to build or just talk?". Prevents
+//   "I love towers" / "creepers scare me" from triggering a skill.
+// - Below CLARIFY_THRESHOLD: pure brain chat (OOV).
+//
+// Picked ACT=0.80 (above NLP's confidence on most ambiguous skill phrasings
+// in our test set) and CLARIFY=0.55 (above the OOV ceiling we observed
+// for genuine conversation; below the floor where a skill-like phrase
+// becomes worth a clarifying brain response). Tunable via env vars
+// HERMES_NLP_ACT_THRESHOLD / HERMES_NLP_CLARIFY_THRESHOLD.
+const ACT_THRESHOLD = parseFloat(process.env.HERMES_NLP_ACT_THRESHOLD || '0.80');
+const CLARIFY_THRESHOLD = parseFloat(process.env.HERMES_NLP_CLARIFY_THRESHOLD || '0.55');
+// Back-compat alias for existing tests that imported MATCH_THRESHOLD.
+const MATCH_THRESHOLD = ACT_THRESHOLD;
+
+// Per-bot "last fired skill" memory for repeat_last_action handling.
+// Keyed by bot.username so a multi-companion setup doesn't cross-wire.
+const _lastSkillByBot = new Map();
+export function recordLastSkill(bot, intent_name, action, body) {
+  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action') return;
+  _lastSkillByBot.set(bot.username, { intent_name, action, body, at: Date.now() });
+}
+function getLastSkill(bot) {
+  if (!bot || !bot.username) return null;
+  const r = _lastSkillByBot.get(bot.username);
+  if (!r) return null;
+  // Expire after 5 minutes — "do it again" 10 minutes later is too stale.
+  if (Date.now() - r.at > 5 * 60 * 1000) return null;
+  return r;
+}
 
 let _nlp = null;
 let _trainPromise = null;
@@ -209,6 +235,82 @@ const DISPATCHERS = {
   },
 
   mine_iron: () => ({ action: 'bg_collect', body: { block: 'iron_ore', count: 4 } }),
+
+  // ─── NEW intents from realistic kid corpus + skill-gap analysis ─────
+  // For intents that need a new server.js ACTION (fish, farm, cook,
+  // ride, tame), we return null → matched=false → brain handles. That's
+  // graceful — the router only routes what it can execute, brain owns
+  // everything else. Filed as PR follow-up issues.
+
+  // defend_me / attack_mob: existing 'fight' action targets the nearest
+  // hostile mob in range. Same primitive serves "save me" and "kill that".
+  defend_me: () => ({ action: 'fight', body: { target_class: 'hostile', mode: 'defend' } }),
+  attack_mob: () => ({ action: 'fight', body: { target_class: 'hostile', mode: 'attack' } }),
+
+  // light_area: schematic-grade lighting around the kid's position.
+  light_area: (bot, ctx) => {
+    const p = resolveAnchorPos(bot, ctx);
+    if (!p) return null;
+    return { action: 'light_area', body: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), radius: 6 } };
+  },
+
+  // bring_food: give_to_player whatever edible thing the bot has on hand.
+  // Falls through if bot has nothing edible — brain can apologize.
+  bring_food: (bot, ctx) => {
+    const edible = ['cooked_beef', 'bread', 'cooked_chicken', 'cooked_porkchop',
+                    'apple', 'baked_potato', 'cooked_cod', 'cooked_salmon',
+                    'beef', 'chicken', 'porkchop', 'carrot'];
+    const found = bot.inventory.items().find((i) => edible.includes(i.name));
+    if (!found) return null;
+    return { action: 'give_to_player', body: { player: ctx.sender, item: found.name, count: Math.min(found.count, 4) } };
+  },
+
+  // build_shelter_for_night: emergency safe spot — reuse small_house schematic.
+  build_shelter_for_night: (bot, ctx) => {
+    const p = resolveAnchorPos(bot, ctx);
+    if (!p) return null;
+    return {
+      action: 'build_schematic',
+      body: { name: 'small_house', x: Math.floor(p.x) + 2, y: Math.floor(p.y), z: Math.floor(p.z) },
+    };
+  },
+
+  // explore_cave: scout toward the nearest stone-y opening. For now, just
+  // walk a short distance in the bot's facing direction; brain narrates.
+  explore_cave: (bot) => {
+    const p = bot.entity?.position;
+    if (!p) return null;
+    return { action: 'goto', body: { x: Math.floor(p.x) + 10, y: Math.floor(p.y), z: Math.floor(p.z) } };
+  },
+
+  // give_compliment, show_me_diamonds, ask_about_pet: pure conversational —
+  // route to a chat ACK so the kid sees instant response while brain
+  // composes the longer reply. The chat ACK is intentionally minimal;
+  // brain produces the personality.
+  give_compliment: (_bot, ctx) => ({
+    action: 'chat', body: { text: `you did awesome, ${ctx.sender}!` },
+  }),
+  show_me_diamonds: () => ({ action: 'chat', body: { text: 'whoaaa look at those diamonds 💎' } }),
+  ask_about_pet: () => ({ action: 'chat', body: { text: "lemme check on your pet — hang on" } }),
+
+  // fish_for_food, farm_food, cook_food, ride_horse, tame_animal: no
+  // server.js action wired yet. Return null → brain handles (which can
+  // chain raw mc.* verbs). Filed as follow-up.
+  fish_for_food: () => null,
+  farm_food: () => null,
+  cook_food: () => null,
+  ride_horse: () => null,
+  tame_animal: () => null,
+
+  // Council recommendation 2026-05-17 (Gemini + Mistral both flagged):
+  // "do it again" / "another please" / "same as before" — kids constantly
+  // chain a satisfying action. Replays the most recent skill the same bot
+  // fired (within a 5-min window) for any kid.
+  repeat_last_action: (bot, _ctx) => {
+    const last = getLastSkill(bot);
+    if (!last) return null;
+    return { action: last.action, body: last.body };
+  },
 };
 
 // Public API — drop-in replacement for intent_router.tryRoute.
@@ -227,25 +329,38 @@ export async function tryRoute(bot, body, sender) {
   const result = await nlp.process('en', body);
   const intent = result.intent === 'None' ? null : result.intent;
   const score = result.score || 0;
-  if (!intent || score < MATCH_THRESHOLD) {
-    return { matched: false, nlp_intent: intent, nlp_score: score };
+  // Three-zone confidence band (council 2026-05-17):
+  //   score >= ACT_THRESHOLD       → fire the skill
+  //   CLARIFY <= score < ACT       → defer to brain; brain may clarify
+  //   score < CLARIFY              → OOV; brain handles as free chat
+  // All zones return matched=false unless we ACT. The "clarify" status is
+  // a hint for the brain (server.js can read .nlp_zone for prompt context).
+  if (!intent || score < CLARIFY_THRESHOLD) {
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'oov' };
+  }
+  if (score < ACT_THRESHOLD) {
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'clarify' };
   }
   const dispatch = DISPATCHERS[intent];
   if (!dispatch) {
-    return { matched: false, nlp_intent: intent, nlp_score: score, error: 'no dispatcher' };
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'no_dispatcher', error: 'no dispatcher for ' + intent };
   }
   const senderEntity = findPlayerEntity(bot, sender);
   const ctx = { sender, senderEntity, message: body, body };
   const decision = dispatch(bot, ctx);
   if (!decision) {
-    return { matched: false, nlp_intent: intent, nlp_score: score, error: 'dispatcher returned null' };
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
   }
+  // Record this for future repeat_last_action — only if NOT a repeat itself
+  // (avoid recursion on "do it again ... do it again").
+  recordLastSkill(bot, intent, decision.action, decision.body);
   return {
     matched: true,
     intent_name: intent,
     action: decision.action,
     body: decision.body,
     nlp_score: score,
+    nlp_zone: 'act',
   };
 }
 

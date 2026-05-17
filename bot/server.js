@@ -2921,6 +2921,15 @@ const httpServer = http.createServer(async (req, res) => {
         return respond(res, 200, { ok: true, data: combatStats });
       }
 
+      // Post-mortem 2026-05-17: 250 STUCK events tonight = single most
+      // kid-visible failure mode. Expose per-action stuck counts +
+      // repath-attempt count so operators (and the
+      // scripts/voice/build_design_ab_test.sh harness) can spot
+      // pathfinder regressions per task verb.
+      if (path === '/stuck-stats') {
+        return respond(res, 200, { ok: true, data: stuckTelemetry });
+      }
+
       if (path === '/furnaces') {
         return respond(res, 200, { ok: true, data: { furnaces: activeFurnaces.map(f => ({
           ...f,
@@ -3025,7 +3034,7 @@ const httpServer = http.createServer(async (req, res) => {
           return respond(res, 409, { ok: false, error: `Task "${currentTask.action}" is already running (${Math.round((Date.now() - currentTask.started) / 1000)}s). POST /task/cancel first.`, state: briefState() });
         }
         const taskId = `${actionName}_${Date.now()}`;
-        currentTask = { id: taskId, action: actionName, status: 'running', started: Date.now(), result: null, error: null };
+        currentTask = { id: taskId, action: actionName, status: 'running', started: Date.now(), result: null, error: null, params: body };
         // Fire and forget — runs in background
         actionFn(body).then(result => {
           if (currentTask && currentTask.id === taskId && currentTask.status === 'running') {
@@ -3082,24 +3091,61 @@ const httpServer = http.createServer(async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 
 let positionHistory = [];
+// Per-task STUCK telemetry. Tonight (2026-05-17 post-mortem) we logged 250
+// STUCK events (44 Rosie / 206 Steve) in a single live session — most
+// kid-visible failure mode. Tally by action so we can spot pathfinder
+// regressions in specific verbs (e.g. `collect` failing more than `goto`).
+const stuckTelemetry = { byAction: Object.create(null), repaths: 0, total: 0 };
+// Mining tasks block-mine in place — `collect`, `bg_collect` shouldn't trip
+// the 10s "no movement" check because actually mining IS the work. Bump the
+// threshold for these to 20s + grant ONE retry attempt before declaring stuck.
+const SLOW_TASK_STUCK_MS = 20000;
+const FAST_TASK_STUCK_MS = 10000;
+const SLOW_TASK_ACTIONS = new Set(['collect', 'bg_collect', 'pickup', 'fight', 'sprint_attack']);
+// In-memory map task_id → { repath_attempted: bool } — survives across the
+// 5s interval so we don't repath twice for the same stuck event.
+const taskRepathState = new Map();
 setInterval(() => {
   if (!bot || !botReady) return;
   const pos = bot.entity.position;
   positionHistory.push({ time: Date.now(), x: pos.x, y: pos.y, z: pos.z });
   positionHistory = positionHistory.filter(p => Date.now() - p.time < 60000);
-  // Stuck detection for movement-based tasks — 10s threshold
-  const movementActions = ['goto', 'goto_near', 'follow', 'collect', 'fight', 'flee', 'go_mark', 'deathpoint', 'pickup', 'sprint_attack', 'strafe', 'combo'];
+  // Stuck detection for movement-based tasks — threshold depends on action.
+  const movementActions = ['goto', 'goto_near', 'follow', 'collect', 'bg_collect', 'fight', 'flee', 'go_mark', 'deathpoint', 'pickup', 'sprint_attack', 'strafe', 'combo'];
   if (currentTask && currentTask.status === 'running' && movementActions.includes(currentTask.action)) {
-    const old = positionHistory.find(p => Date.now() - p.time > 10000);
+    const isSlow = SLOW_TASK_ACTIONS.has(currentTask.action);
+    const threshold = isSlow ? SLOW_TASK_STUCK_MS : FAST_TASK_STUCK_MS;
+    const old = positionHistory.find(p => Date.now() - p.time > threshold);
     if (old) {
       const dist = Math.sqrt((pos.x-old.x)**2+(pos.y-old.y)**2+(pos.z-old.z)**2);
       if (dist < 2) {
+        // One repath attempt before declaring stuck. Many "STUCK detected"
+        // events tonight were transient — a fresh GoalNear with radius+1
+        // unblocks the pathfinder (1-block ledge, snow layer, etc.).
+        const repathKey = currentTask.id || `${currentTask.action}-${currentTask.started}`;
+        const state = taskRepathState.get(repathKey) || { repath_attempted: false };
+        if (!state.repath_attempted && currentTask.action === 'goto' && currentTask.params) {
+          try {
+            const tx = currentTask.params.x, ty = currentTask.params.y, tz = currentTask.params.z;
+            if (typeof tx === 'number') {
+              bot.pathfinder.setGoal(new goals.GoalNear(Math.floor(tx), Math.floor(ty), Math.floor(tz), 2));
+              state.repath_attempted = true;
+              taskRepathState.set(repathKey, state);
+              stuckTelemetry.repaths += 1;
+              log(`STUCK detected (${threshold/1000}s no movement, action=${currentTask.action}) — repathing once with radius+1`);
+              return; // give the repath a chance before next 5s check
+            }
+          } catch {}
+        }
         try { bot.pathfinder.setGoal(null); } catch {}
         try { bot.stopDigging(); } catch {}
         try { bot.clearControlStates(); } catch {}
         currentTask.status = 'stuck';
-        currentTask.error = `Stuck at ${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)} — try a different approach`;
-        log('STUCK detected (10s no movement) — task cancelled');
+        currentTask.error = `Stuck at ${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)} after ${threshold/1000}s — try a different approach`;
+        stuckTelemetry.total += 1;
+        stuckTelemetry.byAction[currentTask.action] = (stuckTelemetry.byAction[currentTask.action] || 0) + 1;
+        log(`STUCK detected (${threshold/1000}s no movement, action=${currentTask.action}, total_today=${stuckTelemetry.total}) — task cancelled`);
+        taskRepathState.delete(repathKey);
       }
     }
   }

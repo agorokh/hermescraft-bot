@@ -24,29 +24,8 @@
 //
 // ctx = { sender, senderEntity, message, body }
 
-// Resolve the position to build "near" — preferring the kid's player
-// entity, falling back to the bot's own position when the player roster
-// hasn't synced yet (right after /tp, view-distance edge, server lag).
-// Pre-2026-05-18, build_tower/build_schematic returned null when
-// senderEntity was null, which silently dropped tower/house/garden/
-// treehouse prompts to the brain — the live A/B run showed 4/5 build
-// intents falling through this exact path while torch (which doesn't
-// need senderEntity in the router) succeeded.
-function resolveAnchorPos(bot, ctx) {
-  if (ctx.senderEntity && ctx.senderEntity.position) return ctx.senderEntity.position;
-  const fresh = findPlayerEntity(bot, ctx.sender);
-  if (fresh && fresh.position) return fresh.position;
-  if (bot.entity && bot.entity.position) return bot.entity.position;
-  return null;
-}
-
-function intFromMatch(text, regex) {
-  const m = text.match(regex);
-  return m ? parseInt(m[1], 10) : null;
-}
-
 import { Vec3 } from 'vec3';
-import { findPlayerEntity } from './player_utils.js';
+import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 
 // ── Pattern table ───────────────────────────────────────────────────
 
@@ -280,23 +259,13 @@ const INTENTS = [
       // above the surface is actually air (not torch/sapling from a prior
       // prompt). Falls back to +2x if no clear spot found.
       const baseY = Math.floor(p.y);
-      const offsets = [[2, 0], [-2, 0], [0, 2], [0, -2], [3, 0], [-3, 0]];
-      let chosen = offsets[0];
-      for (const [dx, dz] of offsets) {
-        const targetX = Math.floor(p.x) + dx;
-        const targetZ = Math.floor(p.z) + dz;
-        const at = bot.blockAt(new Vec3(targetX, baseY, targetZ));
-        if (!at || at.name === 'air' || at.name === 'short_grass' || at.name === 'tall_grass') {
-          chosen = [dx, dz];
-          break;
-        }
-      }
+      const [dx, dz] = pickTowerFootOffset(bot, p);
       return {
         action: 'build_tower',
         body: {
-          x: Math.floor(p.x) + chosen[0],
+          x: Math.floor(p.x) + dx,
           y: baseY,
-          z: Math.floor(p.z) + chosen[1],
+          z: Math.floor(p.z) + dz,
           height,
           material,
         },

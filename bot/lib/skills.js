@@ -47,6 +47,17 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function normalizeBlockName(name) {
+  if (!name) return '';
+  return String(name).toLowerCase().replace(/^minecraft:/, '');
+}
+
+function blockAtMatches(bot, x, y, z, expected) {
+  const readback = bot.blockAt(new Vec3(x, y, z));
+  if (!readback) return false;
+  return normalizeBlockName(readback.name) === normalizeBlockName(expected);
+}
+
 // Pick an adjacent solid block we can place against. Mindcraft's 6-face scan.
 function findBuildOffBlock(bot, x, y, z) {
   const faces = [
@@ -544,12 +555,13 @@ async function build_schematic(bot, { name, x, y, z }) {
       // the chat queue from tripping Paper's flood-protection.
       try {
         bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
-        placed++;
+        // Wait for server + world sync, then verify before counting success.
+        await sleep(SETBLOCK_CHAT_INTERVAL_MS);
+        if (blockAtMatches(bot, tx, ty, tz, block)) placed++;
+        else failed++;
       } catch (e) {
         failed++;
       }
-      // Align with Mineflayer chat throttle so commands actually land server-side.
-      await sleep(SETBLOCK_CHAT_INTERVAL_MS);
     } else {
       // Survival / non-op fallback. Requires the bot to have the block in
       // inventory AND an adjacent solid block to place against. Aerial

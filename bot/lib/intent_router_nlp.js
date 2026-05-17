@@ -30,8 +30,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
-import { Vec3 } from 'vec3';
-import { findPlayerEntity } from './player_utils.js';
+import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, 'intent_corpus.json');
@@ -242,19 +241,6 @@ async function ensureTrained() {
   return _trainPromise;
 }
 
-function resolveAnchorPos(bot, ctx) {
-  if (ctx.senderEntity && ctx.senderEntity.position) return ctx.senderEntity.position;
-  const fresh = findPlayerEntity(bot, ctx.sender);
-  if (fresh && fresh.position) return fresh.position;
-  if (bot.entity && bot.entity.position) return bot.entity.position;
-  return null;
-}
-
-function intFromMatch(text, regex) {
-  const m = text.match(regex);
-  return m ? parseInt(m[1], 10) : null;
-}
-
 // Intent → action dispatch. The classifier picks the intent; this maps it
 // to a concrete action body (with slot extraction where needed).
 const DISPATCHERS = {
@@ -338,20 +324,10 @@ const DISPATCHERS = {
     const found = bot.inventory.items().find((i) => buildables.includes(i.name));
     const material = found ? found.name : 'oak_planks';
     const baseY = Math.floor(p.y);
-    const offsets = [[2, 0], [-2, 0], [0, 2], [0, -2], [3, 0], [-3, 0]];
-    let chosen = offsets[0];
-    for (const [dx, dz] of offsets) {
-      const targetX = Math.floor(p.x) + dx;
-      const targetZ = Math.floor(p.z) + dz;
-      const at = bot.blockAt(new Vec3(targetX, baseY, targetZ));
-      if (!at || at.name === 'air' || at.name === 'short_grass' || at.name === 'tall_grass') {
-        chosen = [dx, dz];
-        break;
-      }
-    }
+    const [dx, dz] = pickTowerFootOffset(bot, p);
     return {
       action: 'build_tower',
-      body: { x: Math.floor(p.x) + chosen[0], y: baseY, z: Math.floor(p.z) + chosen[1], height, material },
+      body: { x: Math.floor(p.x) + dx, y: baseY, z: Math.floor(p.z) + dz, height, material },
     };
   },
 

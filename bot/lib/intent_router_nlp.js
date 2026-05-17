@@ -125,22 +125,31 @@ const ANAPHORA_RULES = [
     amend: (entry) => ({ ...entry.body }),
     label: 'repeat',
   },
-  // Move/offset ("to the left", "over there") — shift last action's anchor
+  // Move/offset ("to the left", "over there") — shift last action's anchor.
+  // appliesTo uses INTENT NAMES (not action names) since last.intent_name is
+  // what we filter on. Mapping intent → action:
+  //   build_tower → build_tower (same)
+  //   build_schematic → build_schematic (same)
+  //   torch_near_me → place_near_player (different)
+  //   come_here / explore_cave → goto (different)
+  //   light_area → light_area (same)
+  // (cursor PR review catch — previously listed action names that never
+  // matched intent_name.)
   {
     pattern: /^(to the left|left more|further left)\b/i,
-    appliesTo: ['build_tower', 'build_schematic', 'place_near_player', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'torch_near_me', 'come_here', 'explore_cave', 'light_area'],
     amend: (entry) => ({ ...entry.body, x: (entry.body.x || 0) - 3 }),
     label: 'left',
   },
   {
     pattern: /^(to the right|right more|further right)\b/i,
-    appliesTo: ['build_tower', 'build_schematic', 'place_near_player', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'torch_near_me', 'come_here', 'explore_cave', 'light_area'],
     amend: (entry) => ({ ...entry.body, x: (entry.body.x || 0) + 3 }),
     label: 'right',
   },
   {
     pattern: /^(over there|over here|right here|here)\b/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
     amend: (entry, bot, ctx) => {
       const p = resolveAnchorPos(bot, ctx);
       return p ? { ...entry.body, x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } : { ...entry.body };
@@ -345,7 +354,10 @@ const DISPATCHERS = {
     return { action: 'goto', body: { x: parseInt(m[1]), y: parseInt(m[2]), z: parseInt(m[3]) } };
   },
 
-  mine_iron: () => ({ action: 'bg_collect', body: { block: 'iron_ore', count: 4 } }),
+  // server.js has no 'bg_collect' ACTION; that's a /task/ endpoint name.
+  // Use 'collect' (find + dig + pickup) — matches the regex router's choice
+  // in lib/intent_router.js mine_iron handler.
+  mine_iron: () => ({ action: 'collect', body: { block: 'iron_ore', count: 3 } }),
 
   // ─── NEW intents from realistic kid corpus + skill-gap analysis ─────
   // For intents that need a new server.js ACTION (fish, farm, cook,
@@ -353,10 +365,14 @@ const DISPATCHERS = {
   // graceful — the router only routes what it can execute, brain owns
   // everything else. Filed as PR follow-up issues.
 
-  // defend_me / attack_mob: existing 'fight' action targets the nearest
-  // hostile mob in range. Same primitive serves "save me" and "kill that".
-  defend_me: () => ({ action: 'fight', body: { target_class: 'hostile', mode: 'defend' } }),
-  attack_mob: () => ({ action: 'fight', body: { target_class: 'hostile', mode: 'attack' } }),
+  // defend_me / attack_mob: server.js ACTIONS.fight accepts
+  // { target?, retreat_health?, duration? } — when target is null/omitted
+  // fight auto-picks the nearest hostile in the visible-fair-play set.
+  // (Previously passed bogus {target_class, mode} keys — cursor PR review
+  // catch.) Use duration 30s for defend (longer holdout) vs 15s for attack
+  // (one-and-done feel).
+  defend_me: () => ({ action: 'fight', body: { duration: 30, retreat_health: 8 } }),
+  attack_mob: () => ({ action: 'fight', body: { duration: 15 } }),
 
   // light_area: schematic-grade lighting around the kid's position.
   light_area: (bot, ctx) => {
@@ -417,10 +433,14 @@ const DISPATCHERS = {
   // "do it again" / "another please" / "same as before" — kids constantly
   // chain a satisfying action. Replays the most recent skill the same bot
   // fired (within a 5-min window) for any kid.
+  //
+  // body is deep-cloned (shallow spread) so callers that mutate the body
+  // — e.g. anaphora 'higher' incrementing height — don't corrupt the
+  // cached context entry. (cursor PR review catch.)
   repeat_last_action: (bot, _ctx) => {
     const last = getLastSkill(bot);
     if (!last) return null;
-    return { action: last.action, body: last.body };
+    return { action: last.action, body: { ...last.body } };
   },
 };
 

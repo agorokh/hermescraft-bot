@@ -3137,6 +3137,26 @@ httpServer.listen(config.api.port, () => {
   });
 });
 
+function _clearPendingVoiceTurns(reason) {
+  for (const [id, turn] of _pendingVoiceTurns) {
+    clearTimeout(turn.timer);
+    try {
+      turn.resolve({ ok: false, error: reason, in_reply_to: id });
+    } catch (e) { /* client already gone */ }
+    _pendingVoiceTurns.delete(id);
+  }
+}
+
+process.on('SIGTERM', () => {
+  log('[voice] SIGTERM — clearing pending voice turns');
+  _clearPendingVoiceTurns('server_shutdown');
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  log('[voice] SIGINT — clearing pending voice turns');
+  _clearPendingVoiceTurns('server_shutdown');
+  process.exit(0);
+});
 process.on('uncaughtException', (err) => {
   log(`Uncaught exception: ${err && err.message ? err.message : err}`);
   if (err && err.stack) log(`  stack: ${err.stack.split('\n').slice(0, 6).join(' | ')}`);

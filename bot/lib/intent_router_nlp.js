@@ -52,20 +52,104 @@ const CLARIFY_THRESHOLD = parseFloat(process.env.HERMES_NLP_CLARIFY_THRESHOLD ||
 // Back-compat alias for existing tests that imported MATCH_THRESHOLD.
 const MATCH_THRESHOLD = ACT_THRESHOLD;
 
-// Per-bot "last fired skill" memory for repeat_last_action handling.
-// Keyed by bot.username so a multi-companion setup doesn't cross-wire.
-const _lastSkillByBot = new Map();
+// CONTEXT BUFFER (council round 2 unanimous #1 next ask: Gemini's
+// "anaphora resolution" + Mistral's "action FIFO"). Per-bot rolling FIFO
+// of the last N fired skills + a 5-min expiry. Two consumers:
+//   1. repeat_last_action ("do it again" / "another please")
+//   2. anaphora pre-processor (below): short utterances like "higher"
+//      "again" "another one" "to the left" with no clear classifier
+//      match try to amend the last action and re-fire.
+const _ctxBufByBot = new Map();
+const CTX_BUF_MAX = 5;
+const CTX_BUF_TTL_MS = 5 * 60 * 1000;
+
+function _ctxBuf(bot) {
+  if (!bot || !bot.username) return null;
+  const buf = _ctxBufByBot.get(bot.username);
+  if (!buf) return null;
+  // Drop stale entries
+  const fresh = buf.filter((e) => Date.now() - e.at <= CTX_BUF_TTL_MS);
+  if (fresh.length !== buf.length) _ctxBufByBot.set(bot.username, fresh);
+  return fresh.length > 0 ? fresh : null;
+}
+
 export function recordLastSkill(bot, intent_name, action, body) {
   if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action') return;
-  _lastSkillByBot.set(bot.username, { intent_name, action, body, at: Date.now() });
+  const entry = { intent_name, action, body: { ...body }, at: Date.now() };
+  const buf = _ctxBufByBot.get(bot.username) || [];
+  buf.push(entry);
+  if (buf.length > CTX_BUF_MAX) buf.shift();
+  _ctxBufByBot.set(bot.username, buf);
 }
+
 function getLastSkill(bot) {
-  if (!bot || !bot.username) return null;
-  const r = _lastSkillByBot.get(bot.username);
-  if (!r) return null;
-  // Expire after 5 minutes — "do it again" 10 minutes later is too stale.
-  if (Date.now() - r.at > 5 * 60 * 1000) return null;
-  return r;
+  const buf = _ctxBuf(bot);
+  if (!buf) return null;
+  return buf[buf.length - 1];
+}
+
+// Anaphora modifiers: short kid phrases that amend the last action.
+// Each entry: { pattern, amend(lastEntry) -> new body, label }
+const ANAPHORA_RULES = [
+  // Height adjustments for build_tower
+  {
+    pattern: /^(higher|taller|bigger|go higher|make it taller|taller please)\b/i,
+    appliesTo: ['build_tower'],
+    amend: (entry) => ({ ...entry.body, height: Math.min(20, (entry.body.height || 5) + 2) }),
+    label: 'higher',
+  },
+  {
+    pattern: /^(lower|shorter|smaller|less tall)\b/i,
+    appliesTo: ['build_tower'],
+    amend: (entry) => ({ ...entry.body, height: Math.max(2, (entry.body.height || 5) - 2) }),
+    label: 'shorter',
+  },
+  // Repeat the same action ("another one", "one more")
+  {
+    pattern: /^(another( one)?|one more|do (it|that) again|same again|like before|like the last one)\b/i,
+    appliesTo: null,  // any
+    amend: (entry) => ({ ...entry.body }),
+    label: 'repeat',
+  },
+  // Move/offset ("to the left", "over there") — shift last action's anchor
+  {
+    pattern: /^(to the left|left more|further left)\b/i,
+    appliesTo: ['build_tower', 'build_schematic', 'place_near_player', 'goto', 'light_area'],
+    amend: (entry) => ({ ...entry.body, x: (entry.body.x || 0) - 3 }),
+    label: 'left',
+  },
+  {
+    pattern: /^(to the right|right more|further right)\b/i,
+    appliesTo: ['build_tower', 'build_schematic', 'place_near_player', 'goto', 'light_area'],
+    amend: (entry) => ({ ...entry.body, x: (entry.body.x || 0) + 3 }),
+    label: 'right',
+  },
+  {
+    pattern: /^(over there|over here|right here|here)\b/i,
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
+    amend: (entry, bot, ctx) => {
+      const p = resolveAnchorPos(bot, ctx);
+      return p ? { ...entry.body, x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } : { ...entry.body };
+    },
+    label: 'here',
+  },
+];
+
+function _tryAnaphora(bot, body, ctx) {
+  const last = getLastSkill(bot);
+  if (!last) return null;
+  for (const rule of ANAPHORA_RULES) {
+    if (!rule.pattern.test(body.trim())) continue;
+    if (rule.appliesTo && !rule.appliesTo.includes(last.intent_name)) continue;
+    const newBody = rule.amend(last, bot, ctx);
+    return {
+      action: last.action,
+      body: newBody,
+      intent_name: last.intent_name,
+      anaphora: rule.label,
+    };
+  }
+  return null;
 }
 
 let _nlp = null;
@@ -322,6 +406,27 @@ const DISPATCHERS = {
 // Same return shape: {matched, intent_name, action, body}.
 export async function tryRoute(bot, body, sender) {
   if (!bot || !body) return { matched: false };
+  // ANAPHORA PRE-PROCESSOR (council round 2 unanimous): short modifier
+  // phrases ("higher", "again", "over there") amend the last fired skill
+  // BEFORE NLP gets a vote. NLP doesn't know the previous action; only
+  // the per-bot context buffer does. Wins precedence so "higher" after a
+  // tower build means "rebuild the same tower 2 blocks taller", not
+  // some classifier guess.
+  const senderEntity = findPlayerEntity(bot, sender);
+  const ctx = { sender, senderEntity, message: body, body };
+  const anaphora = _tryAnaphora(bot, body, ctx);
+  if (anaphora) {
+    recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body);
+    return {
+      matched: true,
+      intent_name: anaphora.intent_name,
+      action: anaphora.action,
+      body: anaphora.body,
+      nlp_score: null,
+      nlp_zone: 'anaphora',
+      anaphora_rule: anaphora.anaphora,
+    };
+  }
   let nlp;
   try {
     nlp = await ensureTrained();
@@ -350,8 +455,7 @@ export async function tryRoute(bot, body, sender) {
   if (!dispatch) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'no_dispatcher', error: 'no dispatcher for ' + intent };
   }
-  const senderEntity = findPlayerEntity(bot, sender);
-  const ctx = { sender, senderEntity, message: body, body };
+  // ctx already constructed above for anaphora; reuse to avoid double-lookup
   const decision = dispatch(bot, ctx);
   if (!decision) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };

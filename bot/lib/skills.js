@@ -91,12 +91,58 @@ const REPLACEABLE_BLOCKS = new Set([
   'snow', 'vine', 'glow_lichen', 'hanging_roots',
 ]);
 
+// Cache for the bot's op-status. Set lazily on first placeOne call; never
+// flipped within a session. Companion bots in this repo are always op'd
+// (server/ops.json level 4) so this resolves to `true` immediately,
+// turning every aerial-cell block into an instant /setblock chat command
+// instead of a physical pathfind+placeBlock that crashes on no-adjacent.
+async function _cachedSetblockAuth(bot) {
+  if (bot._hc_setblock_auth !== undefined) return bot._hc_setblock_auth;
+  bot._hc_setblock_auth = await detectSetblockAuth(bot, 0, 0, 0);
+  return bot._hc_setblock_auth;
+}
+
 // Core place primitive. Returns true on success.
 // allowReachRecover: if true, when placeBlock fails due to reach distance,
 // move the bot closer and retry once. Skill loops set this to true; raw
 // callers may set false to avoid the pathfind overhead.
+//
+// 2026-05-16 — op-aware fast path. If the bot is op (probed once per
+// session and cached on `bot._hc_setblock_auth`), use vanilla `/setblock`
+// chat command — instant, aerial-safe, no pathfind needed. This is the
+// same pattern `build_schematic` uses for cheat-mode placement. It
+// eliminates the 70+ `Unhandled rejection: TypeError: Cannot read
+// properties of undefined (reading 'type')` errors per session that
+// `bot.placeBlock` was emitting on aerial cells (treehouse roof, tower
+// top, etc.), and the "STUCK detected" 10s pathfinder stalls that come
+// from the bot trying to physically reach floating placements.
 async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
-  const targetPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
+  const tx = Math.floor(x), ty = Math.floor(y), tz = Math.floor(z);
+
+  // Skip air/cave_air targets defensively.
+  if (!itemName || itemName === 'air' || itemName === 'cave_air' || itemName === 'void_air') {
+    return { ok: false, reason: 'placeOne: refused to place air' };
+  }
+
+  if (await _cachedSetblockAuth(bot)) {
+    // Already-matching block? Don't re-fire.
+    const existing = bot.blockAt(new Vec3(tx, ty, tz));
+    if (existing && existing.name === itemName) {
+      return { ok: true, reason: `already ${itemName} at ${tx},${ty},${tz}` };
+    }
+    try {
+      bot.chat(`/setblock ${tx} ${ty} ${tz} ${itemName}`);
+    } catch (e) {
+      // /setblock chat failed for an unexpected reason — fall through to
+      // physical path. Cache flip not done here to avoid permanent
+      // downgrade if it was transient.
+    }
+    // Give the chunk update a moment to round-trip before the next call.
+    await sleep(40);
+    return { ok: true };
+  }
+
+  const targetPos = new Vec3(tx, ty, tz);
   // Already occupied? (treat plant/decoration blocks as replaceable per vanilla)
   const existing = bot.blockAt(targetPos);
   if (existing && existing.name === itemName) {

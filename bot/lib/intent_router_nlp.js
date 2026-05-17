@@ -172,7 +172,12 @@ const DISPATCHERS = {
     if (!p) return null;
     const body = ctx.body.toLowerCase();
     let name = null;
-    if (/\b(treehouse|tree house|tree fort|tree home)\b/.test(body)) name = 'treehouse';
+    // Ice/snow MUST be checked BEFORE generic house/cottage — kid asking
+    // for an "ice house" wants the ice castle, not the oak cottage.
+    if (/\b(ice|frozen|frosty)\b.*\b(castle|fort|house|palace|home|cottage)\b/.test(body)) name = 'ice_castle';
+    else if (/\bice\s*castle\b/.test(body)) name = 'ice_castle';
+    else if (/\b(igloo|snow\s*house|snow\s*home|snow\s*shelter|snow\s*hut)\b/.test(body)) name = 'igloo';
+    else if (/\b(treehouse|tree house|tree fort|tree home)\b/.test(body)) name = 'treehouse';
     else if (/\b(house|cottage|home|cabin)\b/.test(body)) name = 'small_house';
     else if (/\b(well|fountain)\b/.test(body)) name = 'well';
     else if (/\b(garden|flower bed|flower patch|flower garden)\b/.test(body)) name = 'garden';

@@ -526,8 +526,12 @@ async function build_schematic(bot, { name, x, y, z }) {
   // hold against); harmless but free for /setblock.
   const sorted = [...blocks].sort((a, b) => {
     if (a[1] !== b[1]) return a[1] - b[1];
-    return (a[0] + a[2]) - (b[0] + b[2]);
+    if (a[0] !== b[0]) return a[0] - b[0];
+    return a[2] - b[2];
   });
+  const solidBlocks = blocks.filter(([, , , block]) =>
+    block && block !== 'air' && block !== 'cave_air' && block !== 'void_air'
+  );
 
   let placed = 0;
   let failed = 0;
@@ -577,11 +581,12 @@ async function build_schematic(bot, { name, x, y, z }) {
 
   const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
-  if (placed === blocks.length) {
-    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${blocks.length} blocks placed${mode}.` };
+  const total = solidBlocks.length;
+  if (placed === total && total > 0) {
+    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${total} blocks placed${mode}.` };
   }
   return {
-    result: `Built ${placed}/${blocks.length} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}`,
+    result: `Built ${placed}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}`,
   };
 }
 

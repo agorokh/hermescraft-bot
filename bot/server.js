@@ -96,6 +96,15 @@ async function tryRoute(bot, body, sender) {
   return nlp;  // propagate the NLP-side metadata
 }
 
+// Intent routers emit chat as { text }; ACTIONS.chat expects { message }.
+function actionBodyForRoute(route) {
+  const body = route.body || {};
+  if (route.action !== 'chat') return body;
+  const message = body.message ?? body.text;
+  if (message == null) return body;
+  return { message, in_reply_to: body.in_reply_to };
+}
+
 async function shadowRoute(bot, body, sender, primaryResult) {
   if (!SHADOW_NLP) return;
   try {
@@ -363,8 +372,9 @@ async function handleChat(username, message) {
           }
           log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
           if (ACTIONS[route.action]) {
+            const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
-            ACTIONS[route.action](route.body).then((result) => {
+            ACTIONS[route.action](actionBody).then((result) => {
               if (result && result.result) {
                 log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                 try { bot.chat(String(result.result).slice(0, 80)); } catch {}
@@ -419,8 +429,9 @@ async function handleChat(username, message) {
             if (route.matched && ACTIONS[route.action]) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }
-              log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
-              ACTIONS[route.action](route.body).then((result) => {
+              const actionBody = actionBodyForRoute(route);
+              log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
+              ACTIONS[route.action](actionBody).then((result) => {
                 if (result && result.result) {
                   log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                   try { bot.chat(String(result.result).slice(0, 80)); } catch {}
@@ -1506,7 +1517,8 @@ const ACTIONS = {
     const data = state.data || state;
     const pos = data.position || {};
     const lines = [];
-    lines.push(`## you are at ${fmt(pos.x)},${fmt(pos.y)},${fmt(pos.z)} in ${data.biome || 'unknown'}; time=${data.time || '?'} (${data.timePhase || '?'}); hp=${data.health || '?'}/20 food=${data.food || '?'}/20; weather=${data.weather || 'clear'}`);
+    const weather = data.isRaining ? 'rain' : (data.weather || 'clear');
+    lines.push(`## you are at ${fmt(pos.x)},${fmt(pos.y)},${fmt(pos.z)} in ${data.biome || 'unknown'}; time=${data.time || '?'} (${data.timePhase || '?'}); hp=${data.health || '?'}/20 food=${data.food || '?'}/20; weather=${weather}`);
     // Inventory
     const inv = (data.inventory || []).slice(0, 12);
     if (inv.length === 0) {
@@ -1527,12 +1539,12 @@ const ACTIONS = {
       lines.push(`## nearby blocks (r=16): ${summary || 'none notable'}`);
     }
     // Nearby entities (players + mobs)
-    const ents = (data.entities || []).slice(0, 8);
+    const ents = (data.nearbyEntities || data.entities || []).slice(0, 8);
     if (ents.length > 0) {
       lines.push('## nearby entities: ' + ents.map(e => `${e.username || e.type}@${e.distance}m`).join(', '));
     }
     // Recent chat (last 5 lines for context)
-    const chat = data.chat_log || data.recentChat || [];
+    const chat = data.unreadChat || data.chat_log || data.recentChat || [];
     if (Array.isArray(chat) && chat.length > 0) {
       lines.push('## recent chat:');
       for (const m of chat.slice(-5)) {

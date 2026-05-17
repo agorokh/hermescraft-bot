@@ -149,17 +149,18 @@ export function installBarksAndPresence(bot, opts = {}) {
   const character = BARKS[characterName] ? characterName : 'Rosie';
   const table = BARKS[character];
 
-  let lastBarkAt = 0;
+  let nextIdleBarkAt = 0;
   let lastReactiveAt = 0;
   let lastGazeTarget = null;
+  let lastGazePos = null;
   let stopped = false;
 
   function shouldBark(category, cooldown) {
     if (stopped) return false;
     const now = Date.now();
     if (category === 'idle') {
-      if (now - lastBarkAt < IDLE_BARK_COOLDOWN_MS + Math.random() * IDLE_BARK_JITTER_MS) return false;
-      lastBarkAt = now;
+      if (now < nextIdleBarkAt) return false;
+      nextIdleBarkAt = now + IDLE_BARK_COOLDOWN_MS + Math.random() * IDLE_BARK_JITTER_MS;
       return true;
     } else {
       if (now - lastReactiveAt < cooldown) return false;
@@ -192,13 +193,14 @@ export function installBarksAndPresence(bot, opts = {}) {
   const gazeTimer = setInterval(() => {
     if (stopped || !bot || !bot.entity) return;
     const np = nearestPlayer(bot, PLAYER_GAZE_DISTANCE);
-    if (!np) { lastGazeTarget = null; return; }
-    // Only re-aim if target changed or we haven't looked recently
-    if (lastGazeTarget !== np.username) {
+    if (!np) { lastGazeTarget = null; lastGazePos = null; return; }
+    const gazePos = np.position.offset(0, 1.6, 0);
+    const movedEnough = !lastGazePos || gazePos.distanceTo(lastGazePos) > 0.5;
+    if (lastGazeTarget !== np.username || movedEnough) {
       try {
-        // Look at player's eyes, not feet
-        bot.lookAt(np.position.offset(0, 1.6, 0));
+        bot.lookAt(gazePos);
         lastGazeTarget = np.username;
+        lastGazePos = gazePos.clone();
       } catch (e) {}
     }
   }, 2_000);

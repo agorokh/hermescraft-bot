@@ -273,10 +273,12 @@ const DISPATCHERS = {
     body: { player: ctx.sender, item: 'torch', direction: 'side' },
   }),
 
-  flower_give: (_bot, ctx) => ({
-    action: 'give_to_player',
-    body: { player: ctx.sender, item: 'poppy', count: 1 },
-  }),
+  flower_give: (bot, ctx) => {
+    const flowers = ['poppy', 'rose_bush', 'red_tulip', 'pink_tulip', 'dandelion', 'blue_orchid'];
+    const found = bot.inventory.items().find((i) => flowers.includes(i.name));
+    const item = found ? found.name : 'poppy';
+    return { action: 'give_to_player', body: { player: ctx.sender, item, count: 1 } };
+  },
 
   build_schematic: (bot, ctx) => {
     const p = resolveAnchorPos(bot, ctx);
@@ -332,17 +334,20 @@ const DISPATCHERS = {
   },
 
   come_here: (bot, ctx) => {
-    const p = resolveAnchorPos(bot, ctx);
-    if (!p) return null;
+    // Require a resolved sender — do not fall back to bot position (no-op goto).
+    if (!ctx.senderEntity?.position) return null;
+    const p = ctx.senderEntity.position;
     return { action: 'goto', body: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } };
   },
 
   plant_flowers: (bot, ctx) => {
-    const p = resolveAnchorPos(bot, ctx);
-    if (!p) return null;
+    if (!ctx.senderEntity?.position) return null;
+    const flowers = ['poppy', 'dandelion', 'blue_orchid', 'rose_bush', 'red_tulip'];
+    const found = bot.inventory.items().find((i) => flowers.includes(i.name));
+    const item = found ? found.name : 'poppy';
     return {
-      action: 'fill',
-      body: { x: Math.floor(p.x) + 2, y: Math.floor(p.y), z: Math.floor(p.z), w: 3, h: 1, d: 3, item: 'poppy' },
+      action: 'place_near_player',
+      body: { player: ctx.sender, item, direction: 'side' },
     };
   },
 
@@ -357,7 +362,12 @@ const DISPATCHERS = {
   // server.js has no 'bg_collect' ACTION; that's a /task/ endpoint name.
   // Use 'collect' (find + dig + pickup) — matches the regex router's choice
   // in lib/intent_router.js mine_iron handler.
-  mine_iron: () => ({ action: 'collect', body: { block: 'iron_ore', count: 3 } }),
+  mine_iron: (_bot, ctx) => {
+    const oreMatch = ctx.body.match(/\b(iron|coal|diamond|copper|gold)\b/i);
+    if (!oreMatch) return null;
+    const block = `${oreMatch[1].toLowerCase()}_ore`;
+    return { action: 'collect', body: { block, count: 3 } };
+  },
 
   // ─── NEW intents from realistic kid corpus + skill-gap analysis ─────
   // For intents that need a new server.js ACTION (fish, farm, cook,
@@ -378,7 +388,10 @@ const DISPATCHERS = {
   light_area: (bot, ctx) => {
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
-    return { action: 'light_area', body: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z), radius: 6 } };
+    return {
+      action: 'light_area',
+      body: { cx: Math.floor(p.x), cy: Math.floor(p.y), cz: Math.floor(p.z), radius: 6 },
+    };
   },
 
   // bring_food: give_to_player whatever edible thing the bot has on hand.

@@ -320,7 +320,6 @@ const INTENTS = [
     name: 'come_here',
     patterns: [
       /\b(come|come over|come here|walk|run|head)\b.*\b(here|to me|over)\b/i,
-      /\bwhere are you\b/i,
       /\bcome to my (spot|position|place)\b/i,
     ],
     async handler(bot, ctx) {

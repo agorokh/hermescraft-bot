@@ -320,7 +320,7 @@ except: print(sys.argv[1])
 " "$RESULT"
         ;;
 
-    scene|perceive|vision)
+    scene|vision)
         RANGE="${1:-16}"
         RESULT=$(api_get "/scene?range=$RANGE")
         python3 -c "
@@ -364,13 +364,20 @@ except: print(sys.argv[1])
         IRT=""
         while [[ $# -gt 0 ]]; do
             case "$1" in
-                --in-reply-to|-r) IRT="$2"; shift 2 ;;
+                --in-reply-to|-r)
+                    if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                        echo "mc chat: --in-reply-to requires a positive integer id" >&2
+                        exit 2
+                    fi
+                    IRT="$2"
+                    shift 2
+                    ;;
                 *) echo "mc chat: unknown flag '$1' (expected --in-reply-to <id>)" >&2; exit 2 ;;
             esac
         done
         ESCAPED_MSG=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$MSG")
         if [[ -n "$IRT" ]]; then
-            if ! [[ "$IRT" =~ ^[0-9]+$ ]]; then
+            if ! [[ "$IRT" =~ ^[1-9][0-9]*$ ]]; then
                 echo "mc chat: --in-reply-to must be a positive integer (got '$IRT')" >&2
                 exit 2
             fi

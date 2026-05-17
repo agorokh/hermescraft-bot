@@ -119,7 +119,7 @@ async function shadowRoute(bot, body, sender, primaryResult) {
     // captures "would both routers have picked the same skill?".
     const other = NLP_PRIMARY
       ? await tryRouteRegex(bot, body, sender, { dryRun: true })
-      : await tryRouteNlp(bot, body, sender);
+      : await tryRouteNlp(bot, body, sender, { dryRun: true });
     const p_act = primaryResult?.matched ? primaryResult.action : 'none';
     const o_act = other?.matched ? other.action : 'none';
     const score = other?.nlp_score != null ? other.nlp_score.toFixed(2)

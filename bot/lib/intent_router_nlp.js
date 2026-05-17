@@ -492,7 +492,7 @@ const DISPATCHERS = {
 
 // Public API — drop-in replacement for intent_router.tryRoute.
 // Same return shape: {matched, intent_name, action, body}.
-export async function tryRoute(bot, body, sender) {
+export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
   // ANAPHORA PRE-PROCESSOR (council round 2 unanimous): short modifier
   // phrases ("higher", "again", "over there") amend the last fired skill
@@ -501,7 +501,7 @@ export async function tryRoute(bot, body, sender) {
   // tower build means "rebuild the same tower 2 blocks taller", not
   // some classifier guess.
   const senderEntity = findPlayerEntity(bot, sender);
-  const ctx = { sender, senderEntity, message: body, body };
+  const ctx = { sender, senderEntity, message: body, body, dryRun: opts.dryRun };
   const anaphora = _isStrictAnaphoraPhrase(body) ? _tryAnaphora(bot, body, ctx) : null;
   if (anaphora) {
     // Pure repeats amend the last body but must not push duplicate buffer entries.

@@ -451,13 +451,18 @@ async function detectSetblockAuth(bot, _x, _y, _z) {
   if (!myPos) return false; // no bot body, no point trying /setblock
   const px = Math.floor(myPos.x);
   const pz = Math.floor(myPos.z);
-  let py = Math.floor(myPos.y) + 3; // overhead so we don't suffocate
-  if (py > 319) py = 319; // vanilla 1.21 build limit
-  if (py < -64) py = -64; // floor for completeness
+  // Probe only in air so restore never wipes block state / block entities.
+  let py = null;
+  for (let y = Math.min(319, Math.floor(myPos.y) + 8); y >= Math.floor(myPos.y) + 2; y--) {
+    const n = bot.blockAt(new Vec3(px, y, pz))?.name || 'air';
+    if (n === 'air' || n === 'cave_air' || n === 'void_air') {
+      py = y;
+      break;
+    }
+  }
+  if (py == null) return false;
 
-  // Capture what's currently there so we restore it after probing.
-  const before = bot.blockAt(new Vec3(px, py, pz));
-  const beforeName = before?.name || 'air';
+  const beforeName = 'air';
 
   try { bot.chat(`/setblock ${px} ${py} ${pz} ${sentinel}`); } catch (e) {}
   await sleep(250); // wait for the chunk update to round-trip
@@ -466,11 +471,9 @@ async function detectSetblockAuth(bot, _x, _y, _z) {
   const afterName = after?.name || 'air';
   const ok = afterName === sentinel;
 
-  // Restore the previous block so the probe is invisible to the player.
-  // Best-effort — if op was lost between probe and restore, we leave the
-  // sentinel and report `false` honestly.
+  // Restore air — probe cell was empty before we touched it.
   if (ok) {
-    try { bot.chat(`/setblock ${px} ${py} ${pz} ${beforeName}`); } catch (e) {}
+    try { bot.chat(`/setblock ${px} ${py} ${pz} air`); } catch (e) {}
   }
   return ok;
 }

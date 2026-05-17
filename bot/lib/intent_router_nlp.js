@@ -126,25 +126,18 @@ const ANAPHORA_RULES = [
     label: 'repeat',
   },
   // Move/offset ("to the left", "over there") — shift last action's anchor.
-  // appliesTo uses INTENT NAMES (not action names) since last.intent_name is
-  // what we filter on. Mapping intent → action:
-  //   build_tower → build_tower (same)
-  //   build_schematic → build_schematic (same)
-  //   torch_near_me → place_near_player (different)
-  //   come_here / explore_cave → goto (different)
-  //   light_area → light_area (same)
-  // (cursor PR review catch — previously listed action names that never
-  // matched intent_name.)
+  // appliesTo uses INTENT NAMES. torch_near_me omitted — place_near_player
+  // has no x/y/z/cx coords to amend.
   {
     pattern: /^(to the left|left more|further left)\b/i,
-    appliesTo: ['build_tower', 'build_schematic', 'torch_near_me', 'come_here', 'explore_cave', 'light_area'],
-    amend: (entry) => ({ ...entry.body, x: (entry.body.x || 0) - 3 }),
+    appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
+    amend: (entry) => _shiftAnchorBody(entry.body, -3, 0, 0),
     label: 'left',
   },
   {
     pattern: /^(to the right|right more|further right)\b/i,
-    appliesTo: ['build_tower', 'build_schematic', 'torch_near_me', 'come_here', 'explore_cave', 'light_area'],
-    amend: (entry) => ({ ...entry.body, x: (entry.body.x || 0) + 3 }),
+    appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
+    amend: (entry) => _shiftAnchorBody(entry.body, 3, 0, 0),
     label: 'right',
   },
   {
@@ -152,11 +145,42 @@ const ANAPHORA_RULES = [
     appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
     amend: (entry, bot, ctx) => {
       const p = resolveAnchorPos(bot, ctx);
-      return p ? { ...entry.body, x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) } : { ...entry.body };
+      if (!p) return { ...entry.body };
+      return _setAnchorBody(entry.body, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
     },
     label: 'here',
   },
 ];
+
+function _shiftAnchorBody(body, dx, dy, dz) {
+  const out = { ...body };
+  if ('cx' in body || 'cy' in body || 'cz' in body) {
+    out.cx = Math.floor((body.cx ?? 0) + dx);
+    out.cy = Math.floor((body.cy ?? 0) + dy);
+    out.cz = Math.floor((body.cz ?? 0) + dz);
+  }
+  if ('x' in body || 'y' in body || 'z' in body) {
+    out.x = Math.floor((body.x ?? 0) + dx);
+    out.y = Math.floor((body.y ?? 0) + dy);
+    out.z = Math.floor((body.z ?? 0) + dz);
+  }
+  return out;
+}
+
+function _setAnchorBody(body, x, y, z) {
+  const out = { ...body };
+  if ('cx' in body || 'cy' in body || 'cz' in body) {
+    out.cx = x;
+    out.cy = y;
+    out.cz = z;
+  }
+  if ('x' in body || 'y' in body || 'z' in body) {
+    out.x = x;
+    out.y = y;
+    out.z = z;
+  }
+  return out;
+}
 
 function _tryAnaphora(bot, body, ctx) {
   const last = getLastSkill(bot);

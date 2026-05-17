@@ -404,6 +404,23 @@ const INTENTS = [
 
 // ── Public router ──────────────────────────────────────────────────
 
+// Deterministic stop/cancel hot path — must run before NLP classification.
+export async function tryStopRoute(bot, body, sender) {
+  if (!bot || !body) return { matched: false };
+  const stopIntent = INTENTS.find((i) => i.name === 'stop');
+  if (!stopIntent?.patterns.some((p) => p.test(body))) return { matched: false };
+  const senderEntity = findPlayerEntity(bot, sender);
+  const ctx = { sender, senderEntity, message: body, body };
+  const decision = await stopIntent.handler(bot, ctx);
+  if (!decision) return { matched: false };
+  return {
+    matched: true,
+    intent_name: 'stop',
+    action: decision.action,
+    body: decision.body,
+  };
+}
+
 // Returns { matched: bool, intent_name, action, body, target_chat }
 // Caller is responsible for executing ACTIONS[action](body) AND optionally
 // chatting target_chat back. If matched=false, caller falls through to the

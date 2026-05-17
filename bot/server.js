@@ -59,7 +59,7 @@ import {
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
 import { installBarksAndPresence } from './lib/barks.js';
-import { tryRoute as tryRouteRegex, ackFor } from './lib/intent_router.js';
+import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
 // NLP.js router (council-led migration, 3 rounds of Gemini+Mistral review).
 // Promoted to PRIMARY 2026-05-18 after the 92-utterance correctness
 // benchmark showed NLP 100% vs regex 69.6%, with all council-flagged risks
@@ -75,15 +75,18 @@ import { tryRoute as tryRouteRegex, ackFor } from './lib/intent_router.js';
 // the call returns matched=false with error set. To avoid silent drops,
 // we also try regex as a last-resort fallback when NLP returns
 // matched=false. This is belt-and-suspenders for the kids-tonight rollout.
-import { tryRoute as tryRouteNlp, markLastSkillFailed } from './lib/intent_router_nlp.js';
+import { tryRoute as tryRouteNlp, markLastSkillFailed, recordLastSkill } from './lib/intent_router_nlp.js';
 const NLP_PRIMARY = process.env.HERMES_NLP_PRIMARY !== '0';  // default ON
 const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '1';
 
 async function tryRoute(bot, body, sender) {
   if (!NLP_PRIMARY) return tryRouteRegex(bot, body, sender);
+  // Safety primitive: stop/cancel must never depend on NLP classification.
+  const stop = await tryStopRoute(bot, body, sender);
+  if (stop.matched) return stop;
   // Primary path: NLP. Fall back to regex if NLP returns matched=false
   // (clarify/oov/no-dispatcher) — gives the high-confidence regex catches
-  // (e.g. "stop", "come here") a second chance.
+  // (e.g. "come here") a second chance.
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
   const regex = await tryRouteRegex(bot, body, sender);
@@ -91,6 +94,8 @@ async function tryRoute(bot, body, sender) {
     // Annotate so the log line shows it was a fallback decision
     regex._fallback_from_nlp_zone = nlp.nlp_zone;
     regex._fallback_from_nlp_score = nlp.nlp_score;
+    // Keep anaphora/repeat buffer in sync when regex handles the utterance.
+    recordLastSkill(bot, regex.intent_name, regex.action, regex.body);
     return regex;
   }
   return nlp;  // propagate the NLP-side metadata
@@ -102,7 +107,8 @@ function actionBodyForRoute(route) {
   if (route.action !== 'chat') return body;
   const message = body.message ?? body.text;
   if (message == null) return body;
-  return { message, in_reply_to: body.in_reply_to };
+  // Router replies are always in-game chat — never auto-steal into voice.
+  return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true };
 }
 
 async function shadowRoute(bot, body, sender, primaryResult) {
@@ -2123,7 +2129,7 @@ const ACTIONS = {
   },
 
   // ── Utility ──────────────────────────────────────
-  async chat({ message, in_reply_to }) {
+  async chat({ message, in_reply_to, skip_voice_autocorrelate }) {
     // Voice-source routing (issue #54): if this reply addresses a pending
     // voice turn — either explicitly via in_reply_to, or auto-correlated to
     // the oldest dispatched voice turn within VOICE_AUTOCORRELATE_MS — route
@@ -2147,7 +2153,7 @@ const ACTIONS = {
     let voiceTurn = null;
     if (has_irt && _pendingVoiceTurns.has(in_reply_to)) {
       voiceTurn = _pendingVoiceTurns.get(in_reply_to);  // case A
-    } else if (!has_irt && !String(message).trimStart().startsWith('/')) {
+    } else if (!skip_voice_autocorrelate && !has_irt && !String(message).trimStart().startsWith('/')) {
       // case C: auto-correlate by GLOBAL FIFO across the whole commandQueue.
       // Slash-prefixed messages are in-game/Mineflayer commands (e.g.
       // apply_household_rules_live.sh gamerules) — never steal them into

@@ -144,9 +144,15 @@ function nearestPlayer(bot, maxRange) {
 //
 // Returns a tearDown() function so callers can clean up on disconnect.
 
+function resolveBarkCharacter(name) {
+  const raw = String(name || 'rosie').trim();
+  const key = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  return BARKS[key] ? key : 'Rosie';
+}
+
 export function installBarksAndPresence(bot, opts = {}) {
-  const characterName = opts.characterName || bot._client?.username || 'Rosie';
-  const character = BARKS[characterName] ? characterName : 'Rosie';
+  const characterName = resolveBarkCharacter(opts.characterName || bot._client?.username);
+  const character = characterName;
   const table = BARKS[character];
 
   let nextIdleBarkAt = 0;

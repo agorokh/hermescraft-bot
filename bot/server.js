@@ -2190,10 +2190,16 @@ const ACTIONS = {
     }
     if (has_irt) {
       const qEntry = commandQueue.find((c) => c.id === in_reply_to);
-      if (qEntry?.source !== 'voice') {
+      if (!qEntry) {
+        log(`[voice✗] (id=${in_reply_to}) in_reply_to not in commandQueue (evicted or unknown) — dropped fail-closed`);
+        const err = new Error(`Command id ${in_reply_to} not found in queue; reply dropped fail-closed.`);
+        err.statusCode = 409;
+        throw err;
+      }
+      if (qEntry.source === 'chat' || qEntry.source == null) {
         const b = ensureBot();
         b.chat(message);
-        if (qEntry?.status === 'pending') qEntry.status = 'completed';
+        if (qEntry.status === 'pending') qEntry.status = 'completed';
         rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
         return { result: `Sent: ${message} (in_reply_to=${in_reply_to})` };
       }

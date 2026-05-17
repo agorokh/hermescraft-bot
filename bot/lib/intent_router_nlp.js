@@ -461,9 +461,15 @@ const DISPATCHERS = {
   // body is deep-cloned (shallow spread) so callers that mutate the body
   // — e.g. anaphora 'higher' incrementing height — don't corrupt the
   // cached context entry. (cursor PR review catch.)
-  repeat_last_action: (bot, _ctx) => {
+  repeat_last_action: (bot, ctx) => {
     const last = getLastSkill(bot);
     if (!last || last.success === false) return null;
+    const redispatch = DISPATCHERS[last.intent_name];
+    if (redispatch) {
+      const decision = redispatch(bot, ctx);
+      if (!decision) return null;
+      return { action: decision.action, body: { ...decision.body } };
+    }
     return { action: last.action, body: { ...last.body } };
   },
 };

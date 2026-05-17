@@ -119,17 +119,12 @@ function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function distance(a, b) {
-  const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-
 function nearestPlayer(bot, maxRange) {
   let best = null, bestDist = maxRange + 1;
   for (const e of Object.values(bot.entities)) {
     if (e === bot.entity) continue;
     if (e.type !== 'player') continue;
-    const d = distance(bot.entity.position, e.position);
+    const d = bot.entity.position.distanceTo(e.position);
     if (d < bestDist) { best = e; bestDist = d; }
   }
   return best;

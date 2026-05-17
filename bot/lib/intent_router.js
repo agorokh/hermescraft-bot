@@ -302,11 +302,11 @@ const INTENTS = [
   {
     name: 'race_to_coords',
     patterns: [
-      /\brace\b.*\b(\-?\d+)\s+(\-?\d+)\s+(\-?\d+)\b/i,
-      /\bgo to\b.*\b(\-?\d+)\s+(\-?\d+)\s+(\-?\d+)\b/i,
+      /\brace\b.*?(-?\d+)\s+(-?\d+)\s+(-?\d+)/i,
+      /\bgo to\b.*?(-?\d+)\s+(-?\d+)\s+(-?\d+)/i,
     ],
     async handler(bot, ctx) {
-      const m = ctx.body.match(/\b(\-?\d+)\s+(\-?\d+)\s+(\-?\d+)\b/);
+      const m = ctx.body.match(/(-?\d+)\s+(-?\d+)\s+(-?\d+)/);
       if (!m) return null;
       // Stay with `goto` (15s sync timeout, foreground) — even if the
       // race target is far, the 15s of visible bot motion + the honest

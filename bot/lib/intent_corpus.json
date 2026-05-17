@@ -938,7 +938,12 @@
         "follow me i need you",
         "steve follow me i found something",
         "rosie follow me to the cave",
-        "stay with me follow me"
+        "stay with me follow me",
+        "follow me lets go on an adventure",
+        "steve follow me lets go",
+        "rosie follow me lets explore",
+        "follow lets go adventure",
+        "adventure follow me"
       ],
       "answers": []
     },

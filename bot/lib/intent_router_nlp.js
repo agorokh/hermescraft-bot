@@ -127,7 +127,7 @@ const ANAPHORA_RULES = [
   },
   // Repeat the same action ("another one", "one more")
   {
-    pattern: /^(another( one)?|one more|do (it|that) again|same again|like before|like the last one)$/i,
+    pattern: /^(another( one)?|one more|same again|like before|like the last one)$/i,
     appliesTo: null,  // any
     amend: (entry) => ({ ...entry.body }),
     label: 'repeat',

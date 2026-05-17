@@ -387,7 +387,9 @@ async function handleChat(username, message) {
               }
             }).catch((e) => {
               log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
-              try { markLastSkillFailed(bot, route.skill_id); } catch {}
+              if (route.skill_id != null) {
+                try { markLastSkillFailed(bot, route.skill_id); } catch {}
+              }
               try { bot.chat(`hm, couldn't pull that off — ${e.message.slice(0, 50)}`); } catch {}
             });
             // Skip the queue: the kid is taken care of by the router. The
@@ -442,7 +444,9 @@ async function handleChat(username, message) {
                 }
               }).catch((e) => {
                 log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
-              try { markLastSkillFailed(bot, route.skill_id); } catch {}
+              if (route.skill_id != null) {
+                try { markLastSkillFailed(bot, route.skill_id); } catch {}
+              }
                 try { bot.chat(`hm, couldn't pull that off`); } catch {}
               });
               rememberSocialEvent({ actor: username, kind: 'heard',

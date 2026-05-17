@@ -2189,10 +2189,15 @@ const ACTIONS = {
       return { result: `Spoke to ${voiceTurn.kid} via voice (id=${voiceTurn.id})` };
     }
     if (has_irt) {
-      // case B: brain explicitly intended a voice turn but routing state is
-      // gone. Fail closed — do NOT broadcast to in-game chat. The brain can
-      // see the rejection and decide whether to retry (it shouldn't; the
-      // kid's window for that reply has passed).
+      const qEntry = commandQueue.find((c) => c.id === in_reply_to);
+      if (qEntry?.source !== 'voice') {
+        const b = ensureBot();
+        b.chat(message);
+        if (qEntry?.status === 'pending') qEntry.status = 'completed';
+        rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
+        return { result: `Sent: ${message} (in_reply_to=${in_reply_to})` };
+      }
+      // case B: voice turn intended but routing state is gone — fail closed.
       log(`[voice✗] (id=${in_reply_to}) chat reply with stale in_reply_to — dropped fail-closed (no in-game chat fan-out)`);
       const err = new Error(`Voice turn ${in_reply_to} no longer pending (timed out, client closed, or evicted); voice reply dropped fail-closed.`);
       err.statusCode = 409;
@@ -2985,11 +2990,9 @@ const httpServer = http.createServer(async (req, res) => {
         // them, so auto-correlate in ACTIONS.chat can match the next reply
         // to the right pending voice turn.
         const now = Date.now();
-        const oldestVoice = pending
-          .filter((e) => e.source === 'voice' && _pendingVoiceTurns.has(e.id))
-          .sort((a, b) => a.time - b.time)[0];
-        if (oldestVoice) {
-          const turn = _pendingVoiceTurns.get(oldestVoice.id);
+        const oldest = pending.sort((a, b) => a.time - b.time)[0];
+        if (oldest?.source === 'voice' && _pendingVoiceTurns.has(oldest.id)) {
+          const turn = _pendingVoiceTurns.get(oldest.id);
           if (turn && !turn.dispatched_ts) turn.dispatched_ts = now;
         }
         return respond(res, 200, { ok: true, data: { commands: pending } });

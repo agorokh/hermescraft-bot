@@ -482,7 +482,10 @@ export async function tryRoute(bot, body, sender) {
   const ctx = { sender, senderEntity, message: body, body };
   const anaphora = _isStrictAnaphoraPhrase(body) ? _tryAnaphora(bot, body, ctx) : null;
   if (anaphora) {
-    const skill_id = recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body);
+    // Pure repeats amend the last body but must not push duplicate buffer entries.
+    const skill_id = anaphora.anaphora === 'repeat'
+      ? null
+      : recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body);
     return {
       matched: true,
       intent_name: anaphora.intent_name,

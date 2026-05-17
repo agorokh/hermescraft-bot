@@ -74,13 +74,14 @@ function _ctxBuf(bot) {
   return fresh.length > 0 ? fresh : null;
 }
 
-export function recordLastSkill(bot, intent_name, action, body) {
+export function recordLastSkill(bot, intent_name, action, body, message) {
   if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action') return null;
   const entry = {
     id: ++_skillSeq,
     intent_name,
     action,
     body: { ...body },
+    message: message || null,
     at: Date.now(),
     success: true,
   };
@@ -464,11 +465,13 @@ const DISPATCHERS = {
   repeat_last_action: (bot, ctx) => {
     const last = getLastSkill(bot);
     if (!last || last.success === false) return null;
+    const replayCtx = last.message
+      ? { ...ctx, body: last.message, message: last.message }
+      : ctx;
     const redispatch = DISPATCHERS[last.intent_name];
     if (redispatch) {
-      const decision = redispatch(bot, ctx);
-      if (!decision) return null;
-      return { action: decision.action, body: { ...decision.body } };
+      const decision = redispatch(bot, replayCtx);
+      if (decision) return { action: decision.action, body: { ...decision.body } };
     }
     return { action: last.action, body: { ...last.body } };
   },
@@ -491,7 +494,7 @@ export async function tryRoute(bot, body, sender) {
     // Pure repeats amend the last body but must not push duplicate buffer entries.
     const skill_id = anaphora.anaphora === 'repeat'
       ? null
-      : recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body);
+      : recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body, body);
     return {
       matched: true,
       intent_name: anaphora.intent_name,
@@ -538,7 +541,7 @@ export async function tryRoute(bot, body, sender) {
   }
   // Record this for future repeat_last_action — only if NOT a repeat itself
   // (avoid recursion on "do it again ... do it again").
-  const skill_id = recordLastSkill(bot, intent, decision.action, decision.body);
+  const skill_id = recordLastSkill(bot, intent, decision.action, decision.body, body);
   return {
     matched: true,
     intent_name: intent,

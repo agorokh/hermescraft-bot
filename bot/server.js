@@ -95,7 +95,7 @@ async function tryRoute(bot, body, sender) {
     regex._fallback_from_nlp_zone = nlp.nlp_zone;
     regex._fallback_from_nlp_score = nlp.nlp_score;
     // Keep anaphora/repeat buffer in sync when regex handles the utterance.
-    regex.skill_id = recordLastSkill(bot, regex.intent_name, regex.action, regex.body);
+    regex.skill_id = recordLastSkill(bot, regex.intent_name, regex.action, regex.body, body);
     return regex;
   }
   return nlp;  // propagate the NLP-side metadata

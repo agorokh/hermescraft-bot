@@ -2066,8 +2066,11 @@ const ACTIONS = {
     let voiceTurn = null;
     if (has_irt && _pendingVoiceTurns.has(in_reply_to)) {
       voiceTurn = _pendingVoiceTurns.get(in_reply_to);  // case A
-    } else if (!has_irt) {
+    } else if (!has_irt && !String(message).trimStart().startsWith('/')) {
       // case C: auto-correlate by GLOBAL FIFO across the whole commandQueue.
+      // Slash-prefixed messages are in-game/Mineflayer commands (e.g.
+      // apply_household_rules_live.sh gamerules) — never steal them into
+      // a pending voice turn even if one is open (Bugbot PR #56).
       // Cycle-C bug 2026-05-17: voice-only-oldest was misrouting chat
       // replies to voice when both a voice turn AND a chat turn were
       // pending and the brain replied to the chat turn without in_reply_to

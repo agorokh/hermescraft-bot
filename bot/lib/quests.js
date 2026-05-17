@@ -61,6 +61,18 @@ async function loadAllQuests() {
   return quests;
 }
 
+function normalizeQuestItemName(item) {
+  if (item == null) return '';
+  return String(item).toLowerCase().replace(/^minecraft:/, '');
+}
+
+function questItemNamesMatch(triggerItem, eventItem) {
+  const want = normalizeQuestItemName(triggerItem);
+  const got = normalizeQuestItemName(eventItem);
+  if (!want || !got) return false;
+  return got === want || got.endsWith(`/${want}`) || want.endsWith(`/${got}`);
+}
+
 function resolvePosBox(trigger, qs) {
   if (trigger.box === 'quest_anchor' && qs.anchor) {
     const r = trigger.radius || 5;
@@ -105,10 +117,12 @@ function evalTrigger(trigger, ctx) {
     }
 
     case 'player_has_item': {
-      if (!event) return false;
-      if (event.kind === 'player_collected' && event.player === trigger.player
-          && event.item === trigger.item) return true;
-      return false;
+      if (!event || event.kind !== 'player_collected') return false;
+      const targetPlayer = trigger.player === '@last_chatter'
+        ? ctx.last_chatter
+        : trigger.player;
+      if (!targetPlayer || event.player !== targetPlayer) return false;
+      return questItemNamesMatch(trigger.item, event.item);
     }
 
     case 'timer': {
@@ -275,7 +289,9 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   };
   const onCollect = async (collector, collected) => {
     if (!collector || collector.username === bot.username) return;
-    const itemName = collected?.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
+    const itemName = collected?.name
+      || collected?.displayName
+      || collected?.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
     for (const q of myQuests) await advance(q, { kind: 'player_collected', player: collector.username, item: itemName });
   };
 

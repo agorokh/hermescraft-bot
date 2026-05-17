@@ -450,7 +450,7 @@ const DISPATCHERS = {
   // cached context entry. (cursor PR review catch.)
   repeat_last_action: (bot, _ctx) => {
     const last = getLastSkill(bot);
-    if (!last) return null;
+    if (!last || last.success === false) return null;
     return { action: last.action, body: { ...last.body } };
   },
 };

@@ -133,6 +133,26 @@ const MAX_ACTION_HISTORY = 10;
 // be correlated back to its originating utterance (chat OR voice).
 let _envelopeCounter = 0;
 function nextEnvelopeId() { return ++_envelopeCounter; }
+
+// Centralized commandQueue eviction. Replaces the 4 inline
+// `if (commandQueue.length > MAX_QUEUE) commandQueue.shift()` sites so the
+// MAX_QUEUE-trim path can also free any voice-turn timer+resolver state
+// that would otherwise leak. Without this, an evicted voice entry would
+// linger in _pendingVoiceTurns until its 75s timeout fires, the kid would
+// hang on the speaker, and (reviewer 2026-05-17 BLOCKER) a brain reply
+// arriving in the gap could be misrouted to in-game chat.
+function trimCommandQueue() {
+  while (commandQueue.length > MAX_QUEUE) {
+    const evicted = commandQueue.shift();
+    if (evicted && evicted.source === 'voice' && _pendingVoiceTurns.has(evicted.id)) {
+      const turn = _pendingVoiceTurns.get(evicted.id);
+      clearTimeout(turn.timer);
+      _pendingVoiceTurns.delete(evicted.id);
+      try { turn.resolve({ ok: false, error: 'queue_evicted', id: evicted.id }); } catch {}
+      log(`[voice✗] (id=${evicted.id}) MAX_QUEUE evicted before brain reply — fail-closed`);
+    }
+  }
+}
 // Pending voice turns waiting for the brain's reply. Map<id, {resolve, timer, kid, ts}>
 // where `resolve` is the HTTP response resolver and `timer` is the fail-closed
 // timeout handle. When ACTIONS.chat fires while a voice turn is in flight,
@@ -316,7 +336,7 @@ async function handleChat(username, message) {
         status: 'pending',
       });
       rememberSocialEvent({ actor: username, kind: 'heard', channel: routing.channel, command: true, message: routing.body });
-      if (commandQueue.length > MAX_QUEUE) commandQueue.shift();
+      trimCommandQueue();
       log(`[Queued] ${username}: ${routing.body}`);
     } else {
       // Broadcast but mentions our name at start? Also queue as command.
@@ -364,7 +384,7 @@ async function handleChat(username, message) {
             status: 'pending',
           });
           rememberSocialEvent({ actor: username, kind: 'heard', channel: 'public_mention', command: true, message: command });
-          if (commandQueue.length > MAX_QUEUE) commandQueue.shift();
+          trimCommandQueue();
           log(`[Queued via mention] ${username}: ${command}`);
         }
       } else {
@@ -486,7 +506,7 @@ async function createBot() {
           channel: 'whisper', source: 'chat',
           originalMessage: message, status: 'pending',
         });
-        if (commandQueue.length > MAX_QUEUE) commandQueue.shift();
+        trimCommandQueue();
       });
 
       // Health tracking + combat stats
@@ -2027,23 +2047,47 @@ const ACTIONS = {
     // voice turn — either explicitly via in_reply_to, or auto-correlated to
     // the oldest dispatched voice turn within VOICE_AUTOCORRELATE_MS — route
     // the text to the voice loop's HTTP response. Fail-closed: voice replies
-    // NEVER also fan out to public Minecraft chat (council 2026-05-17). Kids
-    // hear the reply through their speaker; chat HUD stays clean.
+    // NEVER also fan out to public Minecraft chat (council 2026-05-17,
+    // reviewer 2026-05-17). Kids hear the reply through their speaker; the
+    // chat HUD stays clean even when brain intent + routing state diverge.
+    //
+    // Three distinct cases (reviewer BLOCKER fix 2026-05-17):
+    //   (A) in_reply_to provided AND matches a pending voice turn → route to
+    //       voice (happy path).
+    //   (B) in_reply_to provided BUT no match (stale id — turn timed out,
+    //       client closed, or MAX_QUEUE-shifted before brain replied) →
+    //       brain intended voice. FAIL CLOSED: do NOT fan out to b.chat().
+    //       Return a 409 so the brain learns it lost the turn; the kid will
+    //       just experience silence — better than the wrong-channel broadcast.
+    //   (C) in_reply_to absent → genuinely ambiguous. Try auto-correlate; if
+    //       no voice turn pending, fall through to b.chat() (this is a real
+    //       in-game chat reply, not a misrouted voice reply).
+    const has_irt = in_reply_to != null;  // loose: catches both null + undefined
     let voiceTurn = null;
-    if (typeof in_reply_to === 'number' && _pendingVoiceTurns.has(in_reply_to)) {
-      voiceTurn = _pendingVoiceTurns.get(in_reply_to);
-    } else if (in_reply_to === undefined) {
-      // Auto-correlate: find the oldest voice turn that was dispatched to the
-      // brain (via /commands or /status) within the window and still pending.
+    if (has_irt && _pendingVoiceTurns.has(in_reply_to)) {
+      voiceTurn = _pendingVoiceTurns.get(in_reply_to);  // case A
+    } else if (!has_irt) {
+      // case C: auto-correlate by GLOBAL FIFO across the whole commandQueue.
+      // Cycle-C bug 2026-05-17: voice-only-oldest was misrouting chat
+      // replies to voice when both a voice turn AND a chat turn were
+      // pending and the brain replied to the chat turn without in_reply_to
+      // (the chat reply got broadcast on the kid's speaker; the chat HUD
+      // got silence). The brain drains `mc commands` in FIFO order, so the
+      // next reply targets the OLDEST pending dispatched entry regardless
+      // of source. We only resolve to voice when that oldest entry IS a
+      // voice turn AND it's within the autocorrelate window.
       const now = Date.now();
-      let oldestId = null;
-      let oldestTs = Infinity;
-      for (const [id, turn] of _pendingVoiceTurns.entries()) {
-        if (turn.dispatched_ts && (now - turn.dispatched_ts) <= VOICE_AUTOCORRELATE_MS && turn.ts < oldestTs) {
-          oldestId = id; oldestTs = turn.ts;
-        }
+      const oldest = commandQueue
+        .filter(c => c.status === 'pending')
+        .sort((a, b) => a.time - b.time)[0];
+      if (oldest && oldest.source === 'voice'
+          && _pendingVoiceTurns.has(oldest.id)
+          && _pendingVoiceTurns.get(oldest.id).dispatched_ts
+          && (now - _pendingVoiceTurns.get(oldest.id).dispatched_ts) <= VOICE_AUTOCORRELATE_MS) {
+        voiceTurn = _pendingVoiceTurns.get(oldest.id);
       }
-      if (oldestId !== null) voiceTurn = _pendingVoiceTurns.get(oldestId);
+      // Otherwise (oldest is a chat turn OR no pending OR voice not yet
+      // dispatched OR voice age past window): fall through to bot.chat().
     }
     if (voiceTurn) {
       // Resolve the held HTTP request from /chat/voice
@@ -2056,7 +2100,17 @@ const ACTIONS = {
       log(`[voice→] (id=${voiceTurn.id}, kid=${voiceTurn.kid}) ${message.slice(0, 80)}`);
       return { result: `Spoke to ${voiceTurn.kid} via voice (id=${voiceTurn.id})` };
     }
-    // Default path: public Minecraft chat
+    if (has_irt) {
+      // case B: brain explicitly intended a voice turn but routing state is
+      // gone. Fail closed — do NOT broadcast to in-game chat. The brain can
+      // see the rejection and decide whether to retry (it shouldn't; the
+      // kid's window for that reply has passed).
+      log(`[voice✗] (id=${in_reply_to}) chat reply with stale in_reply_to — dropped fail-closed (no in-game chat fan-out)`);
+      const err = new Error(`Voice turn ${in_reply_to} no longer pending (timed out, client closed, or evicted); voice reply dropped fail-closed.`);
+      err.statusCode = 409;
+      throw err;
+    }
+    // case C continued: genuine in-game chat reply, no voice turn pending.
     const b = ensureBot();
     b.chat(message);
     rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
@@ -2903,7 +2957,7 @@ const httpServer = http.createServer(async (req, res) => {
           channel: 'voice', source: 'voice',
           originalMessage: transcript, status: 'pending',
         });
-        if (commandQueue.length > MAX_QUEUE) commandQueue.shift();
+        trimCommandQueue();
         rememberSocialEvent({ actor: kid, kind: 'heard', channel: 'voice', command: true, message: transcript });
         log(`[voice←] (id=${id}, kid=${kid}) ${transcript.slice(0, 80)}`);
 
@@ -3084,8 +3138,14 @@ httpServer.listen(config.api.port, () => {
 });
 
 process.on('uncaughtException', (err) => {
-  log(`Uncaught exception: ${err.message}`);
+  log(`Uncaught exception: ${err && err.message ? err.message : err}`);
+  if (err && err.stack) log(`  stack: ${err.stack.split('\n').slice(0, 6).join(' | ')}`);
 });
 process.on('unhandledRejection', (err) => {
-  log(`Unhandled rejection: ${err}`);
+  // Print a compact stack so we can root-cause silent async throws (e.g. the
+  // chat-handler / perception entity-deref races that surfaced during the
+  // voice integration cycle — issue #54 follow-up).
+  const msg = err && err.message ? err.message : String(err);
+  log(`Unhandled rejection: ${msg}`);
+  if (err && err.stack) log(`  stack: ${err.stack.split('\n').slice(0, 6).join(' | ')}`);
 });

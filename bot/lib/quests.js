@@ -233,7 +233,15 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   };
   const onCollect = async (collector, collected) => {
     if (!collector || collector.username === bot.username) return;
-    const itemName = collected?.metadata?.find?.((m) => m.type === 7)?.value?.itemId; // best-effort
+    // Best-effort item-id extraction from sparse Mineflayer metadata. Each
+    // entry CAN be undefined (sparse arrays produced by some entity types),
+    // so guard `m && m.type === 7` rather than `m.type === 7`. The previous
+    // form threw on every player pickup of an entity whose metadata array
+    // had a hole — visible in bot/server.js as "Unhandled rejection:
+    // Cannot read properties of undefined (reading 'type')" during cycle C
+    // testing 2026-05-17. Quest still works because find() returns null
+    // when no marker entry matches.
+    const itemName = collected?.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
     for (const q of myQuests) await advance(q, { kind: 'player_collected', player: collector.username, item: itemName });
   };
 

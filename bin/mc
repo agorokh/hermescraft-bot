@@ -350,10 +350,34 @@ except: print(sys.argv[1])
         ;;
 
     chat|say)
-        MSG="${1:?Usage: mc chat \"message\"}"
-        # Escape the message for JSON
+        # Usage:  mc chat "message"                      (in-game chat)
+        #         mc chat "message" --in-reply-to <id>   (voice reply — id from mc commands)
+        # The --in-reply-to flag (issue #54) lets the brain explicitly
+        # disambiguate voice vs in-game replies when both a voice turn AND
+        # a chat turn are pending in commandQueue. Without it, the bot
+        # auto-correlates by FIFO which CAN misroute if brain replies
+        # out-of-queue-order. Pass --in-reply-to <id> whenever responding
+        # to a commandQueue entry; the bot routes voice replies to the
+        # voice channel (fail-closed) and chat replies to in-game chat.
+        MSG="${1:?Usage: mc chat \"message\" [--in-reply-to <id>]}"
+        shift
+        IRT=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --in-reply-to|-r) IRT="$2"; shift 2 ;;
+                *) echo "mc chat: unknown flag '$1' (expected --in-reply-to <id>)" >&2; exit 2 ;;
+            esac
+        done
         ESCAPED_MSG=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$MSG")
-        pretty "$(api_post '/action/chat' "{\"message\":$ESCAPED_MSG}")"
+        if [[ -n "$IRT" ]]; then
+            if ! [[ "$IRT" =~ ^[0-9]+$ ]]; then
+                echo "mc chat: --in-reply-to must be a positive integer (got '$IRT')" >&2
+                exit 2
+            fi
+            pretty "$(api_post '/action/chat' "{\"message\":$ESCAPED_MSG,\"in_reply_to\":$IRT}")"
+        else
+            pretty "$(api_post '/action/chat' "{\"message\":$ESCAPED_MSG}")"
+        fi
         ;;
 
     read_chat|messages|msg)

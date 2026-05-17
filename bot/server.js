@@ -60,6 +60,28 @@ import {
 import { registerHighLevelSkills } from './lib/skills.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute, ackFor } from './lib/intent_router.js';
+// Shadow-mode NLP router (council's recommended long-term replacement —
+// see PR #57 thread). Runs in parallel with the regex router, logs what
+// it WOULD have routed, but never executes. Zero behavior change in the
+// game; we collect agreement data in the wild before any swap. Enable
+// with HERMES_SHADOW_NLP_ROUTER=1 (off by default to keep prod boot fast
+// — NLP training adds ~30ms to startup).
+import { tryRoute as tryRouteNlp } from './lib/intent_router_nlp.js';
+const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '1';
+
+async function shadowRoute(bot, body, sender, regexResult) {
+  if (!SHADOW_NLP) return;
+  try {
+    const n = await tryRouteNlp(bot, body, sender);
+    const r_act = regexResult?.matched ? regexResult.action : 'none';
+    const n_act = n?.matched ? n.action : 'none';
+    const score = n?.nlp_score != null ? n.nlp_score.toFixed(2) : '-';
+    const agree = r_act === n_act ? 'AGREE' : 'DIFFER';
+    log(`[NLPshadow] ${agree} regex=${r_act} nlp=${n_act} nlp_intent=${n?.nlp_intent || n?.intent_name || '-'} score=${score} body=${JSON.stringify(body.slice(0, 60))}`);
+  } catch (e) {
+    log(`[NLPshadow] error: ${e.message}`);
+  }
+}
 import { installQuestEngine } from './lib/quests.js';
 
 let _bark_tear_down = null;
@@ -294,6 +316,7 @@ async function handleChat(username, message) {
       // Safe-by-design: only reversible/non-destructive actions route.
       try {
         const route = await tryRoute(bot, routing.body, username);
+        shadowRoute(bot, routing.body, username, route);  // fire-and-forget; doesn't block
         if (route.matched) {
           const ack = ackFor(route.intent_name);
           if (ack) {
@@ -350,6 +373,7 @@ async function handleChat(username, message) {
           // no LLM round-trip when a keyword pattern matches.
           try {
             const route = await tryRoute(bot, command, username);
+            shadowRoute(bot, command, username, route);  // fire-and-forget
             if (route.matched && ACTIONS[route.action]) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }

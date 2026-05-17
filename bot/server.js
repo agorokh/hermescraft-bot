@@ -2925,16 +2925,22 @@ const httpServer = http.createServer(async (req, res) => {
         }, VOICE_TURN_TIMEOUT_MS);
         _pendingVoiceTurns.set(id, { id, kid, ts, dispatched_ts: null, timer, resolve: resolveOnce });
         // Client may give up before us (live_loop.py timeout is 90s); detect
-        // and clean up so the resolver doesn't fire on a dead socket.
-        req.on('close', () => {
-          if (!responded) {
-            clearTimeout(timer);
-            _pendingVoiceTurns.delete(id);
-            const qEntry = commandQueue.find(c => c.id === id);
-            if (qEntry && qEntry.status === 'pending') qEntry.status = 'client_closed';
-            log(`[voice✗] (id=${id}) client closed before reply`);
-          }
-        });
+        // and clean up so the resolver doesn't fire on a dead socket AND so
+        // an orphaned turn cannot get auto-correlated to a later brain reply
+        // intended for another kid. Listen on BOTH req and res — Node fires
+        // them at slightly different points depending on TCP teardown shape;
+        // curl --max-time consistently triggers res.on('close') first.
+        const onClientGone = () => {
+          if (responded) return;
+          responded = true;
+          clearTimeout(timer);
+          _pendingVoiceTurns.delete(id);
+          const qEntry = commandQueue.find(c => c.id === id);
+          if (qEntry && qEntry.status === 'pending') qEntry.status = 'client_closed';
+          log(`[voice✗] (id=${id}) client closed before reply`);
+        };
+        req.on('close', onClientGone);
+        res.on('close', onClientGone);
         return; // do not call respond() now; resolver writes the response
       }
 

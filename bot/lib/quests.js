@@ -190,10 +190,12 @@ async function executeAction(ACTIONS, bot, action, ctx) {
           z = Math.floor(p.z) + (action.dz || 0);
         }
       }
+      if (!ACTIONS.build_tower) return { error: 'no build_tower action' };
       return await ACTIONS.build_tower({ x, y, z, height: action.height || 5, material: action.material || 'oak_planks' });
     }
     case 'place_near_player': {
       const player = lookupPlayer(action.player);
+      if (!ACTIONS.place_near_player) return { error: 'no place_near_player action' };
       return await ACTIONS.place_near_player({ player, item: action.item, direction: action.direction || 'side' });
     }
     case 'goto': {
@@ -207,6 +209,7 @@ async function executeAction(ACTIONS, bot, action, ctx) {
           z = Math.floor(p.z) + (action.dz || 0);
         }
       }
+      if (!ACTIONS.goto) return { error: 'no goto action' };
       return await ACTIONS.goto({ x, y, z });
     }
     default:

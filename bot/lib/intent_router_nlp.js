@@ -133,23 +133,22 @@ const ANAPHORA_RULES = [
     label: 'repeat',
   },
   // Move/offset ("to the left", "over there") — shift last action's anchor.
-  // appliesTo uses INTENT NAMES. torch_near_me omitted — place_near_player
-  // has no x/y/z/cx coords to amend.
+  // appliesTo uses ACTION names (not intent names). torch_near_player omitted.
   {
     pattern: /^(to the left|left more|further left)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
     amend: (entry) => _shiftAnchorBody(entry.body, -3, 0, 0),
     label: 'left',
   },
   {
     pattern: /^(to the right|right more|further right)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
     amend: (entry) => _shiftAnchorBody(entry.body, 3, 0, 0),
     label: 'right',
   },
   {
     pattern: /^(over there|over here|right here|here)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
     amend: (entry, bot, ctx) => {
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return { ...entry.body };
@@ -203,7 +202,7 @@ function _tryAnaphora(bot, body, ctx) {
   if (last.success === false) return null;
   for (const rule of ANAPHORA_RULES) {
     if (!rule.pattern.test(body.trim())) continue;
-    if (rule.appliesTo && !rule.appliesTo.includes(last.intent_name)) continue;
+    if (rule.appliesTo && !rule.appliesTo.includes(last.action)) continue;
     const newBody = rule.amend(last, bot, ctx);
     return {
       action: last.action,
@@ -475,7 +474,7 @@ const DISPATCHERS = {
   // body is deep-cloned (shallow spread) so callers that mutate the body
   // — e.g. anaphora 'higher' incrementing height — don't corrupt the
   // cached context entry. (cursor PR review catch.)
-  repeat_last_action: (bot, ctx) => {
+  repeat_last_action: async (bot, ctx) => {
     const last = getLastSkill(bot);
     if (!last || last.success === false) return null;
     const replayCtx = last.message
@@ -483,7 +482,7 @@ const DISPATCHERS = {
       : ctx;
     const redispatch = DISPATCHERS[last.intent_name];
     if (redispatch) {
-      const decision = redispatch(bot, replayCtx);
+      const decision = await Promise.resolve(redispatch(bot, replayCtx));
       if (decision) return { action: decision.action, body: { ...decision.body } };
     }
     return { action: last.action, body: { ...last.body } };

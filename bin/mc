@@ -1066,7 +1066,8 @@ EOF
         X="${2:?Usage: mc build_schematic NAME X Y Z}"
         Y="${3:?Usage: mc build_schematic NAME X Y Z}"
         Z="${4:?Usage: mc build_schematic NAME X Y Z}"
-        pretty "$(api_post '/action/build_schematic' "{\"name\":\"$NAME\",\"x\":$X,\"y\":$Y,\"z\":$Z}")"
+        SCHEM_JSON=$(python3 -c "import json,sys; print(json.dumps({'name':sys.argv[1],'x':int(sys.argv[2]),'y':int(sys.argv[3]),'z':int(sys.argv[4])}))" "$NAME" "$X" "$Y" "$Z")
+        pretty "$(api_post '/action/build_schematic' "$SCHEM_JSON")"
         ;;
 
     list_schematics|schematics|schems)

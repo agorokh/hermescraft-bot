@@ -203,11 +203,10 @@ export function installBarksAndPresence(bot, opts = {}) {
     const gazePos = np.position.offset(0, 1.6, 0);
     const movedEnough = !lastGazePos || gazePos.distanceTo(lastGazePos) > 0.5;
     if (lastGazeTarget !== np.username || movedEnough) {
-      try {
-        bot.lookAt(gazePos);
+      void bot.lookAt(gazePos).then(() => {
         lastGazeTarget = np.username;
         lastGazePos = gazePos.clone();
-      } catch (e) {}
+      }).catch(() => {});
     }
   }, 2_000);
 

@@ -118,7 +118,7 @@ async function shadowRoute(bot, body, sender, primaryResult) {
     // When regex is primary, log NLP as shadow. Either way: AGREE/DIFFER
     // captures "would both routers have picked the same skill?".
     const other = NLP_PRIMARY
-      ? await tryRouteRegex(bot, body, sender)
+      ? await tryRouteRegex(bot, body, sender, { dryRun: true })
       : await tryRouteNlp(bot, body, sender);
     const p_act = primaryResult?.matched ? primaryResult.action : 'none';
     const o_act = other?.matched ? other.action : 'none';
@@ -2985,11 +2985,12 @@ const httpServer = http.createServer(async (req, res) => {
         // them, so auto-correlate in ACTIONS.chat can match the next reply
         // to the right pending voice turn.
         const now = Date.now();
-        for (const entry of pending) {
-          if (entry.source === 'voice' && _pendingVoiceTurns.has(entry.id)) {
-            const turn = _pendingVoiceTurns.get(entry.id);
-            if (!turn.dispatched_ts) turn.dispatched_ts = now;
-          }
+        const oldestVoice = pending
+          .filter((e) => e.source === 'voice' && _pendingVoiceTurns.has(e.id))
+          .sort((a, b) => a.time - b.time)[0];
+        if (oldestVoice) {
+          const turn = _pendingVoiceTurns.get(oldestVoice.id);
+          if (turn && !turn.dispatched_ts) turn.dispatched_ts = now;
         }
         return respond(res, 200, { ok: true, data: { commands: pending } });
       }

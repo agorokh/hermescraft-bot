@@ -31,6 +31,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
 import { Vec3 } from 'vec3';
+import { findPlayerEntity } from './player_utils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, 'intent_corpus.json');
@@ -118,14 +119,14 @@ const ANAPHORA_RULES = [
     label: 'higher',
   },
   {
-    pattern: /^(lower|shorter|smaller|less tall)\b/i,
+    pattern: /^(lower|shorter|smaller|less tall)( please| pls)?$/i,
     appliesTo: ['build_tower'],
     amend: (entry) => ({ ...entry.body, height: Math.max(2, (entry.body.height || 5) - 2) }),
     label: 'shorter',
   },
   // Repeat the same action ("another one", "one more")
   {
-    pattern: /^(another( one)?|one more|do (it|that) again|same again|like before|like the last one)\b/i,
+    pattern: /^(another( one)?|one more|do (it|that) again|same again|like before|like the last one)$/i,
     appliesTo: null,  // any
     amend: (entry) => ({ ...entry.body }),
     label: 'repeat',
@@ -134,19 +135,19 @@ const ANAPHORA_RULES = [
   // appliesTo uses INTENT NAMES. torch_near_me omitted — place_near_player
   // has no x/y/z/cx coords to amend.
   {
-    pattern: /^(to the left|left more|further left)\b/i,
+    pattern: /^(to the left|left more|further left)$/i,
     appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
     amend: (entry) => _shiftAnchorBody(entry.body, -3, 0, 0),
     label: 'left',
   },
   {
-    pattern: /^(to the right|right more|further right)\b/i,
+    pattern: /^(to the right|right more|further right)$/i,
     appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
     amend: (entry) => _shiftAnchorBody(entry.body, 3, 0, 0),
     label: 'right',
   },
   {
-    pattern: /^(over there|over here|right here|here)\b/i,
+    pattern: /^(over there|over here|right here|here)$/i,
     appliesTo: ['build_tower', 'build_schematic', 'come_here', 'explore_cave', 'light_area'],
     amend: (entry, bot, ctx) => {
       const p = resolveAnchorPos(bot, ctx);
@@ -213,40 +214,32 @@ let _trainPromise = null;
 
 async function ensureTrained() {
   if (_nlp) return _nlp;
-  if (_trainPromise) return _trainPromise;
-  _trainPromise = (async () => {
-    const corpus = JSON.parse(readFileSync(CORPUS_PATH, 'utf8'));
-    const dock = await dockStart({ use: ['Basic'] });
-    const nlp = dock.get('nlp');
-    nlp.addLanguage('en');
-    for (const d of corpus.data) {
-      for (const u of d.utterances) nlp.addDocument('en', u, d.intent);
-    }
-    await nlp.train();
-    _nlp = nlp;
-    return nlp;
-  })();
-  return _trainPromise;
-}
-
-// Same player-lookup + anchor-position helpers as the regex router. Copied
-// rather than imported so this file stands alone and can be swapped without
-// loading intent_router.js at all.
-function findPlayerEntity(bot, name) {
-  if (!name) return null;
-  const lname = name.toLowerCase();
-  for (const [n, p] of Object.entries(bot.players || {})) {
-    if (n === bot.username) continue;
-    if (n.toLowerCase() === lname || n.toLowerCase().replace(/^\./, '') === lname) {
-      if (p.entity) return p.entity;
+  if (_trainPromise) {
+    try {
+      return await _trainPromise;
+    } catch (e) {
+      _trainPromise = null;
+      throw e;
     }
   }
-  return Object.values(bot.entities || {}).find((e) => {
-    if (e === bot.entity) return false;
-    if (e.type !== 'player') return false;
-    const en = (e.username || '').toLowerCase();
-    return en === lname || en.replace(/^\./, '') === lname;
-  }) || null;
+  _trainPromise = (async () => {
+    try {
+      const corpus = JSON.parse(readFileSync(CORPUS_PATH, 'utf8'));
+      const dock = await dockStart({ use: ['Basic'] });
+      const nlp = dock.get('nlp');
+      nlp.addLanguage('en');
+      for (const d of corpus.data) {
+        for (const u of d.utterances) nlp.addDocument('en', u, d.intent);
+      }
+      await nlp.train();
+      _nlp = nlp;
+      return nlp;
+    } catch (e) {
+      _trainPromise = null;
+      throw e;
+    }
+  })();
+  return _trainPromise;
 }
 
 function resolveAnchorPos(bot, ctx) {

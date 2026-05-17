@@ -40,31 +40,13 @@ function resolveAnchorPos(bot, ctx) {
   return null;
 }
 
-function findPlayerEntity(bot, name) {
-  if (!name) return null;
-  const lname = name.toLowerCase();
-  // Prefer bot.players (server roster) over bot.entities (in-view) —
-  // works even when the player is at the edge of view distance.
-  for (const [n, p] of Object.entries(bot.players || {})) {
-    if (n === bot.username) continue;
-    if (n.toLowerCase() === lname || n.toLowerCase().replace(/^\./, '') === lname) {
-      if (p.entity) return p.entity;
-    }
-  }
-  return Object.values(bot.entities || {}).find((e) => {
-    if (e === bot.entity) return false;
-    if (e.type !== 'player') return false;
-    const en = (e.username || '').toLowerCase();
-    return en === lname || en.replace(/^\./, '') === lname;
-  }) || null;
-}
-
 function intFromMatch(text, regex) {
   const m = text.match(regex);
   return m ? parseInt(m[1], 10) : null;
 }
 
 import { Vec3 } from 'vec3';
+import { findPlayerEntity } from './player_utils.js';
 
 // ── Pattern table ───────────────────────────────────────────────────
 
@@ -118,8 +100,9 @@ const INTENTS = [
       /\bsay hi\b.*\bwith.*\b(wave|hand)\b/i,
     ],
     async handler(bot, ctx) {
-      // Simple wave: swing arm 3 times
-      try { for (let i = 0; i < 3; i++) { bot.swingArm('right'); await new Promise(r=>setTimeout(r,300)); } } catch {}
+      if (!ctx.dryRun) {
+        try { for (let i = 0; i < 3; i++) { bot.swingArm('right'); await new Promise(r=>setTimeout(r,300)); } } catch {}
+      }
       return { action: 'chat', body: { text: '👋' } };
     },
   },
@@ -130,14 +113,16 @@ const INTENTS = [
       /\bdo a jump\b/i,
     ],
     async handler(bot, ctx) {
-      try {
-        for (let i = 0; i < 3; i++) {
-          bot.setControlState('jump', true);
-          await new Promise(r=>setTimeout(r,120));
-          bot.setControlState('jump', false);
-          await new Promise(r=>setTimeout(r,250));
-        }
-      } catch {}
+      if (!ctx.dryRun) {
+        try {
+          for (let i = 0; i < 3; i++) {
+            bot.setControlState('jump', true);
+            await new Promise(r=>setTimeout(r,120));
+            bot.setControlState('jump', false);
+            await new Promise(r=>setTimeout(r,250));
+          }
+        } catch {}
+      }
       return { action: 'chat', body: { text: '🦘' } };
     },
   },
@@ -148,19 +133,20 @@ const INTENTS = [
       /\bdo a dance\b/i,
     ],
     async handler(bot, ctx) {
-      // Dance = sneak+jump+spin loop for ~3s
-      try {
-        const start = Date.now();
-        let yaw = bot.entity.yaw;
-        while (Date.now() - start < 3000) {
-          yaw += Math.PI / 4;
-          try { await bot.look(yaw, 0); } catch {}
-          bot.setControlState('jump', true);
-          await new Promise(r=>setTimeout(r,180));
-          bot.setControlState('jump', false);
-          await new Promise(r=>setTimeout(r,180));
-        }
-      } catch {}
+      if (!ctx.dryRun) {
+        try {
+          const start = Date.now();
+          let yaw = bot.entity.yaw;
+          while (Date.now() - start < 3000) {
+            yaw += Math.PI / 4;
+            try { await bot.look(yaw, 0); } catch {}
+            bot.setControlState('jump', true);
+            await new Promise(r=>setTimeout(r,180));
+            bot.setControlState('jump', false);
+            await new Promise(r=>setTimeout(r,180));
+          }
+        } catch {}
+      }
       return { action: 'chat', body: { text: '💃' } };
     },
   },
@@ -170,11 +156,12 @@ const INTENTS = [
       /\bsit( down| with me| next to me| here| please)?\b/i,
     ],
     async handler(bot, ctx) {
-      try {
-        bot.setControlState('sneak', true);
-        // Sneak for 5s to look "sat down"
-        setTimeout(() => { try { bot.setControlState('sneak', false); } catch {} }, 5000);
-      } catch {}
+      if (!ctx.dryRun) {
+        try {
+          bot.setControlState('sneak', true);
+          setTimeout(() => { try { bot.setControlState('sneak', false); } catch {} }, 5000);
+        } catch {}
+      }
       return { action: 'chat', body: { text: 'sitting :)' } };
     },
   },
@@ -425,10 +412,10 @@ export async function tryStopRoute(bot, body, sender) {
 // Caller is responsible for executing ACTIONS[action](body) AND optionally
 // chatting target_chat back. If matched=false, caller falls through to the
 // normal LLM-driven command queue.
-export async function tryRoute(bot, body, sender) {
+export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
   const senderEntity = findPlayerEntity(bot, sender);
-  const ctx = { sender, senderEntity, message: body, body };
+  const ctx = { sender, senderEntity, message: body, body, dryRun: opts.dryRun };
 
   for (const intent of INTENTS) {
     if (intent.patterns.some((p) => p.test(body))) {

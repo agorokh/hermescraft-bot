@@ -122,6 +122,13 @@ function evalTrigger(trigger, ctx) {
   }
 }
 
+function skillOutcomeFailed(result) {
+  if (!result) return true;
+  if (result.error) return true;
+  const text = String(result.result || '').toLowerCase();
+  return /\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/.test(text);
+}
+
 async function executeAction(ACTIONS, bot, action, ctx) {
   const { kind } = action;
   const lookupPlayer = (name) => {
@@ -223,7 +230,14 @@ export async function installQuestEngine(bot, ACTIONS, log) {
       log && log(`[quests] ${q.name} finished`);
       return;
     }
-    const ctx = { bot, event: eventCtx, now: Date.now(), qstate: qs, last_chatter: eventCtx?.player };
+    if (eventCtx?.player) qs.last_chatter = eventCtx.player;
+    const ctx = {
+      bot,
+      event: eventCtx,
+      now: Date.now(),
+      qstate: qs,
+      last_chatter: eventCtx?.player || qs.last_chatter,
+    };
     if (!evalTrigger(step.trigger, ctx)) return;
 
     qs._advancing = true;
@@ -233,9 +247,9 @@ export async function installQuestEngine(bot, ACTIONS, log) {
       for (const action of (step.actions || [])) {
         try {
           const result = await executeAction(ACTIONS, bot, action, ctx);
-          if (result?.error) {
+          if (skillOutcomeFailed(result)) {
             stepOk = false;
-            log && log(`[quests] action error: ${result.error}`);
+            log && log(`[quests] action failed: ${result?.error || result?.result || 'unknown'}`);
           }
         } catch (e) {
           stepOk = false;

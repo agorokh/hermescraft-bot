@@ -27,6 +27,7 @@ import { Vec3 } from 'vec3';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { findPlayerEntity } from './player_utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -36,28 +37,6 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 const SETBLOCK_CHAT_INTERVAL_MS = 1100;
 
 // ── helpers ──────────────────────────────────────────────────────────
-
-function findPlayerEntity(bot, name) {
-  // Mindcraft pattern: bot.players is the server roster (populated on
-  // playerJoined); bot.players[name].entity is the live entity if the
-  // player is loaded in our view. Case-insensitive name match per
-  // Floodgate's leading-dot Bedrock-prefix convention.
-  if (!name) return null;
-  const lname = name.toLowerCase();
-  for (const [n, p] of Object.entries(bot.players || {})) {
-    if (n === bot.username) continue;
-    if (n.toLowerCase() === lname || n.toLowerCase().replace(/^\./, '') === lname) {
-      if (p.entity) return p.entity;
-    }
-  }
-  // Fallback: scan bot.entities for visible player entities.
-  return Object.values(bot.entities || {}).find((e) => {
-    if (e === bot.entity) return false;
-    if (e.type !== 'player') return false;
-    const en = (e.username || '').toLowerCase();
-    return en === lname || en.replace(/^\./, '') === lname;
-  }) || null;
-}
 
 function findInventoryItem(bot, itemName) {
   const ln = itemName.toLowerCase();
@@ -473,8 +452,6 @@ async function detectSetblockAuth(bot) {
     }
   }
   if (py == null) return false;
-
-  const beforeName = 'air';
 
   try { bot.chat(`/setblock ${px} ${py} ${pz} ${sentinel}`); } catch (e) {}
   await sleep(250); // wait for the chunk update to round-trip

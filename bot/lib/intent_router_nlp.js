@@ -265,6 +265,10 @@ const DISPATCHERS = {
     else if (/\b(house|cottage|home|cabin)\b/.test(body)) name = 'small_house';
     else if (/\b(well|fountain)\b/.test(body)) name = 'well';
     else if (/\b(garden|flower bed|flower patch|flower garden)\b/.test(body)) name = 'garden';
+    // "fancy castle with battlements" / "watchtower" / generic castle —
+    // route to ice_castle (our only "castle" schematic) if no ice/snow
+    // keyword, else use small_tower.
+    else if (/\b(castle|fort|palace)\b/.test(body)) name = 'ice_castle';
     else if (/\b(tower|watchtower|outpost)\b/.test(body)) name = 'small_tower';
     else if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(body)) name = 'campfire_spot';
     else if (/\b(what can|show me|list)\b/.test(body)) return { action: 'list_schematics', body: {} };

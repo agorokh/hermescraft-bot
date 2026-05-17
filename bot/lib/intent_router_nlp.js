@@ -31,6 +31,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, 'intent_corpus.json');
@@ -262,10 +263,22 @@ const DISPATCHERS = {
     return { action: 'chat', body: { text: items ? `got ${items}` : 'empty hands' } };
   },
 
-  emote_wave: () => ({ action: 'chat', body: { text: '👋' } }),
-  emote_jump: () => ({ action: 'chat', body: { text: '🦘' } }),
-  emote_dance: () => ({ action: 'chat', body: { text: '💃' } }),
-  emote_sit: () => ({ action: 'chat', body: { text: 'sitting :)' } }),
+  emote_wave: async (bot, ctx) => {
+    await runEmoteWave(bot, ctx.dryRun);
+    return { action: 'chat', body: { text: '👋' } };
+  },
+  emote_jump: async (bot, ctx) => {
+    await runEmoteJump(bot, ctx.dryRun);
+    return { action: 'chat', body: { text: '🦘' } };
+  },
+  emote_dance: async (bot, ctx) => {
+    await runEmoteDance(bot, ctx.dryRun);
+    return { action: 'chat', body: { text: '💃' } };
+  },
+  emote_sit: async (bot, ctx) => {
+    await runEmoteSit(bot, ctx.dryRun);
+    return { action: 'chat', body: { text: 'sitting :)' } };
+  },
 
   gather_block: (_bot, ctx) => {
     const m = ctx.body.match(/\b(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i);
@@ -535,7 +548,7 @@ export async function tryRoute(bot, body, sender) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'no_dispatcher', error: 'no dispatcher for ' + intent };
   }
   // ctx already constructed above for anaphora; reuse to avoid double-lookup
-  const decision = dispatch(bot, ctx);
+  const decision = await Promise.resolve(dispatch(bot, ctx));
   if (!decision) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
   }

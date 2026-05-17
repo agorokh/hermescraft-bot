@@ -26,6 +26,7 @@
 
 import { Vec3 } from 'vec3';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
 // ── Pattern table ───────────────────────────────────────────────────
 
@@ -85,9 +86,7 @@ const INTENTS = [
       /\bsay hi\b.*\bwith.*\b(wave|hand)\b/i,
     ],
     async handler(bot, ctx) {
-      if (!ctx.dryRun) {
-        try { for (let i = 0; i < 3; i++) { bot.swingArm('right'); await new Promise(r=>setTimeout(r,300)); } } catch {}
-      }
+      await runEmoteWave(bot, ctx.dryRun);
       return { action: 'chat', body: { text: '👋' } };
     },
   },
@@ -98,16 +97,7 @@ const INTENTS = [
       /\bdo a jump\b/i,
     ],
     async handler(bot, ctx) {
-      if (!ctx.dryRun) {
-        try {
-          for (let i = 0; i < 3; i++) {
-            bot.setControlState('jump', true);
-            await new Promise(r=>setTimeout(r,120));
-            bot.setControlState('jump', false);
-            await new Promise(r=>setTimeout(r,250));
-          }
-        } catch {}
-      }
+      await runEmoteJump(bot, ctx.dryRun);
       return { action: 'chat', body: { text: '🦘' } };
     },
   },
@@ -118,20 +108,7 @@ const INTENTS = [
       /\bdo a dance\b/i,
     ],
     async handler(bot, ctx) {
-      if (!ctx.dryRun) {
-        try {
-          const start = Date.now();
-          let yaw = bot.entity.yaw;
-          while (Date.now() - start < 3000) {
-            yaw += Math.PI / 4;
-            try { await bot.look(yaw, 0); } catch {}
-            bot.setControlState('jump', true);
-            await new Promise(r=>setTimeout(r,180));
-            bot.setControlState('jump', false);
-            await new Promise(r=>setTimeout(r,180));
-          }
-        } catch {}
-      }
+      await runEmoteDance(bot, ctx.dryRun);
       return { action: 'chat', body: { text: '💃' } };
     },
   },
@@ -141,12 +118,7 @@ const INTENTS = [
       /\bsit( down| with me| next to me| here| please)?\b/i,
     ],
     async handler(bot, ctx) {
-      if (!ctx.dryRun) {
-        try {
-          bot.setControlState('sneak', true);
-          setTimeout(() => { try { bot.setControlState('sneak', false); } catch {} }, 5000);
-        } catch {}
-      }
+      await runEmoteSit(bot, ctx.dryRun);
       return { action: 'chat', body: { text: 'sitting :)' } };
     },
   },

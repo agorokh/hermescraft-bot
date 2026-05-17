@@ -1037,7 +1037,8 @@ EOF
         Z="${3:?Usage: mc build_tower X Y Z [height] [material]}"
         HEIGHT="${4:-5}"
         MATERIAL="${5:-oak_planks}"
-        pretty "$(api_post '/action/build_tower' "{\"x\":$X,\"y\":$Y,\"z\":$Z,\"height\":$HEIGHT,\"material\":\"$MATERIAL\"}")"
+        TOWER_JSON=$(python3 -c "import json,sys; print(json.dumps({'x':int(sys.argv[1]),'y':int(sys.argv[2]),'z':int(sys.argv[3]),'height':int(sys.argv[4]),'material':sys.argv[5]}))" "$X" "$Y" "$Z" "$HEIGHT" "$MATERIAL")
+        pretty "$(api_post '/action/build_tower' "$TOWER_JSON")"
         ;;
 
     light_area|lit)
@@ -1045,13 +1046,15 @@ EOF
         CY="${2:?Usage: mc light_area CX CY CZ [radius]}"
         CZ="${3:?Usage: mc light_area CX CY CZ [radius]}"
         RADIUS="${4:-6}"
-        pretty "$(api_post '/action/light_area' "{\"cx\":$CX,\"cy\":$CY,\"cz\":$CZ,\"radius\":$RADIUS}")"
+        LIGHT_JSON=$(python3 -c "import json,sys; print(json.dumps({'cx':int(sys.argv[1]),'cy':int(sys.argv[2]),'cz':int(sys.argv[3]),'radius':int(sys.argv[4])}))" "$CX" "$CY" "$CZ" "$RADIUS")
+        pretty "$(api_post '/action/light_area' "$LIGHT_JSON")"
         ;;
 
     follow_player_v2|fpv2)
         PLAYER="${1:?Usage: mc follow_player_v2 PLAYER [distance]}"
         DISTANCE="${2:-3}"
-        pretty "$(api_post '/action/follow_player_v2' "{\"player\":\"$PLAYER\",\"distance\":$DISTANCE}")"
+        FPV2_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'distance':int(sys.argv[2])}))" "$PLAYER" "$DISTANCE")
+        pretty "$(api_post '/action/follow_player_v2' "$FPV2_JSON")"
         ;;
 
     perceive|sense)

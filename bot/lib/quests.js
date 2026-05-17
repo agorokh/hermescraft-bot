@@ -244,7 +244,9 @@ export async function installQuestEngine(bot, ACTIONS, log) {
       log && log(`[quests] ${q.name} finished`);
       return;
     }
-    if (eventCtx?.player) qs.last_chatter = eventCtx.player;
+    if (eventCtx?.player && ['player_chat', 'player_join', 'player_collected'].includes(eventCtx.kind)) {
+      qs.last_chatter = eventCtx.player;
+    }
     const ctx = {
       bot,
       event: eventCtx,

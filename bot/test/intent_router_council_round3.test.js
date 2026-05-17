@@ -9,7 +9,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tryRoute, markLastSkillFailed } from '../lib/intent_router_nlp.js';
+import { tryRoute, markLastSkillFailed, ACT_THRESHOLD, CLARIFY_THRESHOLD } from '../lib/intent_router_nlp.js';
 
 function stubBot(name = 'Rosie') {
   return {
@@ -50,6 +50,11 @@ const COMPOUND_MODIFIER = [
   'place some torches around the perimeter',
 ];
 
+test('NLP deadzone: clarify band sits below act threshold', () => {
+  assert.ok(CLARIFY_THRESHOLD < ACT_THRESHOLD,
+    `clarify (${CLARIFY_THRESHOLD}) must be < act (${ACT_THRESHOLD}) so deadzone routes to brain`);
+});
+
 test('compound-modifier corpus: ≥70% must fire OR clarify (no silent drops)', async () => {
   let fired = 0, clarify = 0, oov = 0;
   const oovCases = [];
@@ -72,6 +77,14 @@ test('compound-modifier corpus: ≥70% must fire OR clarify (no silent drops)', 
 });
 
 // ── ANAPHORA-ON-FAILURE (Gemini) ────────────────────────────────────────────
+test('repeat_last_action does NOT replay a failed action', async () => {
+  const bot = stubBot('FailRepeatBot');
+  await tryRoute(bot, 'build me a tower', 'Adalynn');
+  markLastSkillFailed(bot);
+  const replay = await tryRoute(bot, 'do it again', 'Adalynn');
+  assert.notEqual(replay.nlp_zone, 'act', `repeat_last_action replayed failed skill: ${JSON.stringify(replay)}`);
+});
+
 test('anaphora does NOT replay a failed action', async () => {
   const bot = stubBot('FailReplayBot');
   const first = await tryRoute(bot, 'build me a tower', 'Adalynn');

@@ -39,6 +39,12 @@ const INTENTS = [
       /^\s*(stop|wait|nevermind|never mind|cancel|halt)[\s!.,?]*$/i,
       /\bstop (it|that|please|now)\b/i,
       /\bjust stop\b/i,
+      /\bstop\s+(build|building|mining|the)\b/i,
+      /\b(don'?t|do not)\s+(build|mine|place)\b/i,
+      /\bnevermind\s+on\b/i,
+      /\bcancel\s+the\b/i,
+      /\bwait\s+don'?t\s+place\b/i,
+      /\bi changed my mind\b/i,
     ],
     async handler(bot, ctx) {
       return { action: 'stop', body: {} };

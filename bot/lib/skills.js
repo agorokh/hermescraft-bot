@@ -508,26 +508,21 @@ async function build_schematic(bot, { name, x, y, z }) {
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
   const useChatCommand = await detectSetblockAuth(bot);
   bot._schematicBuildActive = true;
-
+  let placed = 0;
+  let failed = 0;
+  const missing = new Set();
+  try {
   // Pathfind near the origin (footprint center) only when we'll actually
   // need to be near it. /setblock works at arbitrary range from the bot.
   if (!useChatCommand) {
     try {
       const goal = new goals.GoalNear(centerX, baseY, centerZ, 3);
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000));
-      // Tail .catch(): mineflayer-pathfinder's `goto` spawns subtasks whose
-      // rejections survive Promise.race's outer await, producing the
-      // observed `Unhandled rejection: TypeError: Cannot read properties of
-      // undefined (reading 'type')` log spam during aerial / unloaded-chunk
-      // attempts. Consuming the rejection explicitly silences it.
       await Promise.race([bot.pathfinder.goto(goal), timeout]).catch(() => {});
     } catch (e) { /* continue */ }
   }
   if (bot.interrupt_code) return { result: `build_schematic interrupted` };
 
-  // Place each block in the manifest. Order matters for physical placement
-  // stability (foundation-up so each placement has an adjacent block to
-  // hold against); harmless but free for /setblock.
   const sorted = [...blocks].sort((a, b) => {
     if (a[1] !== b[1]) return a[1] - b[1];
     if (a[0] !== b[0]) return a[0] - b[0];
@@ -537,10 +532,6 @@ async function build_schematic(bot, { name, x, y, z }) {
     block && block !== 'air' && block !== 'cave_air' && block !== 'void_air'
   );
 
-  let placed = 0;
-  let failed = 0;
-  const missing = new Set();
-  try {
   for (const [dx, dy, dz, block] of sorted) {
     if (bot.interrupt_code) break;
     // Skip explicit air cells — schematic authors sometimes encode them as
@@ -585,9 +576,6 @@ async function build_schematic(bot, { name, x, y, z }) {
     }
   }
 
-  } finally {
-    bot._schematicBuildActive = false;
-  }
   const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
   const total = solidBlocks.length;
@@ -597,6 +585,9 @@ async function build_schematic(bot, { name, x, y, z }) {
   return {
     result: `Built ${placed}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}`,
   };
+  } finally {
+    bot._schematicBuildActive = false;
+  }
 }
 
 // List schematics — useful for the LLM and for `mc schematics` cmd.

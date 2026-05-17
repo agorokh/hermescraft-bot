@@ -187,6 +187,11 @@ function _setAnchorBody(body, x, y, z) {
   return out;
 }
 
+function _isStrictAnaphoraPhrase(body) {
+  const t = body.trim();
+  return ANAPHORA_RULES.some((rule) => rule.pattern.test(t));
+}
+
 function _tryAnaphora(bot, body, ctx) {
   const last = getLastSkill(bot);
   if (!last) return null;
@@ -416,9 +421,17 @@ const DISPATCHERS = {
   // explore_cave: scout toward the nearest stone-y opening. For now, just
   // walk a short distance in the bot's facing direction; brain narrates.
   explore_cave: (bot) => {
-    const p = bot.entity?.position;
-    if (!p) return null;
-    return { action: 'goto', body: { x: Math.floor(p.x) + 10, y: Math.floor(p.y), z: Math.floor(p.z) } };
+    const ent = bot.entity;
+    if (!ent?.position) return null;
+    const p = ent.position;
+    const yaw = ent.yaw ?? 0;
+    const dist = 10;
+    const dx = -Math.sin(yaw) * dist;
+    const dz = -Math.cos(yaw) * dist;
+    return {
+      action: 'goto',
+      body: { x: Math.floor(p.x + dx), y: Math.floor(p.y), z: Math.floor(p.z + dz) },
+    };
   },
 
   // give_compliment, show_me_diamonds, ask_about_pet: pure conversational —
@@ -467,7 +480,7 @@ export async function tryRoute(bot, body, sender) {
   // some classifier guess.
   const senderEntity = findPlayerEntity(bot, sender);
   const ctx = { sender, senderEntity, message: body, body };
-  const anaphora = _tryAnaphora(bot, body, ctx);
+  const anaphora = _isStrictAnaphoraPhrase(body) ? _tryAnaphora(bot, body, ctx) : null;
   if (anaphora) {
     const skill_id = recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body);
     return {
@@ -528,4 +541,4 @@ export async function tryRoute(bot, body, sender) {
   };
 }
 
-export { MATCH_THRESHOLD };
+export { MATCH_THRESHOLD, ACT_THRESHOLD, CLARIFY_THRESHOLD };

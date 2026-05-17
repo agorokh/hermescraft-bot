@@ -141,7 +141,8 @@ test('repeat_last_action: returns matched=false when no prior skill', async () =
 // ── New intents (defend_me, bring_food, give_compliment, light_area) ────────
 test('defend_me: HELP THERES A ZOMBIE → fight', async () => {
   const r = await tryRoute(stubBot(), 'rosie help theres a zombie', 'Adalynn');
-  if (r.matched) assert.equal(r.action, 'fight', `wrong action for defend_me: ${r.action}`);
+  assert.equal(r.matched, true, `defend_me should route: zone=${r.nlp_zone}`);
+  assert.equal(r.action, 'fight', `wrong action for defend_me: ${r.action}`);
 });
 
 test('bring_food: rosie im hungry → give_to_player (when bot has food)', async () => {
@@ -181,8 +182,8 @@ const KID_VOICE = [
 for (const k of KID_VOICE) {
   test(`kid voice: "${k.body}" — appropriate routing`, async () => {
     const r = await tryRoute(stubBot(), k.body, 'Adalynn');
-    if (k.want_routed === true && !r.matched) {
-      console.log(`  [info] not routed (acceptable): zone=${r.nlp_zone} intent=${r.nlp_intent} score=${r.nlp_score?.toFixed(2)}`);
+    if (k.want_routed === true) {
+      assert.equal(r.matched, true, `expected route for "${k.body}": zone=${r.nlp_zone} intent=${r.nlp_intent}`);
     }
     if (k.want_routed === false && r.matched) {
       assert.fail(`pure chat fired skill: ${r.action} (zone=${r.nlp_zone})`);

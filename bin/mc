@@ -1019,14 +1019,16 @@ EOF
         PLAYER="${1:?Usage: mc place_near_player PLAYER ITEM [direction]}"
         ITEM="${2:?Usage: mc place_near_player PLAYER ITEM [direction]}"
         DIR="${3:-side}"
-        pretty "$(api_post '/action/place_near_player' "{\"player\":\"$PLAYER\",\"item\":\"$ITEM\",\"direction\":\"$DIR\"}")"
+        PNP_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'item':sys.argv[2],'direction':sys.argv[3]}))" "$PLAYER" "$ITEM" "$DIR")
+        pretty "$(api_post '/action/place_near_player' "$PNP_JSON")"
         ;;
 
     give_to_player|give)
         PLAYER="${1:?Usage: mc give_to_player PLAYER ITEM [count]}"
         ITEM="${2:?Usage: mc give_to_player PLAYER ITEM [count]}"
         COUNT="${3:-1}"
-        pretty "$(api_post '/action/give_to_player' "{\"player\":\"$PLAYER\",\"item\":\"$ITEM\",\"count\":$COUNT}")"
+        GIVE_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'item':sys.argv[2],'count':int(sys.argv[3])}))" "$PLAYER" "$ITEM" "$COUNT")
+        pretty "$(api_post '/action/give_to_player' "$GIVE_JSON")"
         ;;
 
     build_tower|tower)

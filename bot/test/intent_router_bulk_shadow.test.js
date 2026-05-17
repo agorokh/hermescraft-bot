@@ -6,6 +6,7 @@
 // stdout. The test always passes; read the console output for the rate.
 
 import test from 'node:test';
+import assert from 'node:assert/strict';
 import { tryRoute as tryRegex } from '../lib/intent_router.js';
 import { tryRoute as tryNlp } from '../lib/intent_router_nlp.js';
 
@@ -182,4 +183,5 @@ test('bulk shadow agreement report', async () => {
   console.log('');
   console.log(`  Council bar for promoting NLP primary: 92-95% AGREE on broad corpus`);
   console.log(`  Current result: ${pct.toFixed(1)}% → ${pct >= 92 ? 'PASS' : 'BELOW BAR'}`);
+  assert.ok(pct >= 66, `shadow agreement regressed below 66% floor: ${pct.toFixed(1)}%`);
 });

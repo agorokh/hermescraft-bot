@@ -95,7 +95,7 @@ async function tryRoute(bot, body, sender) {
     regex._fallback_from_nlp_zone = nlp.nlp_zone;
     regex._fallback_from_nlp_score = nlp.nlp_score;
     // Keep anaphora/repeat buffer in sync when regex handles the utterance.
-    recordLastSkill(bot, regex.intent_name, regex.action, regex.body);
+    regex.skill_id = recordLastSkill(bot, regex.intent_name, regex.action, regex.body);
     return regex;
   }
   return nlp;  // propagate the NLP-side metadata
@@ -381,15 +381,13 @@ async function handleChat(username, message) {
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
             ACTIONS[route.action](actionBody).then((result) => {
-              if (result && result.result) {
+              if (result && result.result && route.action !== 'chat') {
                 log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                 try { bot.chat(String(result.result).slice(0, 80)); } catch {}
               }
             }).catch((e) => {
               log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
-              // Council Gemini round 3: mark in context buffer so anaphora
-              // ("another", "higher") doesn't replay a broken action.
-              try { markLastSkillFailed(bot); } catch {}
+              try { markLastSkillFailed(bot, route.skill_id); } catch {}
               try { bot.chat(`hm, couldn't pull that off — ${e.message.slice(0, 50)}`); } catch {}
             });
             // Skip the queue: the kid is taken care of by the router. The
@@ -438,15 +436,13 @@ async function handleChat(username, message) {
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               ACTIONS[route.action](actionBody).then((result) => {
-                if (result && result.result) {
+                if (result && result.result && route.action !== 'chat') {
                   log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                   try { bot.chat(String(result.result).slice(0, 80)); } catch {}
                 }
               }).catch((e) => {
                 log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
-              // Council Gemini round 3: mark in context buffer so anaphora
-              // ("another", "higher") doesn't replay a broken action.
-              try { markLastSkillFailed(bot); } catch {}
+              try { markLastSkillFailed(bot, route.skill_id); } catch {}
                 try { bot.chat(`hm, couldn't pull that off`); } catch {}
               });
               rememberSocialEvent({ actor: username, kind: 'heard',
@@ -666,6 +662,8 @@ async function createBot() {
         botReady = false;
         positionHistory = []; // clear stuck detection history
         if (bot?._soundCheckInterval) { clearInterval(bot._soundCheckInterval); bot._soundCheckInterval = null; }
+        try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch (e) {}
+        try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch (e) {}
         
         // In hardcore mode, death = permanent. Don't reconnect.
         if (hardcoreDead) {
@@ -3121,7 +3119,18 @@ const httpServer = http.createServer(async (req, res) => {
           return respond(res, 409, { ok: false, error: `Task "${currentTask.action}" is already running (${Math.round((Date.now() - currentTask.started) / 1000)}s). POST /task/cancel first.`, state: briefState() });
         }
         const taskId = `${actionName}_${Date.now()}`;
-        currentTask = { id: taskId, action: actionName, status: 'running', started: Date.now(), result: null, error: null, params: body };
+        currentTask = {
+          id: taskId,
+          action: actionName,
+          status: 'running',
+          started: Date.now(),
+          result: null,
+          error: null,
+          params: body,
+          _invBaseline: (actionName === 'collect' || actionName === 'bg_collect') && bot
+            ? bot.inventory.items().reduce((s, i) => s + i.count, 0)
+            : undefined,
+        };
         // Fire and forget — runs in background
         actionFn(body).then(result => {
           if (currentTask && currentTask.id === taskId && currentTask.status === 'running') {
@@ -3186,7 +3195,7 @@ const stuckTelemetry = { byAction: Object.create(null), repaths: 0, total: 0 };
 // Mining tasks block-mine in place — `collect`, `bg_collect` shouldn't trip
 // the 10s "no movement" check because actually mining IS the work. Bump the
 // threshold for these to 20s + grant ONE retry attempt before declaring stuck.
-const SLOW_TASK_STUCK_MS = 20000;
+const SLOW_TASK_STUCK_MS = 45000;
 const FAST_TASK_STUCK_MS = 10000;
 const SLOW_TASK_ACTIONS = new Set(['collect', 'bg_collect', 'pickup', 'fight', 'sprint_attack']);
 // In-memory map task_id → { repath_attempted: bool } — survives across the
@@ -3206,6 +3215,12 @@ setInterval(() => {
     if (old) {
       const dist = Math.sqrt((pos.x-old.x)**2+(pos.y-old.y)**2+(pos.z-old.z)**2);
       if (dist < 2) {
+        if (isSlow && (currentTask.action === 'collect' || currentTask.action === 'bg_collect')) {
+          if (bot.targetDigBlock) return;
+          const baseline = currentTask._invBaseline;
+          const invCount = bot.inventory.items().reduce((s, i) => s + i.count, 0);
+          if (baseline != null && invCount > baseline) return;
+        }
         // One repath attempt before declaring stuck. Many "STUCK detected"
         // events tonight were transient — a fresh GoalNear with radius+1
         // unblocks the pathfinder (1-block ledge, snow layer, etc.).
@@ -3277,7 +3292,7 @@ function _clearPendingVoiceTurns(reason) {
   for (const [id, turn] of _pendingVoiceTurns) {
     clearTimeout(turn.timer);
     try {
-      turn.resolve({ ok: false, error: reason, in_reply_to: id });
+      turn.resolve({ ok: false, error: reason, id, in_reply_to: id });
     } catch (e) { /* client already gone */ }
     _pendingVoiceTurns.delete(id);
   }

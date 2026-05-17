@@ -51,8 +51,8 @@
         3,
         3
       ],
-      "height": 6,
-      "summary": "3x3 cobblestone tower with battlements, 6 blocks tall",
+      "height": 7,
+      "summary": "3x3 cobblestone tower with battlements, 7 blocks tall",
       "materials": {
         "cobblestone": 36,
         "oak_fence": 8
@@ -64,7 +64,7 @@
         5,
         5
       ],
-      "height": 1,
+      "height": 2,
       "summary": "Outdoor sit-down spot \u2014 cobblestone fire ring + 4 oak-log seats",
       "materials": {
         "cobblestone": 8,

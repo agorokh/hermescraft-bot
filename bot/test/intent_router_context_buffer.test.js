@@ -72,14 +72,10 @@ test('"over there" re-anchors at sender position', async () => {
   assert.equal(r.body.x, 0);
 });
 
-test('anaphora with no prior skill returns matched=false (falls to brain or NLP)', async () => {
+test('anaphora with no prior skill does not replay via anaphora buffer', async () => {
   const bot = stubBot('NoHistoryBot');
   const r = await tryRoute(bot, 'higher', 'Adalynn');
-  // No prior skill → anaphora doesn't fire. NLP might still classify "higher"
-  // as something OR fall through. Either way, not anaphora.
-  if (r.matched) {
-    assert.notEqual(r.nlp_zone, 'anaphora');
-  }
+  assert.notEqual(r.nlp_zone, 'anaphora', `anaphora fired without history: action=${r.action}`);
 });
 
 test('chain: tower → higher → higher (height + 4)', async () => {

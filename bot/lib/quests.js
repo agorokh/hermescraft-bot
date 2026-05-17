@@ -61,6 +61,16 @@ async function loadAllQuests() {
   return quests;
 }
 
+function resolvePosBox(trigger, qs) {
+  if (trigger.box === 'quest_anchor' && qs.anchor) {
+    const r = trigger.radius || 5;
+    const { x, y, z } = qs.anchor;
+    return [x - r, y - r, z - r, x + r, y + r, z + r];
+  }
+  if (!Array.isArray(trigger.box) || trigger.box.length < 6) return null;
+  return trigger.box;
+}
+
 function evalTrigger(trigger, ctx) {
   // ctx: { bot, event (optional), now, player_pos_cache }
   const { bot, event, now } = ctx;
@@ -79,12 +89,15 @@ function evalTrigger(trigger, ctx) {
     }
 
     case 'player_pos_in_box': {
-      // Poll-driven. trigger.box = [x1, y1, z1, x2, y2, z2]
-      const targetName = trigger.player;
+      const targetName = trigger.player === '@last_chatter'
+        ? ctx.last_chatter
+        : trigger.player;
       if (!targetName) return false;
+      const box = resolvePosBox(trigger, ctx.qstate);
+      if (!box) return false;
       const p = bot.players?.[targetName]?.entity;
       if (!p) return false;
-      const [x1, y1, z1, x2, y2, z2] = trigger.box;
+      const [x1, y1, z1, x2, y2, z2] = box;
       const px = p.position.x, py = p.position.y, pz = p.position.z;
       return px >= Math.min(x1, x2) && px <= Math.max(x1, x2)
           && py >= Math.min(y1, y2) && py <= Math.max(y1, y2)
@@ -92,10 +105,6 @@ function evalTrigger(trigger, ctx) {
     }
 
     case 'player_has_item': {
-      // Best-effort: check the player roster's last-known inventory.
-      // Without a sync inventory snoop, this trigger fires when bot can
-      // see the item dropped/held by the player. For v0, fire on
-      // 'playerCollect' or 'itemDrop' events.
       if (!event) return false;
       if (event.kind === 'player_collected' && event.player === trigger.player
           && event.item === trigger.item) return true;
@@ -103,7 +112,6 @@ function evalTrigger(trigger, ctx) {
     }
 
     case 'timer': {
-      // trigger.delay_ms after quest step entered.
       const qstate = ctx.qstate;
       if (!qstate || !qstate.step_entered_at) return false;
       return (now - qstate.step_entered_at) >= (trigger.delay_ms || 0);
@@ -139,7 +147,11 @@ async function executeAction(ACTIONS, bot, action, ctx) {
         }
       }
       if (!ACTIONS.build_schematic) return { error: 'no build_schematic action' };
-      return await ACTIONS.build_schematic({ name, x, y, z });
+      const result = await ACTIONS.build_schematic({ name, x, y, z });
+      if (x != null && y != null && z != null && !result?.error) {
+        ctx.qstate.anchor = { x, y, z };
+      }
+      return result;
     }
     case 'give_to_player': {
       const player = lookupPlayer(action.player);
@@ -194,18 +206,17 @@ export async function installQuestEngine(bot, ACTIONS, log) {
     return () => {};
   }
 
-  // Filter quests this bot owns (by `owner` field; default = both bots).
   const myQuests = quests.filter((q) => !q.owner || q.owner === botName);
   for (const q of myQuests) {
     if (!botState.has(q.name)) {
-      botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now() });
+      botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now(), anchor: null });
     }
   }
   log && log(`[quests] ${botName} watching ${myQuests.length} quests: ${myQuests.map((q) => q.name).join(', ')}`);
 
   async function advance(q, eventCtx) {
     const qs = botState.get(q.name);
-    if (!qs || qs.status !== 'active') return;
+    if (!qs || qs.status !== 'active' || qs._advancing) return;
     const step = q.steps[qs.currentStep];
     if (!step) {
       qs.status = 'done';
@@ -214,15 +225,32 @@ export async function installQuestEngine(bot, ACTIONS, log) {
     }
     const ctx = { bot, event: eventCtx, now: Date.now(), qstate: qs, last_chatter: eventCtx?.player };
     if (!evalTrigger(step.trigger, ctx)) return;
-    log && log(`[quests] ${q.name} step ${qs.currentStep} fired: ${step.trigger.kind}`);
-    for (const action of (step.actions || [])) {
-      try { await executeAction(ACTIONS, bot, action, ctx); } catch (e) { log && log(`[quests] action error: ${e.message}`); }
+
+    qs._advancing = true;
+    try {
+      log && log(`[quests] ${q.name} step ${qs.currentStep} fired: ${step.trigger.kind}`);
+      let stepOk = true;
+      for (const action of (step.actions || [])) {
+        try {
+          const result = await executeAction(ACTIONS, bot, action, ctx);
+          if (result?.error) {
+            stepOk = false;
+            log && log(`[quests] action error: ${result.error}`);
+          }
+        } catch (e) {
+          stepOk = false;
+          log && log(`[quests] action error: ${e.message}`);
+        }
+      }
+      if (stepOk) {
+        qs.currentStep++;
+        qs.step_entered_at = Date.now();
+      }
+    } finally {
+      qs._advancing = false;
     }
-    qs.currentStep++;
-    qs.step_entered_at = Date.now();
   }
 
-  // Wire events.
   const onJoin = async (player) => {
     if (player.username === bot.username) return;
     for (const q of myQuests) await advance(q, { kind: 'player_join', player: player.username });
@@ -233,14 +261,6 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   };
   const onCollect = async (collector, collected) => {
     if (!collector || collector.username === bot.username) return;
-    // Best-effort item-id extraction from sparse Mineflayer metadata. Each
-    // entry CAN be undefined (sparse arrays produced by some entity types),
-    // so guard `m && m.type === 7` rather than `m.type === 7`. The previous
-    // form threw on every player pickup of an entity whose metadata array
-    // had a hole — visible in bot/server.js as "Unhandled rejection:
-    // Cannot read properties of undefined (reading 'type')" during cycle C
-    // testing 2026-05-17. Quest still works because find() returns null
-    // when no marker entry matches.
     const itemName = collected?.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
     for (const q of myQuests) await advance(q, { kind: 'player_collected', player: collector.username, item: itemName });
   };
@@ -249,7 +269,6 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   bot.on('chat', onChat);
   bot.on('playerCollect', onCollect);
 
-  // Poll loop for position + timer triggers (every 1s).
   const interval = setInterval(async () => {
     for (const q of myQuests) await advance(q, null);
   }, 1000);

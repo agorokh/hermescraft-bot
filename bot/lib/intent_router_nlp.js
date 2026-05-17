@@ -62,6 +62,7 @@ const MATCH_THRESHOLD = ACT_THRESHOLD;
 const _ctxBufByBot = new Map();
 const CTX_BUF_MAX = 5;
 const CTX_BUF_TTL_MS = 5 * 60 * 1000;
+let _skillSeq = 0;
 
 function _ctxBuf(bot) {
   if (!bot || !bot.username) return null;
@@ -74,26 +75,30 @@ function _ctxBuf(bot) {
 }
 
 export function recordLastSkill(bot, intent_name, action, body) {
-  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action') return;
-  // success defaults to true at record time; server.js can call
-  // markLastSkillFailed(bot) when the action callback errors / yields a
-  // failure result. This addresses Gemini council round 3 concern about
-  // anaphora replaying actions that didn't actually work ("another" after
-  // a tower that failed due to no materials).
-  const entry = { intent_name, action, body: { ...body }, at: Date.now(), success: true };
+  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action') return null;
+  const entry = {
+    id: ++_skillSeq,
+    intent_name,
+    action,
+    body: { ...body },
+    at: Date.now(),
+    success: true,
+  };
   const buf = _ctxBufByBot.get(bot.username) || [];
   buf.push(entry);
   if (buf.length > CTX_BUF_MAX) buf.shift();
   _ctxBufByBot.set(bot.username, buf);
+  return entry.id;
 }
 
-// Mark the most-recently-recorded skill as failed. Server.js calls this
-// in the ACTIONS catch block so anaphora doesn't replay broken state.
-export function markLastSkillFailed(bot) {
+export function markLastSkillFailed(bot, skillId) {
   if (!bot || !bot.username) return;
   const buf = _ctxBufByBot.get(bot.username);
   if (!buf || buf.length === 0) return;
-  buf[buf.length - 1].success = false;
+  const entry = skillId != null
+    ? buf.find((e) => e.id === skillId)
+    : buf[buf.length - 1];
+  if (entry) entry.success = false;
 }
 
 function getLastSkill(bot) {
@@ -107,7 +112,7 @@ function getLastSkill(bot) {
 const ANAPHORA_RULES = [
   // Height adjustments for build_tower
   {
-    pattern: /^(higher|taller|bigger|go higher|make it taller|taller please)\b/i,
+    pattern: /^(higher|taller|bigger|go higher|make it taller|taller please)( please| pls)?$/i,
     appliesTo: ['build_tower'],
     amend: (entry) => ({ ...entry.body, height: Math.min(20, (entry.body.height || 5) + 2) }),
     label: 'higher',
@@ -495,12 +500,13 @@ export async function tryRoute(bot, body, sender) {
   const ctx = { sender, senderEntity, message: body, body };
   const anaphora = _tryAnaphora(bot, body, ctx);
   if (anaphora) {
-    recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body);
+    const skill_id = recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body);
     return {
       matched: true,
       intent_name: anaphora.intent_name,
       action: anaphora.action,
       body: anaphora.body,
+      skill_id,
       nlp_score: null,
       nlp_zone: 'anaphora',
       anaphora_rule: anaphora.anaphora,
@@ -541,12 +547,13 @@ export async function tryRoute(bot, body, sender) {
   }
   // Record this for future repeat_last_action — only if NOT a repeat itself
   // (avoid recursion on "do it again ... do it again").
-  recordLastSkill(bot, intent, decision.action, decision.body);
+  const skill_id = recordLastSkill(bot, intent, decision.action, decision.body);
   return {
     matched: true,
     intent_name: intent,
     action: decision.action,
     body: decision.body,
+    skill_id,
     nlp_score: score,
     nlp_zone: 'act',
   };

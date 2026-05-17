@@ -24,6 +24,16 @@
 import pathfinderPkg from 'mineflayer-pathfinder';
 const { goals } = pathfinderPkg;
 import { Vec3 } from 'vec3';
+import { readFile } from 'fs/promises';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
+
+// Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
+const SETBLOCK_CHAT_INTERVAL_MS = 1100;
 
 // ── helpers ──────────────────────────────────────────────────────────
 
@@ -81,6 +91,7 @@ function findBuildOffBlock(bot, x, y, z) {
 // Blocks that vanilla placement replaces silently — same set Minecraft uses.
 // If we try to place at a coord occupied by one of these, the place call
 // just works (the existing block becomes the drop).
+const LIQUID_BLOCKS = new Set(['water', 'lava']);
 const REPLACEABLE_BLOCKS = new Set([
   'air', 'cave_air', 'void_air', 'water', 'lava',
   'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
@@ -108,7 +119,8 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
   // If a replaceable plant is in the way, break it first so the place call
   // doesn't no-op or fail (placeBlock on tall_grass works in vanilla, but
   // Mineflayer is inconsistent across versions; explicit dig is safest).
-  if (existing && REPLACEABLE_BLOCKS.has(existing.name) && existing.name !== 'air' && existing.name !== 'cave_air' && existing.name !== 'void_air') {
+  if (existing && REPLACEABLE_BLOCKS.has(existing.name) && !LIQUID_BLOCKS.has(existing.name)
+      && existing.name !== 'air' && existing.name !== 'cave_air' && existing.name !== 'void_air') {
     try { await bot.dig(existing); } catch (e) { /* swallow */ }
     await sleep(120);
   }
@@ -304,7 +316,7 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
     // Find the block directly below feet — that's our reference for
     // placing the new block at feet level.
     const feetY = Math.floor(bot.entity.position.y);
-    const refPos = new Vec3(Math.floor(bot.entity.position.x), feetY - 1, Math.floor(bot.entity.position.z));
+    const refPos = new Vec3(baseX, feetY - 1, baseZ);
     const refBlock = bot.blockAt(refPos);
     if (!refBlock || refBlock.boundingBox !== 'block') {
       // We're floating — can't place. Bail.
@@ -367,7 +379,15 @@ async function light_area(bot, { cx, cy, cz, radius = 6 }) {
   for (let tx = startX; tx <= endX; tx += stride) {
     for (let tz = startZ; tz <= endZ; tz += stride) {
       if (bot.interrupt_code) break;
-      const r = await placeOne(bot, 'torch', tx, Math.floor(cy), tz);
+      let ty = Math.floor(cy);
+      for (let y = Math.min(319, ty + 4); y >= Math.max(-64, ty - 4); y--) {
+        const n = bot.blockAt(new Vec3(tx, y, tz))?.name || 'air';
+        if (n !== 'air' && n !== 'cave_air' && n !== 'void_air') {
+          ty = y + 1;
+          break;
+        }
+      }
+      const r = await placeOne(bot, 'torch', tx, ty, tz);
       if (r.ok) placed++;
     }
     if (bot.interrupt_code) break;
@@ -402,14 +422,6 @@ async function follow_player_v2(bot, { player, distance = 3 }) {
 // we curate community schematics (mineflayer-schem is installed and ready
 // for that swap).
 
-import { readFile } from 'fs/promises';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
-
 let _schem_index_cache = null;
 async function loadSchematicIndex() {
   if (_schem_index_cache) return _schem_index_cache;
@@ -441,7 +453,7 @@ async function loadSchematic(name) {
 // the block matches the sentinel, /setblock works; otherwise fall back
 // to physical placement.  Clamps Y to <= 319 (vanilla 1.21 build limit)
 // to avoid the probe firing above world height.
-async function detectSetblockAuth(bot, _x, _y, _z) {
+async function detectSetblockAuth(bot) {
   // Probe at the bot's current position +1Y (a cell guaranteed to be in a
   // loaded chunk).  Use a sentinel block we can read back unambiguously
   // and that's cheap to roll back: white_wool (visible distinct, every
@@ -506,7 +518,8 @@ async function build_schematic(bot, { name, x, y, z }) {
   // "Cannot read properties of undefined (reading 'type')" unhandled rejection.
   // Detect once, then route every cell through chat commands until proven
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
-  const useChatCommand = await detectSetblockAuth(bot, baseX, baseY + 200, baseZ);
+  const useChatCommand = await detectSetblockAuth(bot);
+  bot._schematicBuildActive = true;
 
   // Pathfind near the origin (footprint center) only when we'll actually
   // need to be near it. /setblock works at arbitrary range from the bot.
@@ -539,6 +552,7 @@ async function build_schematic(bot, { name, x, y, z }) {
   let placed = 0;
   let failed = 0;
   const missing = new Set();
+  try {
   for (const [dx, dy, dz, block] of sorted) {
     if (bot.interrupt_code) break;
     // Skip explicit air cells — schematic authors sometimes encode them as
@@ -557,8 +571,8 @@ async function build_schematic(bot, { name, x, y, z }) {
       } catch (e) {
         failed++;
       }
-      // 30ms between commands → ~60 blocks/2s, well under flood limits.
-      await sleep(30);
+      // Align with Mineflayer chat throttle so commands actually land server-side.
+      await sleep(SETBLOCK_CHAT_INTERVAL_MS);
     } else {
       // Survival / non-op fallback. Requires the bot to have the block in
       // inventory AND an adjacent solid block to place against. Aerial
@@ -582,6 +596,9 @@ async function build_schematic(bot, { name, x, y, z }) {
     }
   }
 
+  } finally {
+    bot._schematicBuildActive = false;
+  }
   const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
   const total = solidBlocks.length;

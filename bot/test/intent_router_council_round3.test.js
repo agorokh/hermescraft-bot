@@ -68,6 +68,7 @@ test('compound-modifier corpus: ≥70% must fire OR clarify (no silent drops)', 
     for (const c of oovCases) console.log(`    score=${c.score?.toFixed(2)} intent=${c.intent || '-'} | ${c.body}`);
   }
   assert.ok(pct >= 70, `compound-modifier handling ${pct.toFixed(1)}% below Mistral 70% bar`);
+  assert.equal(oov, 0, `compound-modifier had ${oov} silent OOV drops`);
 });
 
 // ── ANAPHORA-ON-FAILURE (Gemini) ────────────────────────────────────────────

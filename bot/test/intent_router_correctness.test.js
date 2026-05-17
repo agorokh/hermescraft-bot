@@ -7,6 +7,7 @@
 // the label, 0.0 otherwise.
 
 import test from 'node:test';
+import assert from 'node:assert/strict';
 import { tryRoute as tryRegex } from '../lib/intent_router.js';
 import { tryRoute as tryNlp } from '../lib/intent_router_nlp.js';
 
@@ -171,5 +172,11 @@ function scoreRouter(routerFn, label) {
   };
 }
 
-test('correctness — regex router', scoreRouter(tryRegex, 'REGEX'));
-test('correctness — NLP router', scoreRouter(tryNlp, 'NLP'));
+test('correctness — regex router', async () => {
+  const { pct } = await scoreRouter(tryRegex, 'REGEX')();
+  assert.ok(pct >= 65, `regex correctness regressed: ${pct.toFixed(1)}%`);
+});
+test('correctness — NLP router', async () => {
+  const { pct } = await scoreRouter(tryNlp, 'NLP')();
+  assert.ok(pct >= 95, `NLP correctness regressed: ${pct.toFixed(1)}%`);
+});

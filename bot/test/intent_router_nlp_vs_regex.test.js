@@ -108,5 +108,5 @@ test('[NLP vs regex] agreement report on kid prompts', async () => {
   } else {
     console.log('  full agreement on canonical 6 prompts');
   }
-  // This test always passes — purely diagnostic.
+  assert.equal(disagreements.length, 0, `NLP vs regex disagreements on kid prompts:\n  ${disagreements.join('\n  ')}`);
 });

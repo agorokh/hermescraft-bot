@@ -24,6 +24,22 @@
 //
 // ctx = { sender, senderEntity, message, body }
 
+// Resolve the position to build "near" — preferring the kid's player
+// entity, falling back to the bot's own position when the player roster
+// hasn't synced yet (right after /tp, view-distance edge, server lag).
+// Pre-2026-05-18, build_tower/build_schematic returned null when
+// senderEntity was null, which silently dropped tower/house/garden/
+// treehouse prompts to the brain — the live A/B run showed 4/5 build
+// intents falling through this exact path while torch (which doesn't
+// need senderEntity in the router) succeeded.
+function resolveAnchorPos(bot, ctx) {
+  if (ctx.senderEntity && ctx.senderEntity.position) return ctx.senderEntity.position;
+  const fresh = findPlayerEntity(bot, ctx.sender);
+  if (fresh && fresh.position) return fresh.position;
+  if (bot.entity && bot.entity.position) return bot.entity.position;
+  return null;
+}
+
 function findPlayerEntity(bot, name) {
   if (!name) return null;
   const lname = name.toLowerCase();
@@ -229,7 +245,8 @@ const INTENTS = [
       /\bshow me your (builds|schematics|templates)\b/i,
     ],
     async handler(bot, ctx) {
-      if (!ctx.senderEntity) return null;
+      const p = resolveAnchorPos(bot, ctx);
+      if (!p) return null;
       // Map kid keywords → schematic names. Falls through if no match.
       const body = ctx.body.toLowerCase();
       let name = null;
@@ -243,8 +260,8 @@ const INTENTS = [
         return { action: 'list_schematics', body: {} };
       }
       if (!name) return null;
-      const p = ctx.senderEntity.position;
-      // Origin = 2 blocks away from the kid, ground level.
+      // Origin = 2 blocks away from the anchor (kid pos if known, else
+      // bot's own pos), ground level.
       return {
         action: 'build_schematic',
         body: {
@@ -263,8 +280,8 @@ const INTENTS = [
       /\b(tower|pillar|column)\b.*\b(here|right here|where I am)\b/i,
     ],
     async handler(bot, ctx) {
-      if (!ctx.senderEntity) return null; // can't build without target position
-      const p = ctx.senderEntity.position;
+      const p = resolveAnchorPos(bot, ctx);
+      if (!p) return null;
       // Extract a height if mentioned: "5 blocks high", "10 tall"
       const height = intFromMatch(ctx.body, /(\d+)\s*(blocks?\s*)?(high|tall)/i) || 5;
       // Pick a sensible material from inventory

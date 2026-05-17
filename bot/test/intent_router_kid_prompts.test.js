@@ -87,6 +87,39 @@ const PROMPTS = [
 //
 // Each prompt below is sent with "Rosie " or "Steve " prepended to mirror
 // the test_player's say() format.
+// Regression: build_tower + build_schematic must NOT return null just
+// because the kid's player entity hasn't synced into bot.players yet
+// (right after /tp, view-distance edge, server lag). Live A/B run on
+// 2026-05-18 showed 4/5 build prompts falling through to the brain
+// because senderEntity was null at handler time. The fix routes them
+// to anchor on bot.entity.position as a fallback.
+test('build handlers anchor on bot position when sender entity is unresolvable', async () => {
+  const botNoPlayers = {
+    username: 'Rosie',
+    entity: { position: { x: 100, y: 64, z: 100 }, yaw: 0 },
+    players: {}, // sender NOT in roster — sync lag scenario
+    entities: {},
+    inventory: {
+      items: () => [
+        { name: 'oak_planks', count: 64 },
+        { name: 'cobblestone', count: 64 },
+      ],
+    },
+    blockAt: () => ({ name: 'air' }),
+  };
+  const buildPrompts = [
+    { id: 'tower', body: 'can you build a 5-tall stone tower right here?', expect: 'build_tower' },
+    { id: 'house', body: 'can you build a small house for me here?', expect: 'build_schematic' },
+    { id: 'treehouse', body: 'can you build a treehouse here?', expect: 'build_schematic' },
+    { id: 'garden', body: 'design a small flower garden next to me', expect: 'build_schematic' },
+  ];
+  for (const bp of buildPrompts) {
+    const route = await tryRoute(botNoPlayers, bp.body, 'Adalynn');
+    assert.ok(route.matched, `${bp.id} must route even with empty player roster (got matched=false)`);
+    assert.equal(route.action, bp.expect, `${bp.id} expected action=${bp.expect} got ${route.action}`);
+  }
+});
+
 for (const p of PROMPTS) {
   test(`kid prompt "${p.id}" — full pipeline (mention + strip + route)`, async () => {
     const target = p.expect_actions.includes('collect') ? 'Steve' : 'Rosie';

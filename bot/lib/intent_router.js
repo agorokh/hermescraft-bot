@@ -215,9 +215,14 @@ const INTENTS = [
   {
     name: 'build_schematic',
     patterns: [
-      /\b(build|make|put up|build me)\b.*\b(house|cottage|home|cabin)\b/i,
-      /\b(build|make|put up)\b.*\b(well|fountain)\b/i,
-      /\b(make|build|plant)\b.*\b(garden|flower bed|flower patch)\b/i,
+      // Treehouse FIRST — \bhouse\b doesn't match inside "treehouse", so
+      // an explicit pattern is required (post-mortem 2026-05-17 A/B run).
+      /\b(build|make|put up|build me|set up|construct)\b.*\b(treehouse|tree house|tree fort|tree home)\b/i,
+      /\b(build|make|put up|build me|set up|construct)\b.*\b(house|cottage|home|cabin)\b/i,
+      /\b(build|make|put up|set up|construct)\b.*\b(well|fountain)\b/i,
+      // "design" added because kids say "Rosie design a garden" — original
+      // verb list missed it, dropping garden prompts to 0.00 in live A/B.
+      /\b(make|build|plant|design|create|set up|start|put together)\b.*\b(garden|flower bed|flower patch|flower garden)\b/i,
       /\b(build|make)\b.*\b(tower|watchtower|outpost)\b.*\b(big|tall|fancy|with battlements)\b/i,
       /\b(build|make|set up)\b.*\b(campfire|fire pit|firepit|sit spot|hangout)\b/i,
       /\bwhat (can|could) you build\b/i,

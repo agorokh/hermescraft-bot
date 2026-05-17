@@ -11,6 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tryRoute } from '../lib/intent_router.js';
+import { broadcastMentionsMe, stripMentionPrefix } from '../lib/chat.js';
 
 function stubBot(senderName, senderPos = { x: 0, y: 64, z: 0 }) {
   const senderEntity = {
@@ -78,17 +79,41 @@ const PROMPTS = [
   },
 ];
 
+// Full pipeline test: mention detection → strip → router. This is what
+// actually happens in server.js for broadcast chats. The previous version
+// of this file only tested tryRoute() in isolation; it passed while the
+// live game still scored 0.00 because broadcastMentionsMe rejected every
+// "[as Adalynn] Rosie ..." prompt and the router never even ran.
+//
+// Each prompt below is sent with "Rosie " or "Steve " prepended to mirror
+// the test_player's say() format.
 for (const p of PROMPTS) {
-  test(`kid prompt "${p.id}" routes to a build action`, async () => {
-    const bot = stubBot(p.sender);
-    const route = await tryRoute(bot, p.body, p.sender);
-    assert.ok(
-      route.matched,
-      `prompt "${p.id}" did not match any intent — kid would get chat-theater. body="${p.body}"`,
-    );
-    assert.ok(
-      p.expect_actions.includes(route.action),
-      `prompt "${p.id}" matched intent="${route.intent_name}" but action="${route.action}" not in expected ${JSON.stringify(p.expect_actions)}`,
-    );
+  test(`kid prompt "${p.id}" — full pipeline (mention + strip + route)`, async () => {
+    const target = p.expect_actions.includes('collect') ? 'Steve' : 'Rosie';
+    // What test_player_build_design.js actually puts on the wire:
+    const wireBody = `${target} ${p.body.replace(/^\[as [^\]]+\]\s*/, '')}`;
+    // But also test with the "[as Adalynn] Rosie ..." form the harness
+    // used before 2026-05-18 to catch the regression on the next prompt-prefix
+    // experiment.
+    const wireBodyWithAnno = `[as ${p.sender}] ${target} ${p.body.replace(/^\[as [^\]]+\]\s*/, '')}`;
+
+    for (const variant of [wireBody, wireBodyWithAnno]) {
+      const matched = broadcastMentionsMe(variant, target);
+      assert.ok(
+        matched,
+        `mention detection failed for variant="${variant}" target="${target}" — router would never fire in live game`,
+      );
+      const stripped = stripMentionPrefix(variant, matched);
+      const bot = stubBot(p.sender);
+      const route = await tryRoute(bot, stripped, p.sender);
+      assert.ok(
+        route.matched,
+        `prompt "${p.id}" (variant="${variant}", stripped="${stripped}") did not match any intent — kid would get chat-theater`,
+      );
+      assert.ok(
+        p.expect_actions.includes(route.action),
+        `prompt "${p.id}" stripped="${stripped}" matched intent="${route.intent_name}" but action="${route.action}" not in expected ${JSON.stringify(p.expect_actions)}`,
+      );
+    }
   });
 }

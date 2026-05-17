@@ -49,8 +49,18 @@ export function isMessageForMe(routing, myName, aliases = ['bot', 'hermes']) {
   return routing.targets.some((target) => names.has(String(target).toLowerCase()));
 }
 
+// Skip a leading bracket-annotation like "[as Adalynn]" or "[voice]"
+// so the test harness (and any future tagged-source code) can prepend
+// metadata without breaking mention detection. Discovered 2026-05-18
+// while autopsying why intent_router never fired in the live A/B run —
+// every prompt was prefixed with "[as Adalynn]" and broadcastMentionsMe's
+// startsWith check rejected them all.
+function stripLeadingAnnotation(lower) {
+  return lower.replace(/^\s*\[[^\]]{1,40}\]\s*/, '');
+}
+
 export function broadcastMentionsMe(messageBody, myName) {
-  const lower = String(messageBody || '').toLowerCase().trim();
+  const lower = stripLeadingAnnotation(String(messageBody || '').toLowerCase().trim());
   const self = String(myName || '').toLowerCase();
   if (self && lower.startsWith(self)) return self;
   if (lower.startsWith('hermes')) return 'hermes';
@@ -59,7 +69,11 @@ export function broadcastMentionsMe(messageBody, myName) {
 }
 
 export function stripMentionPrefix(messageBody, matchedName) {
-  return String(messageBody || '').trim().slice(String(matchedName || '').length).replace(/^[,!.:\s]+/, '').trim();
+  const trimmed = String(messageBody || '').trim();
+  // Strip the same leading annotation broadcastMentionsMe ignored, so
+  // the downstream router sees just "can you build..." not "[as Adalynn] can you build...".
+  const noAnno = trimmed.replace(/^\s*\[[^\]]{1,40}\]\s*/, '');
+  return noAnno.slice(String(matchedName || '').length).replace(/^[,!.:\s]+/, '').trim();
 }
 
 export function ensureSocialNode(graph, name) {

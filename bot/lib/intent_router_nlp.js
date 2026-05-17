@@ -75,11 +75,25 @@ function _ctxBuf(bot) {
 
 export function recordLastSkill(bot, intent_name, action, body) {
   if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action') return;
-  const entry = { intent_name, action, body: { ...body }, at: Date.now() };
+  // success defaults to true at record time; server.js can call
+  // markLastSkillFailed(bot) when the action callback errors / yields a
+  // failure result. This addresses Gemini council round 3 concern about
+  // anaphora replaying actions that didn't actually work ("another" after
+  // a tower that failed due to no materials).
+  const entry = { intent_name, action, body: { ...body }, at: Date.now(), success: true };
   const buf = _ctxBufByBot.get(bot.username) || [];
   buf.push(entry);
   if (buf.length > CTX_BUF_MAX) buf.shift();
   _ctxBufByBot.set(bot.username, buf);
+}
+
+// Mark the most-recently-recorded skill as failed. Server.js calls this
+// in the ACTIONS catch block so anaphora doesn't replay broken state.
+export function markLastSkillFailed(bot) {
+  if (!bot || !bot.username) return;
+  const buf = _ctxBufByBot.get(bot.username);
+  if (!buf || buf.length === 0) return;
+  buf[buf.length - 1].success = false;
 }
 
 function getLastSkill(bot) {
@@ -138,6 +152,10 @@ const ANAPHORA_RULES = [
 function _tryAnaphora(bot, body, ctx) {
   const last = getLastSkill(bot);
   if (!last) return null;
+  // Council Gemini round 3: do NOT replay/amend a failed action. "another"
+  // after a tower that bombed (no materials, blocked area) would just
+  // replay the same failure. Fall through so brain can ask or kid retries.
+  if (last.success === false) return null;
   for (const rule of ANAPHORA_RULES) {
     if (!rule.pattern.test(body.trim())) continue;
     if (rule.appliesTo && !rule.appliesTo.includes(last.intent_name)) continue;

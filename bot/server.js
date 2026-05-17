@@ -59,25 +59,64 @@ import {
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
 import { installBarksAndPresence } from './lib/barks.js';
-import { tryRoute, ackFor } from './lib/intent_router.js';
-// Shadow-mode NLP router (council's recommended long-term replacement —
-// see PR #57 thread). Runs in parallel with the regex router, logs what
-// it WOULD have routed, but never executes. Zero behavior change in the
-// game; we collect agreement data in the wild before any swap. Enable
-// with HERMES_SHADOW_NLP_ROUTER=1 (off by default to keep prod boot fast
-// — NLP training adds ~30ms to startup).
-import { tryRoute as tryRouteNlp } from './lib/intent_router_nlp.js';
+import { tryRoute as tryRouteRegex, ackFor } from './lib/intent_router.js';
+// NLP.js router (council-led migration, 3 rounds of Gemini+Mistral review).
+// Promoted to PRIMARY 2026-05-18 after the 92-utterance correctness
+// benchmark showed NLP 100% vs regex 69.6%, with all council-flagged risks
+// (narrative poisoning, panic bleed, clarification deadzone, anaphora)
+// addressed and 106/106 tests passing.
+//
+// Architecture:
+//   - HERMES_NLP_PRIMARY=1 (default): NLP is primary; regex is shadow + fallback
+//   - HERMES_SHADOW_NLP_ROUTER=1: also log AGREE/DIFFER for audit
+//   - Regex `stop` keeps its safety hot-path inside intent_router.js
+//
+// Fallback policy: if NLP throws (corpus malformed / training fails),
+// the call returns matched=false with error set. To avoid silent drops,
+// we also try regex as a last-resort fallback when NLP returns
+// matched=false. This is belt-and-suspenders for the kids-tonight rollout.
+import { tryRoute as tryRouteNlp, markLastSkillFailed } from './lib/intent_router_nlp.js';
+const NLP_PRIMARY = process.env.HERMES_NLP_PRIMARY !== '0';  // default ON
 const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '1';
 
-async function shadowRoute(bot, body, sender, regexResult) {
+async function tryRoute(bot, body, sender) {
+  if (!NLP_PRIMARY) return tryRouteRegex(bot, body, sender);
+  // Primary path: NLP. Fall back to regex if NLP returns matched=false
+  // (clarify/oov/no-dispatcher) — gives the high-confidence regex catches
+  // (e.g. "stop", "come here") a second chance.
+  const nlp = await tryRouteNlp(bot, body, sender);
+  if (nlp.matched) return nlp;
+  const regex = await tryRouteRegex(bot, body, sender);
+  if (regex.matched) {
+    // Annotate so the log line shows it was a fallback decision
+    regex._fallback_from_nlp_zone = nlp.nlp_zone;
+    regex._fallback_from_nlp_score = nlp.nlp_score;
+    return regex;
+  }
+  return nlp;  // propagate the NLP-side metadata
+}
+
+async function shadowRoute(bot, body, sender, primaryResult) {
   if (!SHADOW_NLP) return;
   try {
-    const n = await tryRouteNlp(bot, body, sender);
-    const r_act = regexResult?.matched ? regexResult.action : 'none';
-    const n_act = n?.matched ? n.action : 'none';
-    const score = n?.nlp_score != null ? n.nlp_score.toFixed(2) : '-';
-    const agree = r_act === n_act ? 'AGREE' : 'DIFFER';
-    log(`[NLPshadow] ${agree} regex=${r_act} nlp=${n_act} nlp_intent=${n?.nlp_intent || n?.intent_name || '-'} score=${score} body=${JSON.stringify(body.slice(0, 60))}`);
+    // When NLP is primary, log the OTHER router (regex) as shadow.
+    // When regex is primary, log NLP as shadow. Either way: AGREE/DIFFER
+    // captures "would both routers have picked the same skill?".
+    const other = NLP_PRIMARY
+      ? await tryRouteRegex(bot, body, sender)
+      : await tryRouteNlp(bot, body, sender);
+    const p_act = primaryResult?.matched ? primaryResult.action : 'none';
+    const o_act = other?.matched ? other.action : 'none';
+    const score = other?.nlp_score != null ? other.nlp_score.toFixed(2)
+      : primaryResult?.nlp_score != null ? primaryResult.nlp_score.toFixed(2) : '-';
+    const agree = p_act === o_act ? 'AGREE' : 'DIFFER';
+    const primaryLabel = NLP_PRIMARY ? 'nlp' : 'regex';
+    const shadowLabel = NLP_PRIMARY ? 'regex' : 'nlp';
+    log(`[NLPshadow] ${agree} ${primaryLabel}=${p_act} ${shadowLabel}=${o_act} intent=${primaryResult?.intent_name || other?.nlp_intent || '-'} score=${score} body=${JSON.stringify(body.slice(0, 60))}`);
+    // Mistral's audit-log ask: separate stream for clarify-zone events.
+    if (primaryResult?.nlp_zone === 'clarify') {
+      log(`[NLPaudit] CLARIFY score=${score} intent=${primaryResult.nlp_intent || '-'} body=${JSON.stringify(body.slice(0, 80))}`);
+    }
   } catch (e) {
     log(`[NLPshadow] error: ${e.message}`);
   }
@@ -332,6 +371,9 @@ async function handleChat(username, message) {
               }
             }).catch((e) => {
               log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
+              // Council Gemini round 3: mark in context buffer so anaphora
+              // ("another", "higher") doesn't replay a broken action.
+              try { markLastSkillFailed(bot); } catch {}
               try { bot.chat(`hm, couldn't pull that off — ${e.message.slice(0, 50)}`); } catch {}
             });
             // Skip the queue: the kid is taken care of by the router. The
@@ -385,6 +427,9 @@ async function handleChat(username, message) {
                 }
               }).catch((e) => {
                 log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
+              // Council Gemini round 3: mark in context buffer so anaphora
+              // ("another", "higher") doesn't replay a broken action.
+              try { markLastSkillFailed(bot); } catch {}
                 try { bot.chat(`hm, couldn't pull that off`); } catch {}
               });
               rememberSocialEvent({ actor: username, kind: 'heard',

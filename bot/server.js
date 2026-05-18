@@ -78,7 +78,10 @@ import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_ro
 // matched=false. This is belt-and-suspenders for the kids-tonight rollout.
 import { tryRoute as tryRouteNlp, markLastSkillFailed, recordLastSkill } from './lib/intent_router_nlp.js';
 const NLP_PRIMARY = process.env.HERMES_NLP_PRIMARY !== '0';  // default ON
-const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '1';
+// When NLP is primary, shadow the regex router by default for AGREE/DIFFER telemetry.
+const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '0'
+  ? false
+  : (process.env.HERMES_SHADOW_NLP_ROUTER === '1' || NLP_PRIMARY);
 
 async function tryRoute(bot, body, sender) {
   if (!NLP_PRIMARY) return tryRouteRegex(bot, body, sender);
@@ -2057,6 +2060,20 @@ const ACTIONS = {
     const fillResult = await new Promise((resolve) => {
       const cmd = `/fill ${minX} ${minY} ${minZ} ${maxX} ${maxY} ${maxZ} ${blockName}${hollow ? ' hollow' : ''}`;
       let resolved = false;
+      const norm = (n) => String(n || '').toLowerCase().replace(/^minecraft:/, '');
+      const want = norm(blockName);
+      const volumeHasBlock = () => {
+        const probes = [
+          [minX, minY, minZ],
+          [maxX, maxY, maxZ],
+          [Math.floor((minX + maxX) / 2), Math.floor((minY + maxY) / 2), Math.floor((minZ + maxZ) / 2)],
+        ];
+        for (const [px, py, pz] of probes) {
+          const blk = b.blockAt(new Vec3(px, py, pz));
+          if (blk && norm(blk.name) === want) return true;
+        }
+        return false;
+      };
       const onMsg = (jsonMsg) => {
         if (resolved) return;
         let txt = '';
@@ -2064,6 +2081,7 @@ const ACTIONS = {
         if (!txt) return;
         const m = txt.match(/Successfully filled (\d+) block/);
         if (m) {
+          if (!volumeHasBlock()) return;
           resolved = true;
           b.removeListener('message', onMsg);
           resolve({ ok: true, placed: Number(m[1]), via: 'vanilla_fill' });

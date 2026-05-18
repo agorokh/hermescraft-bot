@@ -61,6 +61,25 @@ function normalizeBlockName(name) {
   return String(name).toLowerCase().replace(/^minecraft:/, '');
 }
 
+function itemFromCollectEntity(collected) {
+  if (!collected) return null;
+  if (typeof collected.getDroppedItem === 'function') {
+    const stack = collected.getDroppedItem();
+    if (stack?.name) return stack.name;
+    if (stack?.displayName) return stack.displayName;
+  }
+  const metaItem = collected.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
+  if (metaItem) return metaItem;
+  return collected.name || collected.displayName || null;
+}
+
+function collectItemMatches(tossedItem, collectedEntity) {
+  const want = normalizeBlockName(tossedItem);
+  const got = normalizeBlockName(itemFromCollectEntity(collectedEntity));
+  if (!want || !got) return false;
+  return got === want || got.endsWith(`/${want}`) || want.endsWith(`/${got}`);
+}
+
 function blockAtMatches(bot, x, y, z, expected) {
   const readback = bot.blockAt(new Vec3(x, y, z));
   if (!readback) return false;
@@ -246,8 +265,9 @@ async function give_to_player(bot, { player, item, count = 1 }) {
 
   // 3s wait for collect event (Mindcraft pattern).
   let received = false;
-  const onCollect = (collector, _collected) => {
-    if (collector && (collector.username || collector.name || '').toLowerCase() === player.toLowerCase()) {
+  const onCollect = (collector, collected) => {
+    const who = (collector?.username || collector?.name || '').toLowerCase();
+    if (who === player.toLowerCase() && collectItemMatches(item, collected)) {
       received = true;
     }
   };
@@ -460,7 +480,7 @@ const _setblockAuthByBot = new WeakMap();
 // to physical placement.  Clamps Y to <= 319 (vanilla 1.21 build limit)
 // to avoid the probe firing above world height.
 async function detectSetblockAuth(bot) {
-  if (_setblockAuthByBot.has(bot)) return _setblockAuthByBot.get(bot);
+  if (_setblockAuthByBot.get(bot) === true) return true;
   // Probe at the bot's current position +1Y (a cell guaranteed to be in a
   // loaded chunk).  Use a sentinel block we can read back unambiguously
   // and that's cheap to roll back: white_wool (visible distinct, every
@@ -502,8 +522,8 @@ async function detectSetblockAuth(bot) {
   // Restore air — probe cell was empty before we touched it.
   if (ok) {
     try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} air`); } catch (e) {}
+    _setblockAuthByBot.set(bot, true);
   }
-  _setblockAuthByBot.set(bot, ok);
   return ok;
 }
 

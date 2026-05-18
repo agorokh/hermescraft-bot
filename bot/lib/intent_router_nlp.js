@@ -270,9 +270,14 @@ function _tryAnaphora(bot, body, ctx) {
 
 let _nlp = null;
 let _trainPromise = null;
+let _trainFailedUntil = 0;
+const TRAIN_RETRY_MS = 60_000;
 
 async function ensureTrained() {
   if (_nlp) return _nlp;
+  if (Date.now() < _trainFailedUntil) {
+    throw new Error('NLP training temporarily unavailable');
+  }
   if (_trainPromise) return await _trainPromise;
 
   const training = (async () => {
@@ -289,6 +294,7 @@ async function ensureTrained() {
       return nlp;
     } catch (e) {
       _nlp = null;
+      _trainFailedUntil = Date.now() + TRAIN_RETRY_MS;
       throw e;
     }
   })();
@@ -296,6 +302,9 @@ async function ensureTrained() {
   _trainPromise = training;
   try {
     return await training;
+  } catch (e) {
+    _trainFailedUntil = Date.now() + TRAIN_RETRY_MS;
+    throw e;
   } finally {
     if (_trainPromise === training) _trainPromise = null;
   }

@@ -2085,17 +2085,19 @@ const ACTIONS = {
       let resolved = false;
       const norm = (n) => String(n || '').toLowerCase().replace(/^minecraft:/, '');
       const want = norm(blockName);
-      const volumeHasBlock = () => {
-        const probes = [
-          [minX, minY, minZ],
-          [maxX, maxY, maxZ],
-          [Math.floor((minX + maxX) / 2), Math.floor((minY + maxY) / 2), Math.floor((minZ + maxZ) / 2)],
-        ];
-        for (const [px, py, pz] of probes) {
-          const blk = b.blockAt(new Vec3(px, py, pz));
-          if (blk && norm(blk.name) === want) return true;
-        }
-        return false;
+      const probePoints = [
+        [minX, minY, minZ],
+        [maxX, maxY, maxZ],
+        [Math.floor((minX + maxX) / 2), Math.floor((minY + maxY) / 2), Math.floor((minZ + maxZ) / 2)],
+      ];
+      const probeNames = () => probePoints.map(([px, py, pz]) => {
+        const blk = b.blockAt(new Vec3(px, py, pz));
+        return blk ? norm(blk.name) : '';
+      });
+      const beforeFill = probeNames();
+      const fillChangedVolume = () => {
+        const after = probeNames();
+        return probePoints.some((_, i) => beforeFill[i] !== want && after[i] === want);
       };
       const onMsg = (jsonMsg) => {
         if (resolved) return;
@@ -2104,7 +2106,7 @@ const ACTIONS = {
         if (!txt) return;
         const m = txt.match(/Successfully filled (\d+) block/);
         if (m) {
-          if (!volumeHasBlock()) return;
+          if (!fillChangedVolume()) return;
           resolved = true;
           b.removeListener('message', onMsg);
           resolve({ ok: true, placed: Number(m[1]), via: 'vanilla_fill' });
@@ -2125,22 +2127,7 @@ const ACTIONS = {
           b.removeListener('message', onMsg);
           // Servers with command feedback disabled succeed silently — probe blocks.
           await sleep(300);
-          const norm = (n) => String(n || '').toLowerCase().replace(/^minecraft:/, '');
-          const want = norm(blockName);
-          const probes = [
-            [minX, minY, minZ],
-            [maxX, maxY, maxZ],
-            [Math.floor((minX + maxX) / 2), Math.floor((minY + maxY) / 2), Math.floor((minZ + maxZ) / 2)],
-          ];
-          let verified = false;
-          for (const [px, py, pz] of probes) {
-            const blk = b.blockAt(new Vec3(px, py, pz));
-            if (blk && norm(blk.name) === want) {
-              verified = true;
-              break;
-            }
-          }
-          if (verified) {
+          if (fillChangedVolume()) {
             resolve({ ok: true, placed: total, via: 'vanilla_fill_silent' });
           } else {
             resolve({ ok: false, reason: 'timeout', via: 'vanilla_fill' });

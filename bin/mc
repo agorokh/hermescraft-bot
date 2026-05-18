@@ -1088,7 +1088,7 @@ EOF
         pretty "$(api_post '/action/follow_player_v2' "$FPV2_JSON")"
         ;;
 
-    perceive|sense)
+    sense)
         pretty "$(api_post '/action/perceive' '{}')"
         ;;
 

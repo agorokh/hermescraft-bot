@@ -551,7 +551,12 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     // production health.
     return { matched: false, error: e.message };
   }
-  const result = await nlp.process('en', body);
+  let result;
+  try {
+    result = await nlp.process('en', body);
+  } catch (e) {
+    return { matched: false, error: e.message, nlp_zone: 'process_error' };
+  }
   const intent = result.intent === 'None' ? null : result.intent;
   const score = result.score || 0;
   // Three-zone confidence band (council 2026-05-17):

@@ -536,13 +536,10 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   const anaphora = _isStrictAnaphoraPhrase(body) ? _tryAnaphora(bot, body, ctx) : null;
   if (anaphora) {
     let skill_id = null;
-    if (!opts.dryRun) {
-      if (['higher', 'shorter', 'left', 'right', 'here'].includes(anaphora.anaphora)) {
-        skill_id = updateLastSkillBody(bot, anaphora.body);
-      } else if (anaphora.anaphora === 'repeat') {
-        skill_id = getLastSkill(bot)?.id ?? null;
-      }
+    if (!opts.dryRun && ['higher', 'shorter', 'left', 'right', 'here'].includes(anaphora.anaphora)) {
+      skill_id = updateLastSkillBody(bot, anaphora.body);
     }
+    // repeat: leave skill_id null — failed replay must not poison the original entry
     return {
       matched: true,
       intent_name: anaphora.intent_name,
@@ -589,11 +586,9 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   }
   // Record this for future repeat_last_action — only if NOT a repeat itself
   // (avoid recursion on "do it again ... do it again").
-  const skill_id = opts.dryRun
+  const skill_id = opts.dryRun || intent === 'repeat_last_action'
     ? null
-    : (intent === 'repeat_last_action'
-      ? (getLastSkill(bot)?.id ?? null)
-      : recordLastSkill(bot, intent, decision.action, decision.body, body));
+    : recordLastSkill(bot, intent, decision.action, decision.body, body);
   return {
     matched: true,
     intent_name: intent,

@@ -94,7 +94,7 @@ async function tryRoute(bot, body, sender) {
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
   // Clarify/OOV zones defer to the brain — do not let regex steal ambiguous utterances.
-  if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher' || nlp.nlp_zone === 'dispatcher_null') {
+  if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
     return nlp;
   }
   const regex = await tryRouteRegex(bot, body, sender);
@@ -2259,11 +2259,12 @@ const ACTIONS = {
       const oldest = commandQueue
         .filter(c => c.status === 'pending')
         .sort((a, b) => a.time - b.time)[0];
-      if (oldest && oldest.source === 'voice'
-          && _pendingVoiceTurns.has(oldest.id)
-          && _pendingVoiceTurns.get(oldest.id).dispatched_ts
-          && (now - _pendingVoiceTurns.get(oldest.id).dispatched_ts) <= VOICE_AUTOCORRELATE_MS) {
-        voiceTurn = _pendingVoiceTurns.get(oldest.id);
+      if (oldest && oldest.source === 'voice' && _pendingVoiceTurns.has(oldest.id)) {
+        const turn = _pendingVoiceTurns.get(oldest.id);
+        if (!turn.dispatched_ts) turn.dispatched_ts = now;
+        if ((now - turn.dispatched_ts) <= VOICE_AUTOCORRELATE_MS) {
+          voiceTurn = turn;
+        }
       }
       // Otherwise (oldest is a chat turn OR no pending OR voice not yet
       // dispatched OR voice age past window): fall through to bot.chat().
@@ -3230,7 +3231,6 @@ const httpServer = http.createServer(async (req, res) => {
             : undefined,
         };
         // Fire and forget — runs in background
-        markOldestVoiceDispatchedIfPending();
         actionFn(body).then(result => {
           if (currentTask && currentTask.id === taskId && currentTask.status === 'running') {
             currentTask.status = 'done';
@@ -3267,7 +3267,6 @@ const httpServer = http.createServer(async (req, res) => {
         return respond(res, 400, { ok: false, error: `Unknown action "${actionName}". Available: ${available}` });
       }
 
-      markOldestVoiceDispatchedIfPending();
       const result = await actionFn(body);
       actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
       if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();

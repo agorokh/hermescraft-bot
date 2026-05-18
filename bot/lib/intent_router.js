@@ -24,6 +24,7 @@
 //
 // ctx = { sender, senderEntity, message, body }
 
+import { extractOreFromBody } from './intent_slot_extract.js';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
@@ -338,13 +339,13 @@ const INTENTS = [
   {
     name: 'mine_iron',
     patterns: [
-      /\b(grab|get|find|mine)\b.*\b(iron|coal|diamond|copper|gold)\b/i,
-      /\b(iron|coal|diamond|copper|gold)\b.*\b(please|for me|some)\b/i,
+      /\b(grab|get|find|mine)\b.*\b(iron|coal|diamonds?|copper|gold)\b/i,
+      /\b(iron|coal|diamonds?|copper|gold)\b.*\b(please|for me|some)\b/i,
     ],
     async handler(bot, ctx) {
-      const oreMatch = ctx.body.match(/\b(iron|coal|diamond|copper|gold)\b/i);
-      if (!oreMatch) return null;
-      const ore = oreMatch[1].toLowerCase() + '_ore';
+      const oreStem = extractOreFromBody(ctx.body);
+      if (!oreStem) return null;
+      const ore = oreStem + '_ore';
       // ACTIONS.collect handles find + dig + pickup in one call.
       // (No 'bg_collect' key — that's a /task/-side endpoint name only.)
       return { action: 'collect', body: { block: ore, count: 3 } };

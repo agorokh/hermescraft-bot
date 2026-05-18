@@ -28,6 +28,7 @@
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { extractGatherBlockFromBody, extractOreFromBody } from './intent_slot_extract.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
@@ -300,7 +301,6 @@ async function ensureTrained() {
       return nlp;
     } catch (e) {
       _nlp = null;
-      _trainFailedUntil = Date.now() + TRAIN_RETRY_MS;
       throw e;
     }
   })();
@@ -349,15 +349,8 @@ const DISPATCHERS = {
   },
 
   gather_block: (_bot, ctx) => {
-    const m = ctx.body.match(/\b(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i);
-    if (!m) return null;
-    const raw = m[1].toLowerCase();
-    const blockMap = {
-      wood: 'oak_log', logs: 'oak_log', log: 'oak_log', oak: 'oak_log',
-      dirt: 'dirt', stone: 'stone', cobble: 'cobblestone',
-      cobblestone: 'cobblestone', sand: 'sand',
-    };
-    const block = blockMap[raw] || 'oak_log';
+    const block = extractGatherBlockFromBody(ctx.body);
+    if (!block) return null;
     const countMatch = ctx.body.match(/\b(\d+)\s*(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i);
     const count = countMatch ? parseInt(countMatch[1], 10) : 4;
     return { action: 'collect', body: { block, count: Math.min(count, 16) } };
@@ -449,10 +442,9 @@ const DISPATCHERS = {
   // Use 'collect' (find + dig + pickup) — matches the regex router's choice
   // in lib/intent_router.js mine_iron handler.
   mine_iron: (_bot, ctx) => {
-    const oreMatch = ctx.body.match(/\b(iron|coal|diamond|copper|gold)\b/i);
-    if (!oreMatch) return null;
-    const block = `${oreMatch[1].toLowerCase()}_ore`;
-    return { action: 'collect', body: { block, count: 3 } };
+    const ore = extractOreFromBody(ctx.body);
+    if (!ore) return null;
+    return { action: 'collect', body: { block: `${ore}_ore`, count: 3 } };
   },
 
   // ─── NEW intents from realistic kid corpus + skill-gap analysis ─────

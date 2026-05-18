@@ -94,7 +94,7 @@ async function tryRoute(bot, body, sender) {
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
   // Clarify/OOV zones defer to the brain — do not let regex steal ambiguous utterances.
-  if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
+  if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher' || nlp.nlp_zone === 'dispatcher_null') {
     return nlp;
   }
   const regex = await tryRouteRegex(bot, body, sender);
@@ -112,7 +112,7 @@ async function tryRoute(bot, body, sender) {
 // Forward NLP classification hints when the router defers to the brain.
 function nlpHintsForQueue(route) {
   if (!route?.nlp_intent || route.matched) return {};
-  if (route.nlp_zone !== 'no_dispatcher' && route.nlp_zone !== 'clarify') return {};
+  if (!['no_dispatcher', 'clarify', 'dispatcher_null'].includes(route.nlp_zone)) return {};
   return {
     nlp_intent: route.nlp_intent,
     nlp_score: route.nlp_score,

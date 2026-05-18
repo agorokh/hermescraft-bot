@@ -214,8 +214,21 @@ export function installBarksAndPresence(bot, opts = {}) {
     if (player.username === bot.username) return;
     if (shouldBark('reactive', REACTIVE_COOLDOWN_MS)) sayBark('on_player_leave');
   };
+  const isAir = (name) => !name || /air/i.test(name);
+  const onBlockUpdate = (oldBlock, newBlock) => {
+    if (stopped || !bot?.entity) return;
+    if (!nearestPlayer(bot, PLAYER_PROXIMITY)) return;
+    const wasAir = isAir(oldBlock?.name);
+    const nowAir = isAir(newBlock?.name);
+    if (wasAir && !nowAir) {
+      if (shouldBark('reactive', REACTIVE_COOLDOWN_MS)) sayBark('on_player_block_placed');
+    } else if (!wasAir && nowAir) {
+      if (shouldBark('reactive', REACTIVE_COOLDOWN_MS)) sayBark('on_player_mined');
+    }
+  };
   bot.on('playerJoined', onPlayerJoined);
   bot.on('playerLeft', onPlayerLeft);
+  bot.on('blockUpdate', onBlockUpdate);
 
   return function tearDown() {
     stopped = true;
@@ -223,5 +236,6 @@ export function installBarksAndPresence(bot, opts = {}) {
     clearInterval(gazeTimer);
     try { bot.removeListener('playerJoined', onPlayerJoined); } catch {}
     try { bot.removeListener('playerLeft', onPlayerLeft); } catch {}
+    try { bot.removeListener('blockUpdate', onBlockUpdate); } catch {}
   };
 }

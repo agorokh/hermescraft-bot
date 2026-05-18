@@ -245,13 +245,7 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   if (skillWasStopped(bot, stopGen)) return { result: `give_to_player interrupted` };
 
   await bot.lookAt(p);
-  try {
-    await bot.toss(stack.type, null, Math.min(count, stack.count));
-  } catch (e) {
-    return { result: `Couldn't toss ${item}: ${e.message}` };
-  }
-
-  // 3s wait for collect event (Mindcraft pattern).
+  // Register before toss so fast LAN pickups cannot fire before we listen.
   let received = false;
   const onCollect = (collector, collected) => {
     const who = (collector?.username || collector?.name || '').toLowerCase();
@@ -260,6 +254,14 @@ async function give_to_player(bot, { player, item, count = 1 }) {
     }
   };
   bot.on('playerCollect', onCollect);
+  try {
+    await bot.toss(stack.type, null, Math.min(count, stack.count));
+  } catch (e) {
+    bot.removeListener('playerCollect', onCollect);
+    return { result: `Couldn't toss ${item}: ${e.message}` };
+  }
+
+  // 3s wait for collect event (Mindcraft pattern).
   const start = Date.now();
   while (Date.now() - start < 3000 && !received) {
     if (skillWasStopped(bot, stopGen)) break;

@@ -29,6 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { extractGatherBlockFromBody, extractOreFromBody } from './intent_slot_extract.js';
+import { resolveSchematicName } from './schematic_resolve.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
@@ -138,24 +139,14 @@ const ANAPHORA_RULES = [
   // Height adjustments for build_tower
   {
     pattern: /^(higher|taller|bigger|go higher|make it taller|taller please)( please| pls)?$/i,
-    appliesTo: ['build_tower', 'build_schematic'],
-    amend: (entry) => {
-      if (entry.intent_name === 'build_schematic' || entry.action === 'build_schematic') {
-        return { ...entry.body, y: (entry.body.y ?? 64) + 2 };
-      }
-      return { ...entry.body, height: Math.min(20, (entry.body.height || 5) + 2) };
-    },
+    appliesTo: ['build_tower'],
+    amend: (entry) => ({ ...entry.body, height: Math.min(20, (entry.body.height || 5) + 2) }),
     label: 'higher',
   },
   {
     pattern: /^(lower|shorter|smaller|less tall)( please| pls)?$/i,
-    appliesTo: ['build_tower', 'build_schematic'],
-    amend: (entry) => {
-      if (entry.intent_name === 'build_schematic' || entry.action === 'build_schematic') {
-        return { ...entry.body, y: Math.max(-64, (entry.body.y ?? 64) - 2) };
-      }
-      return { ...entry.body, height: Math.max(2, (entry.body.height || 5) - 2) };
-    },
+    appliesTo: ['build_tower'],
+    amend: (entry) => ({ ...entry.body, height: Math.max(2, (entry.body.height || 5) - 2) }),
     label: 'shorter',
   },
   // Repeat the same action ("another one", "one more")
@@ -372,30 +363,8 @@ const DISPATCHERS = {
   build_schematic: (bot, ctx) => {
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
-    const body = ctx.body.toLowerCase();
-    let name = null;
-    // Ice/snow MUST be checked BEFORE generic house/cottage — kid asking
-    // for an "ice house" wants the ice castle, not the oak cottage.
-    if (/\b(ice|frozen|frosty)\b/.test(body) && /\b(castle|fort|house|palace|home|cottage)\b/.test(body)) {
-      name = 'ice_castle';
-    }
-    else if (/\b(igloo|snow\s*house|snow\s*home|snow\s*shelter|snow\s*hut)\b/.test(body)) name = 'igloo';
-    else if (/\b(treehouse|tree house|tree fort|tree home)\b/.test(body)) name = 'treehouse';
-    else if (/\b(house|cottage|home|cabin)\b/.test(body)) name = 'small_house';
-    else if (/\b(well|fountain)\b/.test(body)) name = 'well';
-    else if (/\b(garden|flower bed|flower patch|flower garden)\b/.test(body)) name = 'garden';
-    // "fancy castle with battlements" / "watchtower" / generic castle —
-    // route to ice_castle (our only "castle" schematic) if no ice/snow
-    // keyword, else use small_tower.
-    else if (/\b(castle|fort|palace)\b/.test(body)) name = 'ice_castle';
-    else if (/\b(tower|watchtower|outpost)\b/.test(body)) name = 'small_tower';
-    else if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(body)) name = 'campfire_spot';
-    else if (/\b(what can|what could|show me|list)\b/i.test(body)
-      || /\bwhat\s+builds?\b/i.test(body)
-      || /\bbuilds?\s+(u|you)\s+got\b/i.test(body)
-      || /\bwhat\s+r\s+ur\s+builds?\b/i.test(body)) {
-      return { action: 'list_schematics', body: {} };
-    }
+    const name = resolveSchematicName(ctx.body);
+    if (name === 'list') return { action: 'list_schematics', body: {} };
     if (!name) return null;
     return {
       action: 'build_schematic',

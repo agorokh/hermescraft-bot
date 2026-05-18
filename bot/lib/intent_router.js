@@ -25,6 +25,7 @@
 // ctx = { sender, senderEntity, message, body }
 
 import { extractOreFromBody } from './intent_slot_extract.js';
+import { resolveSchematicName } from './schematic_resolve.js';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
@@ -208,18 +209,8 @@ const INTENTS = [
     async handler(bot, ctx) {
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
-      // Map kid keywords → schematic names. Falls through if no match.
-      const body = ctx.body.toLowerCase();
-      let name = null;
-      if (/\b(treehouse|tree house|tree fort|tree home)\b/.test(body)) name = 'treehouse';
-      else if (/\b(house|cottage|home|cabin)\b/.test(body)) name = 'small_house';
-      else if (/\b(well|fountain)\b/.test(body)) name = 'well';
-      else if (/\b(garden|flower bed|flower patch)\b/.test(body)) name = 'garden';
-      else if (/\b(tower|watchtower|outpost)\b/.test(body) && /\b(big|tall|fancy|battlement)\b/.test(body)) name = 'small_tower';
-      else if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(body)) name = 'campfire_spot';
-      else if (/\b(what can|show me|list)\b/.test(body)) {
-        return { action: 'list_schematics', body: {} };
-      }
+      const name = resolveSchematicName(ctx.body);
+      if (name === 'list') return { action: 'list_schematics', body: {} };
       if (!name) return null;
       // Origin = 2 blocks away from the anchor (kid pos if known, else
       // bot's own pos), ground level.

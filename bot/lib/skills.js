@@ -28,7 +28,7 @@ import { Vec3 } from 'vec3';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { findPlayerEntity } from './player_utils.js';
+import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -61,21 +61,9 @@ function normalizeBlockName(name) {
   return String(name).toLowerCase().replace(/^minecraft:/, '');
 }
 
-function itemFromCollectEntity(collected) {
-  if (!collected) return null;
-  if (typeof collected.getDroppedItem === 'function') {
-    const stack = collected.getDroppedItem();
-    if (stack?.name) return stack.name;
-    if (stack?.displayName) return stack.displayName;
-  }
-  const metaItem = collected.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
-  if (metaItem) return metaItem;
-  return collected.name || collected.displayName || null;
-}
-
 function collectItemMatches(tossedItem, collectedEntity) {
   const want = normalizeBlockName(tossedItem);
-  const got = normalizeBlockName(itemFromCollectEntity(collectedEntity));
+  const got = normalizeBlockName(itemNameFromCollectEntity(collectedEntity));
   if (!want || !got) return false;
   return got === want || got.endsWith(`/${want}`) || want.endsWith(`/${got}`);
 }

@@ -389,7 +389,12 @@ const DISPATCHERS = {
     else if (/\b(castle|fort|palace)\b/.test(body)) name = 'ice_castle';
     else if (/\b(tower|watchtower|outpost)\b/.test(body)) name = 'small_tower';
     else if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(body)) name = 'campfire_spot';
-    else if (/\b(what can|show me|list)\b/.test(body)) return { action: 'list_schematics', body: {} };
+    else if (/\b(what can|what could|show me|list)\b/i.test(body)
+      || /\bwhat\s+builds?\b/i.test(body)
+      || /\bbuilds?\s+(u|you)\s+got\b/i.test(body)
+      || /\bwhat\s+r\s+ur\s+builds?\b/i.test(body)) {
+      return { action: 'list_schematics', body: {} };
+    }
     if (!name) return null;
     return {
       action: 'build_schematic',

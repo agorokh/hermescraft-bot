@@ -58,3 +58,15 @@ export function pickTowerFootOffset(bot, anchorPos) {
   }
   return offsets[0];
 }
+
+export function itemNameFromCollectEntity(collected) {
+  if (!collected) return null;
+  if (typeof collected.getDroppedItem === 'function') {
+    const stack = collected.getDroppedItem();
+    if (stack?.name) return stack.name;
+    if (stack?.displayName) return stack.displayName;
+  }
+  const metaItem = collected.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
+  if (metaItem) return metaItem;
+  return collected.name || collected.displayName || null;
+}

@@ -24,6 +24,7 @@ import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { actionOutcomeFailed } from './action_outcome.js';
+import { itemNameFromCollectEntity } from './player_utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -57,18 +58,6 @@ async function loadAllQuests() {
 function normalizeQuestItemName(item) {
   if (item == null) return '';
   return String(item).toLowerCase().replace(/^minecraft:/, '');
-}
-
-function itemNameFromCollectEntity(collected) {
-  if (!collected) return null;
-  if (typeof collected.getDroppedItem === 'function') {
-    const stack = collected.getDroppedItem();
-    if (stack?.name) return stack.name;
-    if (stack?.displayName) return stack.displayName;
-  }
-  const metaItem = collected.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
-  if (metaItem) return metaItem;
-  return collected.name || collected.displayName || null;
 }
 
 function questItemNamesMatch(triggerItem, eventItem) {

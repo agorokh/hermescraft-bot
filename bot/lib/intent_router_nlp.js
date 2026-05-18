@@ -76,7 +76,8 @@ function _ctxBuf(bot) {
 }
 
 export function recordLastSkill(bot, intent_name, action, body, message) {
-  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action') return null;
+  // Stop is a safety primitive — never pollute the repeat/anaphora buffer.
+  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action' || intent_name === 'stop' || action === 'stop') return null;
   const entry = {
     id: ++_skillSeq,
     intent_name,
@@ -372,7 +373,7 @@ const DISPATCHERS = {
   race_to_coords: (_bot, ctx) => {
     const m = ctx.body.match(/(-?\d+)\s+(-?\d+)\s+(-?\d+)/);
     if (!m) return null;
-    return { action: 'goto', body: { x: parseInt(m[1]), y: parseInt(m[2]), z: parseInt(m[3]) } };
+    return { action: 'goto', body: { x: parseInt(m[1], 10), y: parseInt(m[2], 10), z: parseInt(m[3], 10) } };
   },
 
   // server.js has no 'bg_collect' ACTION; that's a /task/ endpoint name.

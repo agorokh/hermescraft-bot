@@ -461,9 +461,13 @@ async function detectSetblockAuth(bot) {
   const airNames = new Set(['air', 'cave_air', 'void_air']);
   let probeX = px, py = null, probeZ = pz;
   const baseY = Math.floor(myPos.y);
+  const offsets = [];
+  for (let dx = -2; dx <= 2; dx++) {
+    for (let dz = -2; dz <= 2; dz++) offsets.push([dx, dz]);
+  }
   outer:
-  for (let y = Math.min(319, baseY + 8); y >= baseY + 1; y--) {
-    for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  for (let y = Math.min(319, baseY + 12); y >= Math.max(-64, baseY - 2); y--) {
+    for (const [dx, dz] of offsets) {
       const n = bot.blockAt(new Vec3(px + dx, y, pz + dz))?.name || 'air';
       if (airNames.has(n)) {
         probeX = px + dx;

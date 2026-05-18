@@ -450,6 +450,16 @@ async function handleChat(username, message) {
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               ACTIONS[route.action](actionBody).then((result) => {
+                const failed = !result || result.error
+                  || /\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/i.test(String(result.result || ''));
+                if (failed) {
+                  if (route.skill_id != null) {
+                    try { markLastSkillFailed(bot, route.skill_id); } catch {}
+                  }
+                  const msg = result?.error || result?.result || 'action failed';
+                  try { bot.chat(`hm, couldn't pull that off — ${String(msg).slice(0, 50)}`); } catch {}
+                  return;
+                }
                 if (result && result.result && route.action !== 'chat') {
                   log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                   try { bot.chat(String(result.result).slice(0, 80)); } catch {}
@@ -3207,7 +3217,7 @@ const httpServer = http.createServer(async (req, res) => {
     respond(res, 404, { ok: false, error: `Not found: ${req.method} ${path}` });
 
   } catch (err) {
-    const status = err.message.includes('not connected') ? 503 : 400;
+    const status = err.statusCode ?? (err.message.includes('not connected') ? 503 : 400);
     respond(res, status, { ok: false, error: err.message, state: briefState() });
   }
 });

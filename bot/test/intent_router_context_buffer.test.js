@@ -63,6 +63,16 @@ test('"to the left" shifts last action x-3', async () => {
   assert.equal(r.body.x, leftX - 3);
 });
 
+test('"to the left" twice chains -6 from original', async () => {
+  const bot = stubBot('LeftChainBot');
+  const first = await tryRoute(bot, 'build me a tower', 'Adalynn');
+  const leftX = first.body.x;
+  const r1 = await tryRoute(bot, 'to the left', 'Adalynn');
+  assert.equal(r1.body.x, leftX - 3);
+  const r2 = await tryRoute(bot, 'to the left', 'Adalynn');
+  assert.equal(r2.body.x, leftX - 6);
+});
+
 test('"over there" re-anchors at sender position', async () => {
   const bot = stubBot('HereBot');
   await tryRoute(bot, 'build me a tower', 'Adalynn');

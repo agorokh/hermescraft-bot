@@ -104,6 +104,17 @@ export function markLastSkillFailed(bot, skillId) {
   if (entry) entry.success = false;
 }
 
+/** Amend the latest buffer entry in place (directional anaphora chains without FIFO churn). */
+function updateLastSkillBody(bot, body) {
+  if (!bot?.username) return null;
+  const buf = _ctxBufByBot.get(bot.username);
+  if (!buf?.length) return null;
+  const entry = buf[buf.length - 1];
+  entry.body = { ...body };
+  entry.at = Date.now();
+  return entry.id;
+}
+
 function getLastSkill(bot) {
   const buf = _ctxBuf(bot);
   if (!buf) return null;
@@ -502,11 +513,14 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   const ctx = { sender, senderEntity, message: body, body, dryRun: opts.dryRun };
   const anaphora = _isStrictAnaphoraPhrase(body) ? _tryAnaphora(bot, body, ctx) : null;
   if (anaphora) {
-    // Pure repeats amend the last body but must not push duplicate buffer entries.
-    const recordAnaphora = !opts.dryRun && ['higher', 'shorter'].includes(anaphora.anaphora);
-    const skill_id = recordAnaphora
-      ? recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body, body)
-      : null;
+    let skill_id = null;
+    if (!opts.dryRun) {
+      if (['higher', 'shorter'].includes(anaphora.anaphora)) {
+        skill_id = recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body, body);
+      } else if (['left', 'right', 'here'].includes(anaphora.anaphora)) {
+        skill_id = updateLastSkillBody(bot, anaphora.body);
+      }
+    }
     return {
       matched: true,
       intent_name: anaphora.intent_name,

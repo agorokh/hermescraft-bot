@@ -66,6 +66,18 @@ function normalizeQuestItemName(item) {
   return String(item).toLowerCase().replace(/^minecraft:/, '');
 }
 
+function itemNameFromCollectEntity(collected) {
+  if (!collected) return null;
+  if (typeof collected.getDroppedItem === 'function') {
+    const stack = collected.getDroppedItem();
+    if (stack?.name) return stack.name;
+    if (stack?.displayName) return stack.displayName;
+  }
+  const metaItem = collected.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
+  if (metaItem) return metaItem;
+  return collected.name || collected.displayName || null;
+}
+
 function questItemNamesMatch(triggerItem, eventItem) {
   const want = normalizeQuestItemName(triggerItem);
   const got = normalizeQuestItemName(eventItem);
@@ -294,9 +306,7 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   };
   const onCollect = async (collector, collected) => {
     if (!collector || collector.username === bot.username) return;
-    const itemName = collected?.name
-      || collected?.displayName
-      || collected?.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
+    const itemName = itemNameFromCollectEntity(collected);
     for (const q of myQuests) await advance(q, { kind: 'player_collected', player: collector.username, item: itemName });
   };
 

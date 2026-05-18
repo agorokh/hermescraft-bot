@@ -168,7 +168,7 @@ const ANAPHORA_RULES = [
   // appliesTo matches action or intent_name on the buffer entry.
   {
     pattern: /^(to the left|left more|further left)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area', 'collect', 'fight', 'place_near_player', 'give_to_player'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
     amend: (entry, bot, ctx) => {
       const { dx, dz } = _playerRelativeOffset(bot, ctx, 3, 'left');
       return _shiftAnchorBody(entry.body, dx, 0, dz);
@@ -177,7 +177,7 @@ const ANAPHORA_RULES = [
   },
   {
     pattern: /^(to the right|right more|further right)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area', 'collect', 'fight', 'place_near_player', 'give_to_player'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
     amend: (entry, bot, ctx) => {
       const { dx, dz } = _playerRelativeOffset(bot, ctx, 3, 'right');
       return _shiftAnchorBody(entry.body, dx, 0, dz);
@@ -186,7 +186,7 @@ const ANAPHORA_RULES = [
   },
   {
     pattern: /^(over there|over here|right here|here)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area', 'collect', 'fight', 'place_near_player', 'give_to_player'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
     amend: (entry, bot, ctx) => {
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return { ...entry.body };
@@ -195,6 +195,11 @@ const ANAPHORA_RULES = [
     label: 'here',
   },
 ];
+
+function _bodyHasSpatialAnchor(body) {
+  if (!body) return false;
+  return 'x' in body || 'y' in body || 'z' in body || 'cx' in body || 'cy' in body || 'cz' in body;
+}
 
 function _anaphoraApplies(rule, last) {
   if (!rule.appliesTo) return true;
@@ -258,6 +263,7 @@ function _tryAnaphora(bot, body, ctx) {
     if (!rule.pattern.test(body.trim())) continue;
     if (!_anaphoraApplies(rule, last)) continue;
     const newBody = rule.amend(last, bot, ctx);
+    if (['left', 'right', 'here'].includes(rule.label) && !_bodyHasSpatialAnchor(newBody)) continue;
     return {
       action: last.action,
       body: newBody,
@@ -537,10 +543,18 @@ const DISPATCHERS = {
   // body is deep-cloned (shallow spread) so callers that mutate the body
   // — e.g. anaphora 'higher' incrementing height — don't corrupt the
   // cached context entry. (cursor PR review catch.)
-  repeat_last_action: (bot) => {
+  repeat_last_action: async (bot, ctx) => {
     const last = getLastSkill(bot);
-    if (!last || last.success === false || !last.action || !last.body) return null;
-    return { action: last.action, body: { ...last.body } };
+    if (!last || last.success === false) return null;
+    if (last.intent_name && /^emote_/.test(last.intent_name)) {
+      const dispatch = DISPATCHERS[last.intent_name];
+      if (dispatch) {
+        const decision = await Promise.resolve(dispatch(bot, { ...ctx, dryRun: ctx.dryRun }));
+        if (decision) return { ...decision, intent_name: last.intent_name };
+      }
+    }
+    if (!last.action || !last.body) return null;
+    return { action: last.action, body: { ...last.body }, intent_name: last.intent_name };
   },
 };
 

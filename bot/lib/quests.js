@@ -246,6 +246,8 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   for (const q of myQuests) {
     if (!botState.has(q.name)) {
       botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now(), anchor: null });
+    } else if (botState.get(q.name).status === 'done') {
+      botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now(), anchor: null, last_chatter: null });
     }
   }
   log && log(`[quests] ${botName} watching ${myQuests.length} quests: ${myQuests.map((q) => q.name).join(', ')}`);

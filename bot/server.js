@@ -91,7 +91,9 @@ async function tryRoute(bot, body, sender) {
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
   // Clarify/OOV zones defer to the brain — do not let regex steal ambiguous utterances.
-  if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov') return nlp;
+  if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
+    return nlp;
+  }
   const regex = await tryRouteRegex(bot, body, sender);
   if (regex.matched) {
     // Annotate so the log line shows it was a fallback decision

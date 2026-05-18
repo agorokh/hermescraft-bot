@@ -107,7 +107,8 @@ const INTENTS = [
   {
     name: 'emote_jump',
     patterns: [
-      /\bjump( around|for me|please|now)?\b/i,
+      /^\s*jump[\s!.,?]*$/i,
+      /\bjump (around|for me|please|now)\b/i,
       /\bdo a jump\b/i,
     ],
     async handler(bot, ctx) {
@@ -118,7 +119,8 @@ const INTENTS = [
   {
     name: 'emote_dance',
     patterns: [
-      /\bdance( with me| for me| please| now)?\b/i,
+      /^\s*dance[\s!.,?]*$/i,
+      /\bdance (with me|for me|please|now)\b/i,
       /\bdo a dance\b/i,
     ],
     async handler(bot, ctx) {

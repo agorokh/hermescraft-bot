@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tryRoute, recordLastSkill } from '../lib/intent_router_nlp.js';
-import { tryStopRoute } from '../lib/intent_router.js';
+import { tryStopRoute, tryRoute as tryRouteRegex } from '../lib/intent_router.js';
 
 function stubBot(senderName = 'Adalynn', opts = {}) {
   const senderEntity = {
@@ -195,6 +195,21 @@ for (const k of KID_VOICE) {
     }
   });
 }
+
+test('house of ice → ice_castle schematic (keyword order)', async () => {
+  const r = await tryRoute(stubBot(), 'build a house of ice', 'Adalynn');
+  assert.equal(r.action, 'build_schematic');
+  assert.equal(r.body.name, 'ice_castle');
+});
+
+test('ride_horse phrasing is no_dispatcher and not emote_jump regex', async () => {
+  const bot = stubBot();
+  const r = await tryRoute(bot, 'i want to jump on the horse', 'Adalynn');
+  assert.equal(r.matched, false);
+  assert.equal(r.nlp_zone, 'no_dispatcher');
+  const regex = await tryRouteRegex(bot, 'i want to jump on the horse', 'Adalynn');
+  assert.equal(regex.matched, false, 'emote_jump must not steal ride_horse phrasing');
+});
 
 const STOP_CORPUS = [
   'quit it', 'knock it off', 'stahp', 'freeze', 'dont move', 'ugh stop pls', 'stop stop', 'stop stop stop',

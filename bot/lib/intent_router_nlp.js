@@ -441,7 +441,7 @@ const DISPATCHERS = {
     const yaw = ent.yaw ?? 0;
     const dist = 10;
     const dx = -Math.sin(yaw) * dist;
-    const dz = -Math.cos(yaw) * dist;
+    const dz = Math.cos(yaw) * dist;
     return {
       action: 'goto',
       body: { x: Math.floor(p.x + dx), y: Math.floor(p.y), z: Math.floor(p.z + dz) },
@@ -503,9 +503,10 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   const anaphora = _isStrictAnaphoraPhrase(body) ? _tryAnaphora(bot, body, ctx) : null;
   if (anaphora) {
     // Pure repeats amend the last body but must not push duplicate buffer entries.
-    const skill_id = (opts.dryRun || anaphora.anaphora === 'repeat')
-      ? null
-      : recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body, body);
+    const recordAnaphora = !opts.dryRun && ['higher', 'shorter'].includes(anaphora.anaphora);
+    const skill_id = recordAnaphora
+      ? recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body, body)
+      : null;
     return {
       matched: true,
       intent_name: anaphora.intent_name,

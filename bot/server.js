@@ -383,6 +383,16 @@ async function handleChat(username, message) {
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
             ACTIONS[route.action](actionBody).then((result) => {
+              const failed = !result || result.error
+                || /\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/i.test(String(result.result || ''));
+              if (failed) {
+                if (route.skill_id != null) {
+                  try { markLastSkillFailed(bot, route.skill_id); } catch {}
+                }
+                const msg = result?.error || result?.result || 'action failed';
+                try { bot.chat(`hm, couldn't pull that off — ${String(msg).slice(0, 50)}`); } catch {}
+                return;
+              }
               if (result && result.result && route.action !== 'chat') {
                 log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                 try { bot.chat(String(result.result).slice(0, 80)); } catch {}

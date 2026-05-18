@@ -458,26 +458,33 @@ async function detectSetblockAuth(bot) {
   const px = Math.floor(myPos.x);
   const pz = Math.floor(myPos.z);
   // Probe only in air so restore never wipes block state / block entities.
-  let py = null;
-  for (let y = Math.min(319, Math.floor(myPos.y) + 8); y >= Math.floor(myPos.y) + 2; y--) {
-    const n = bot.blockAt(new Vec3(px, y, pz))?.name || 'air';
-    if (n === 'air' || n === 'cave_air' || n === 'void_air') {
-      py = y;
-      break;
+  const airNames = new Set(['air', 'cave_air', 'void_air']);
+  let probeX = px, py = null, probeZ = pz;
+  const baseY = Math.floor(myPos.y);
+  outer:
+  for (let y = Math.min(319, baseY + 8); y >= baseY + 1; y--) {
+    for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const n = bot.blockAt(new Vec3(px + dx, y, pz + dz))?.name || 'air';
+      if (airNames.has(n)) {
+        probeX = px + dx;
+        py = y;
+        probeZ = pz + dz;
+        break outer;
+      }
     }
   }
   if (py == null) return false;
 
-  try { bot.chat(`/setblock ${px} ${py} ${pz} ${sentinel}`); } catch (e) {}
+  try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
   await sleep(250); // wait for the chunk update to round-trip
 
-  const after = bot.blockAt(new Vec3(px, py, pz));
+  const after = bot.blockAt(new Vec3(probeX, py, probeZ));
   const afterName = after?.name || 'air';
   const ok = afterName === sentinel;
 
   // Restore air — probe cell was empty before we touched it.
   if (ok) {
-    try { bot.chat(`/setblock ${px} ${py} ${pz} air`); } catch (e) {}
+    try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} air`); } catch (e) {}
   }
   _setblockAuthByBot.set(bot, ok);
   return ok;

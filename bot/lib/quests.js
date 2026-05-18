@@ -140,7 +140,7 @@ function evalTrigger(trigger, ctx) {
       const targetPlayer = trigger.player === '@last_chatter'
         ? ctx.last_chatter
         : trigger.player;
-      if (!targetPlayer || event.player !== targetPlayer) return false;
+      if (targetPlayer && event.player !== targetPlayer) return false;
       return questItemNamesMatch(trigger.item, event.item);
     }
 

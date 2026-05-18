@@ -221,3 +221,8 @@ for (const body of STOP_CORPUS) {
     assert.equal(r.action, 'stop');
   });
 }
+
+test('stop hot-path: does not match gameplay phrasing', async () => {
+  const r = await tryStopRoute(stubBot(), 'freeze the water', 'Adalynn');
+  assert.equal(r.matched, false);
+});

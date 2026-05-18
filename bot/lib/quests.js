@@ -88,6 +88,20 @@ function resolvePosBox(trigger, qs) {
   return trigger.box;
 }
 
+function shouldBindQuestParticipant(trigger, event) {
+  if (!event?.player) return false;
+  switch (trigger.kind) {
+    case 'player_chat':
+    case 'player_join':
+      return !trigger.player || trigger.player === event.player;
+    case 'player_has_item':
+      return event.kind === 'player_collected'
+        && (!trigger.player || trigger.player === '@last_chatter' || trigger.player === event.player);
+    default:
+      return false;
+  }
+}
+
 function evalTrigger(trigger, ctx) {
   // ctx: { bot, event (optional), now, player_pos_cache }
   const { bot, event, now } = ctx;
@@ -245,17 +259,19 @@ export async function installQuestEngine(bot, ACTIONS, log) {
       log && log(`[quests] ${q.name} finished`);
       return;
     }
-    if (eventCtx?.player && ['player_chat', 'player_join', 'player_collected'].includes(eventCtx.kind)) {
-      qs.last_chatter = eventCtx.player;
-    }
     const ctx = {
       bot,
       event: eventCtx,
       now: Date.now(),
       qstate: qs,
-      last_chatter: eventCtx?.player || qs.last_chatter,
+      last_chatter: qs.last_chatter,
     };
     if (!evalTrigger(step.trigger, ctx)) return;
+
+    if (eventCtx && shouldBindQuestParticipant(step.trigger, eventCtx)) {
+      qs.last_chatter = eventCtx.player;
+      ctx.last_chatter = eventCtx.player;
+    }
 
     qs._advancing = true;
     try {

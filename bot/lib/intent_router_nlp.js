@@ -190,7 +190,7 @@ const ANAPHORA_RULES = [
     appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
     amend: (entry, bot, ctx) => {
       const p = resolveAnchorPos(bot, ctx);
-      if (!p) return { ...entry.body };
+      if (!p) return null;
       return _setAnchorBody(entry.body, Math.floor(p.x), Math.floor(p.y), Math.floor(p.z));
     },
     label: 'here',
@@ -264,6 +264,7 @@ function _tryAnaphora(bot, body, ctx) {
     if (!rule.pattern.test(body.trim())) continue;
     if (!_anaphoraApplies(rule, last)) continue;
     const newBody = rule.amend(last, bot, ctx);
+    if (!newBody) continue;
     if (['left', 'right', 'here'].includes(rule.label) && !_bodyHasSpatialAnchor(newBody)) continue;
     return {
       action: last.action,
@@ -630,7 +631,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     : recordLastSkill(bot, intent, decision.action, decision.body, body);
   return {
     matched: true,
-    intent_name: intent,
+    intent_name: decision.intent_name || intent,
     action: decision.action,
     body: decision.body,
     skill_id,

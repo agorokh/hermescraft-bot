@@ -75,9 +75,14 @@ function _ctxBuf(bot) {
   return fresh.length > 0 ? fresh : null;
 }
 
+// Chat ACK placeholders (fish/farm/cook) must not evict build skills from the buffer;
+// conversational chat intents may repeat ("say something nice" → "do it again").
+const CHAT_BUFFER_INTENTS = new Set(['give_compliment', 'show_me_diamonds', 'ask_about_pet']);
+
 export function recordLastSkill(bot, intent_name, action, body, message) {
   // Stop is a safety primitive — never pollute the repeat/anaphora buffer.
-  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action' || intent_name === 'stop' || action === 'stop' || action === 'chat') return null;
+  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action' || intent_name === 'stop' || action === 'stop') return null;
+  if (action === 'chat' && !CHAT_BUFFER_INTENTS.has(intent_name)) return null;
   const entry = {
     id: ++_skillSeq,
     intent_name,

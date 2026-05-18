@@ -81,8 +81,8 @@ const INTENTS = [
   {
     name: 'emote_wave',
     patterns: [
-      /\bwave( at me)?\b/i,
-      /\bsay hi\b.*\bwith.*\b(wave|hand)\b/i,
+      /\b(wave at me|wave to me|wave hello|give me a wave)\b/i,
+      /\b(say hi|say hello).*\b(wave|hand)\b/i,
     ],
     async handler(bot, ctx) {
       await runEmoteWave(bot, ctx.dryRun);

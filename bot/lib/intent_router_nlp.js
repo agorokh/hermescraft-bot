@@ -410,7 +410,12 @@ const DISPATCHERS = {
   // catch.) Use duration 30s for defend (longer holdout) vs 15s for attack
   // (one-and-done feel).
   defend_me: () => ({ action: 'fight', body: { duration: 30, retreat_health: 8 } }),
-  attack_mob: () => ({ action: 'fight', body: { duration: 15 } }),
+  attack_mob: (_bot, ctx) => {
+    const mobMatch = ctx.body.match(/\b(zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i);
+    const body = { duration: 15 };
+    if (mobMatch) body.target = mobMatch[1].toLowerCase();
+    return { action: 'fight', body };
+  },
 
   // light_area: schematic-grade lighting around the kid's position.
   light_area: (bot, ctx) => {
@@ -487,6 +492,10 @@ const DISPATCHERS = {
   repeat_last_action: async (bot, ctx) => {
     const last = getLastSkill(bot);
     if (!last || last.success === false) return null;
+    // Replay the amended buffer body (anaphora chains), not the original utterance.
+    if (last.action && last.body) {
+      return { action: last.action, body: { ...last.body } };
+    }
     const replayCtx = last.message
       ? { ...ctx, body: last.message, message: last.message }
       : ctx;
@@ -495,7 +504,7 @@ const DISPATCHERS = {
       const decision = await Promise.resolve(redispatch(bot, replayCtx));
       if (decision) return { action: decision.action, body: { ...decision.body } };
     }
-    return { action: last.action, body: { ...last.body } };
+    return null;
   },
 };
 

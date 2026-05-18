@@ -88,6 +88,15 @@ test('anaphora with no prior skill does not replay via anaphora buffer', async (
   assert.notEqual(r.nlp_zone, 'anaphora', `anaphora fired without history: action=${r.action}`);
 });
 
+test('"do it again" replays amended height after higher', async () => {
+  const bot = stubBot('RepeatHeightBot');
+  await tryRoute(bot, 'build me a 5 tall tower', 'Adalynn');
+  await tryRoute(bot, 'higher', 'Adalynn');
+  const again = await tryRoute(bot, 'do it again', 'Adalynn');
+  assert.equal(again.action, 'build_tower');
+  assert.equal(again.body.height, 7);
+});
+
 test('chain: tower → higher → higher (height + 4)', async () => {
   const bot = stubBot('ChainBot');
   const first = await tryRoute(bot, 'build me a 5 tall tower', 'Adalynn');

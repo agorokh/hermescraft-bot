@@ -610,9 +610,12 @@ async function build_schematic(bot, { name, x, y, z }) {
 async function list_schematics(bot, _body) {
   try {
     const idx = await loadSchematicIndex();
-    const names = Object.entries(idx.schematics || {}).map(
-      ([name, entry]) => `${name} (${entry.footprint?.join('x')}x${entry.height}: ${entry.summary})`
-    );
+    const names = Object.entries(idx.schematics || {}).map(([name, entry]) => {
+      const fw = entry.footprint?.[0] ?? '?';
+      const fl = entry.footprint?.[1] ?? '?';
+      const h = entry.height ?? '?';
+      return `${name} (${fw}x${fl}x${h}: ${entry.summary || ''})`;
+    });
     return { result: names.length > 0 ? names.join('; ') : 'No schematics available.' };
   } catch (e) {
     return { result: `Couldn't load schematic index: ${e.message}` };

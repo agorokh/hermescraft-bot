@@ -181,7 +181,7 @@ async function executeAction(ACTIONS, bot, action, ctx) {
       }
       if (!ACTIONS.build_schematic) return { error: 'no build_schematic action' };
       const result = await ACTIONS.build_schematic({ name, x, y, z });
-      if (x != null && y != null && z != null && !result?.error) {
+      if (x != null && y != null && z != null && !actionOutcomeFailed(result)) {
         ctx.qstate.anchor = { x, y, z };
       }
       return result;

@@ -58,6 +58,7 @@ import {
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
+import { actionOutcomeFailed } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
 // NLP.js router (council-led migration, 3 rounds of Gemini+Mistral review).
@@ -111,21 +112,6 @@ function actionBodyForRoute(route) {
   if (message == null) return body;
   // Router replies are always in-game chat — never auto-steal into voice.
   return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true };
-}
-
-function routedActionFailed(result) {
-  if (!result || result.error) return true;
-  const text = String(result.result || '');
-  if (/\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/i.test(text)) {
-    return true;
-  }
-  const ratio = text.match(/\b(\d+)\s*\/\s*(\d+)\b/);
-  if (ratio) {
-    const num = parseInt(ratio[1], 10);
-    const den = parseInt(ratio[2], 10);
-    if (den > 0 && num < den) return true;
-  }
-  return false;
 }
 
 async function shadowRoute(bot, body, sender, primaryResult) {
@@ -398,7 +384,7 @@ async function handleChat(username, message) {
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
             ACTIONS[route.action](actionBody).then((result) => {
-              if (routedActionFailed(result)) {
+              if (actionOutcomeFailed(result)) {
                 if (route.skill_id != null) {
                   try { markLastSkillFailed(bot, route.skill_id); } catch {}
                 }
@@ -463,7 +449,7 @@ async function handleChat(username, message) {
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               ACTIONS[route.action](actionBody).then((result) => {
-                if (routedActionFailed(result)) {
+                if (actionOutcomeFailed(result)) {
                   if (route.skill_id != null) {
                     try { markLastSkillFailed(bot, route.skill_id); } catch {}
                   }
@@ -564,6 +550,7 @@ async function createBot() {
       moves.canDig = true;
       moves.allowParkour = true;
       bot.pathfinder.setMovements(moves);
+      bot.interrupt_code = false;
 
       // Configure auto-eat
       bot.autoEat.options = {
@@ -1653,6 +1640,7 @@ const ACTIONS = {
 
   async stop() {
     const b = ensureBot();
+    b.interrupt_code = true;
     b.pathfinder.setGoal(null);
     try { b.stopDigging(); } catch {}
     if (b.pvp) try { b.pvp.stop(); } catch {}
@@ -3150,6 +3138,7 @@ const httpServer = http.createServer(async (req, res) => {
       // Cancel current task
       if (path === '/task/cancel') {
         const b = ensureBot();
+        b.interrupt_code = true;
         b.pathfinder.setGoal(null);
         try { b.stopDigging(); } catch {}
         if (currentTask && currentTask.status === 'running') {

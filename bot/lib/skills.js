@@ -36,6 +36,10 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 // Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
 const SETBLOCK_CHAT_INTERVAL_MS = 150;
 
+function beginSkill(bot) {
+  bot.interrupt_code = false;
+}
+
 // ── helpers ──────────────────────────────────────────────────────────
 
 function findInventoryItem(bot, itemName) {
@@ -157,6 +161,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
 // position via entity state, pick an adjacent open cell, and place.
 
 async function place_near_player(bot, { player, item, direction = 'side' }) {
+  beginSkill(bot);
   if (!player || !item) {
     return { result: `place_near_player needs player + item` };
   }
@@ -209,6 +214,7 @@ async function place_near_player(bot, { player, item, direction = 'side' }) {
 // confirm pickup. Returns English description.
 
 async function give_to_player(bot, { player, item, count = 1 }) {
+  beginSkill(bot);
   if (!player || !item) return { result: `give_to_player needs player + item` };
   const entity = findPlayerEntity(bot, player);
   if (!entity) return { result: `Can't see ${player} nearby.` };
@@ -277,6 +283,7 @@ async function give_to_player(bot, { player, item, count = 1 }) {
 // placeBlock when the ref is exactly below feet.
 
 async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }) {
+  beginSkill(bot);
   if (x == null || y == null || z == null) return { result: `build_tower needs x, y, z` };
   height = Math.max(1, Math.min(20, Math.floor(height)));
 
@@ -358,6 +365,7 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
 // is 6 blocks (vanilla torch effective light-suppression range is ~7).
 
 async function light_area(bot, { cx, cy, cz, radius = 6 }) {
+  beginSkill(bot);
   if (cx == null || cy == null || cz == null) return { result: `light_area needs cx, cy, cz` };
   radius = Math.max(2, Math.min(16, Math.floor(radius)));
   const stride = 6;
@@ -495,6 +503,7 @@ async function detectSetblockAuth(bot) {
 }
 
 async function build_schematic(bot, { name, x, y, z }) {
+  beginSkill(bot);
   if (!name) return { result: `build_schematic needs a schematic name` };
   if (x == null || y == null || z == null) return { result: `build_schematic needs x, y, z origin` };
 

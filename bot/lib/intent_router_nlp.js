@@ -301,7 +301,7 @@ const DISPATCHERS = {
       cobblestone: 'cobblestone', sand: 'sand',
     };
     const block = blockMap[raw] || 'oak_log';
-    const countMatch = ctx.body.match(/\b(\d+)\s*(wood|logs?|dirt|stone|cobble|sand)/i);
+    const countMatch = ctx.body.match(/\b(\d+)\s*(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i);
     const count = countMatch ? parseInt(countMatch[1], 10) : 4;
     return { action: 'collect', body: { block, count: Math.min(count, 16) } };
   },

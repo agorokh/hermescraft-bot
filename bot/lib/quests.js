@@ -23,6 +23,7 @@
 import { readFile, readdir } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { actionOutcomeFailed } from './action_outcome.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -138,23 +139,6 @@ function evalTrigger(trigger, ctx) {
     case 'always': return true;
     default: return false;
   }
-}
-
-function skillOutcomeFailed(result) {
-  if (!result) return true;
-  if (result.error) return true;
-  const text = String(result.result || '');
-  const lower = text.toLowerCase();
-  if (/\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/.test(lower)) {
-    return true;
-  }
-  const ratio = text.match(/\b(\d+)\s*\/\s*(\d+)\b/);
-  if (ratio) {
-    const num = parseInt(ratio[1], 10);
-    const den = parseInt(ratio[2], 10);
-    if (den > 0 && num < den) return true;
-  }
-  return false;
 }
 
 async function executeAction(ACTIONS, bot, action, ctx) {
@@ -280,7 +264,7 @@ export async function installQuestEngine(bot, ACTIONS, log) {
       for (const action of (step.actions || [])) {
         try {
           const result = await executeAction(ACTIONS, bot, action, ctx);
-          if (skillOutcomeFailed(result)) {
+          if (actionOutcomeFailed(result)) {
             stepOk = false;
             log && log(`[quests] action failed: ${result?.error || result?.result || 'unknown'}`);
           }

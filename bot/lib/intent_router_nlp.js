@@ -77,7 +77,7 @@ function _ctxBuf(bot) {
 
 export function recordLastSkill(bot, intent_name, action, body, message) {
   // Stop is a safety primitive — never pollute the repeat/anaphora buffer.
-  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action' || intent_name === 'stop' || action === 'stop') return null;
+  if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action' || intent_name === 'stop' || action === 'stop' || action === 'chat') return null;
   const entry = {
     id: ++_skillSeq,
     intent_name,

@@ -540,6 +540,7 @@ async function build_schematic(bot, { name, x, y, z }) {
   bot._schematicBuildActive = true;
   let placed = 0;
   let failed = 0;
+  let unverified = 0;
   const missing = new Set();
   try {
   // Pathfind near the origin (footprint center) only when we'll actually
@@ -579,7 +580,7 @@ async function build_schematic(bot, { name, x, y, z }) {
         // Wait for server + world sync, then verify before counting success.
         await sleep(SETBLOCK_CHAT_INTERVAL_MS);
         const readback = bot.blockAt(new Vec3(tx, ty, tz));
-        if (!readback) { /* chunk unloaded — don't count as placed or failed */ }
+        if (!readback) unverified++;
         else if (blockAtMatches(bot, tx, ty, tz, block)) placed++;
         else failed++;
       } catch (e) {
@@ -609,13 +610,14 @@ async function build_schematic(bot, { name, x, y, z }) {
   }
 
   const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
+  const unverifiedStr = unverified > 0 ? ` ${unverified} cells unverified (chunk unloaded).` : '';
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
   const total = solidBlocks.length;
   if (placed === total && total > 0) {
-    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${total} blocks placed${mode}.` };
+    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${total} blocks placed${mode}.${unverifiedStr}` };
   }
   return {
-    result: `Built ${placed}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}`,
+    result: `Built ${placed}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}${unverifiedStr}`,
   };
   } finally {
     bot._schematicBuildActive = false;

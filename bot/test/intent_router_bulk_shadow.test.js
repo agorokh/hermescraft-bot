@@ -10,9 +10,9 @@ import assert from 'node:assert/strict';
 import { tryRoute as tryRegex } from '../lib/intent_router.js';
 import { tryRoute as tryNlp } from '../lib/intent_router_nlp.js';
 
-function stubBot() {
+function stubBot(name = 'Rosie') {
   return {
-    username: 'Rosie',
+    username: name,
     entity: { position: { x: 5, y: 64, z: 5 }, yaw: 0 },
     players: { Adalynn: { entity: { type: 'player', username: 'Adalynn', position: { x: 0, y: 64, z: 0 } } } },
     entities: {},
@@ -148,8 +148,9 @@ test('bulk shadow agreement report', async () => {
   let agree = 0, differ = 0;
   const samples_per_action = {};
   const disagreements = [];
-  for (const body of UTTERANCES) {
-    const bot = stubBot();
+  for (let i = 0; i < UTTERANCES.length; i++) {
+    const body = UTTERANCES[i];
+    const bot = stubBot(`ShadowBot${i}`);
     const r = await tryRegex(bot, body, 'Adalynn');
     const n = await tryNlp(bot, body, 'Adalynn');
     const r_action = r.matched ? r.action : 'none';

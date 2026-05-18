@@ -175,7 +175,7 @@ test('show_me_diamonds: DIAMONDS yay → chat ack', async () => {
 const KID_VOICE = [
   { body: 'rosie come heeeere', want_routed: true },
   { body: 'kill it kill it', want_routed: true },
-  { body: 'i need fish for food', want_routed: null }, // fish_for_food intent exists but dispatcher returns null → fall through OK
+  { body: 'i need fish for food', want_routed: 'chat' }, // fish_for_food → instant chat ACK (not a build skill)
   { body: 'wait WAIT', want_routed: false }, // fragment
   { body: 'lol you are funny', want_routed: false }, // pure chat
 ];
@@ -184,6 +184,10 @@ for (const k of KID_VOICE) {
     const r = await tryRoute(stubBot(), k.body, 'Adalynn');
     if (k.want_routed === true) {
       assert.equal(r.matched, true, `expected route for "${k.body}": zone=${r.nlp_zone} intent=${r.nlp_intent}`);
+    }
+    if (k.want_routed === 'chat') {
+      assert.equal(r.matched, true, `expected chat ACK for "${k.body}": zone=${r.nlp_zone}`);
+      assert.equal(r.action, 'chat');
     }
     if (k.want_routed === false && r.matched) {
       assert.fail(`pure chat fired skill: ${r.action} (zone=${r.nlp_zone})`);

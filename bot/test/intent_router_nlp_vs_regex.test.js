@@ -1,5 +1,4 @@
-// Head-to-head: NLP.js router (intent_router_nlp.js) vs regex router
-// vs regex router (intent_router.js, 42 hand-rolled patterns).
+// Head-to-head: NLP.js router (intent_router_nlp.js) vs regex router (intent_router.js).
 //
 // Acceptance bar for shipping the NLP router as default: it must match the
 // regex on the canonical 6 kid prompts AND correctly REJECT out-of-vocab

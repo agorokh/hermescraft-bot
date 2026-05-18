@@ -94,6 +94,10 @@ export function recordLastSkill(bot, intent_name, action, body, message) {
   return entry.id;
 }
 
+export function resetContextBuffer(bot) {
+  if (bot?.username) _ctxBufByBot.delete(bot.username);
+}
+
 export function markLastSkillFailed(bot, skillId) {
   if (!bot || !bot.username) return;
   const buf = _ctxBufByBot.get(bot.username);

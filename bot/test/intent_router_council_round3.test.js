@@ -79,8 +79,8 @@ test('compound-modifier corpus: ≥70% must fire OR clarify (no silent drops)', 
 // ── ANAPHORA-ON-FAILURE (Gemini) ────────────────────────────────────────────
 test('repeat_last_action does NOT replay a failed action', async () => {
   const bot = stubBot('FailRepeatBot');
-  await tryRoute(bot, 'build me a tower', 'Adalynn');
-  markLastSkillFailed(bot);
+  const first = await tryRoute(bot, 'build me a tower', 'Adalynn');
+  markLastSkillFailed(bot, first.skill_id);
   const replay = await tryRoute(bot, 'do it again', 'Adalynn');
   assert.notEqual(replay.nlp_zone, 'act', `repeat_last_action replayed failed skill: ${JSON.stringify(replay)}`);
 });
@@ -90,7 +90,7 @@ test('anaphora does NOT replay a failed action', async () => {
   const first = await tryRoute(bot, 'build me a tower', 'Adalynn');
   assert.equal(first.action, 'build_tower');
   // Simulate the action failing in production (no materials, blocked, etc.)
-  markLastSkillFailed(bot);
+  markLastSkillFailed(bot, first.skill_id);
   const replay = await tryRoute(bot, 'another one', 'Adalynn');
   // Anaphora must NOT have fired. Either: matched=false, OR matched via NLP
   // (not via anaphora) — i.e. zone != 'anaphora'.
@@ -109,8 +109,8 @@ test('anaphora DOES replay a successful action', async () => {
 
 test('anaphora on "higher" after failed tower also blocked', async () => {
   const bot = stubBot('HigherFailBot');
-  await tryRoute(bot, 'build me a tower', 'Adalynn');
-  markLastSkillFailed(bot);
+  const first = await tryRoute(bot, 'build me a tower', 'Adalynn');
+  markLastSkillFailed(bot, first.skill_id);
   const higher = await tryRoute(bot, 'higher', 'Adalynn');
   assert.notEqual(higher.nlp_zone, 'anaphora', `higher amended a failed action: zone=${higher.nlp_zone}`);
 });

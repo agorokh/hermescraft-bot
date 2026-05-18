@@ -4,10 +4,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tryRoute } from '../lib/intent_router_nlp.js';
+import { tryRoute, resetContextBuffer, markLastSkillFailed } from '../lib/intent_router_nlp.js';
 
 function stubBot(name = 'Rosie') {
-  return {
+  const bot = {
     username: name,
     entity: { position: { x: 5, y: 64, z: 5 }, yaw: 0 },
     players: { Adalynn: { entity: { type: 'player', username: 'Adalynn', position: { x: 0, y: 64, z: 0 } } } },
@@ -15,7 +15,20 @@ function stubBot(name = 'Rosie') {
     inventory: { items: () => [{ name: 'oak_planks', count: 64 }, { name: 'torch', count: 8 }] },
     blockAt: () => ({ name: 'air' }),
   };
+  resetContextBuffer(bot);
+  return bot;
 }
+
+test('failed anaphora repeat (null skill_id) does not poison buffer', async () => {
+  const bot = stubBot('PoisonBot');
+  await tryRoute(bot, 'build me a 5 tall tower', 'Adalynn');
+  const dup = await tryRoute(bot, 'another one', 'Adalynn');
+  assert.equal(dup.skill_id, null);
+  markLastSkillFailed(bot, null);
+  const higher = await tryRoute(bot, 'higher', 'Adalynn');
+  assert.equal(higher.nlp_zone, 'anaphora');
+  assert.equal(higher.body.height, 7);
+});
 
 test('"higher" after tower bumps height +2', async () => {
   const bot = stubBot();

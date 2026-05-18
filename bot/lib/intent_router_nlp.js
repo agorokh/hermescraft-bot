@@ -104,12 +104,10 @@ export function resetContextBuffer(bot) {
 }
 
 export function markLastSkillFailed(bot, skillId) {
-  if (!bot || !bot.username) return;
+  if (!bot || !bot.username || skillId == null) return;
   const buf = _ctxBufByBot.get(bot.username);
   if (!buf || buf.length === 0) return;
-  const entry = skillId != null
-    ? buf.find((e) => e.id === skillId)
-    : buf[buf.length - 1];
+  const entry = buf.find((e) => e.id === skillId);
   if (entry) entry.success = false;
 }
 

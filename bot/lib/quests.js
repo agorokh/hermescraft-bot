@@ -232,6 +232,11 @@ async function executeAction(ACTIONS, bot, action, ctx) {
   }
 }
 
+function questOwnerMatches(questOwner, botName) {
+  if (!questOwner || questOwner === 'both') return true;
+  return String(questOwner).toLowerCase() === String(botName).toLowerCase();
+}
+
 // ── Public installer ──────────────────────────────────────────────────
 
 export async function installQuestEngine(bot, ACTIONS, log) {
@@ -245,7 +250,7 @@ export async function installQuestEngine(bot, ACTIONS, log) {
     return () => {};
   }
 
-  const myQuests = quests.filter((q) => !q.owner || q.owner === 'both' || q.owner === botName);
+  const myQuests = quests.filter((q) => questOwnerMatches(q.owner, botName));
   for (const q of myQuests) {
     if (!botState.has(q.name)) {
       botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now(), anchor: null });

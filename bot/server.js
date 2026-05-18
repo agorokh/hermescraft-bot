@@ -159,6 +159,7 @@ import { installQuestEngine } from './lib/quests.js';
 
 let _bark_tear_down = null;
 let _quest_tear_down = null;
+let _quest_install_gen = 0;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
 const DATA_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'data');
@@ -622,8 +623,14 @@ async function createBot() {
       // Loads vendor/hermescraft/bot/quests/*.json and watches for player
       // chat, position, item-collect, timer triggers.
       try {
+        _quest_install_gen++;
+        const installGen = _quest_install_gen;
         if (_quest_tear_down) _quest_tear_down();
         installQuestEngine(bot, ACTIONS, log).then((teardown) => {
+          if (installGen !== _quest_install_gen) {
+            try { teardown(); } catch {}
+            return;
+          }
           _quest_tear_down = teardown;
         }).catch((e) => log(`quest engine install failed: ${e.message}`));
       } catch (e) {
@@ -726,6 +733,7 @@ async function createBot() {
         positionHistory = []; // clear stuck detection history
         if (bot?._soundCheckInterval) { clearInterval(bot._soundCheckInterval); bot._soundCheckInterval = null; }
         try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch (e) {}
+        _quest_install_gen++;
         try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch (e) {}
         
         // In hardcore mode, death = permanent. Don't reconnect.

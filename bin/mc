@@ -483,7 +483,12 @@ except: print(sys.argv[1])
         fi
         ;;
 
-    commands|cmds|queue)
+    commands|cmds)
+        # claim=1 starts the voice auto-correlate window (brain dequeue path).
+        pretty "$(api_get '/commands?claim=1')"
+        ;;
+    queue)
+        # Read-only peek — does not stamp voice dispatch timestamps.
         pretty "$(api_get '/commands')"
         ;;
 

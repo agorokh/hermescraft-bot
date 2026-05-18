@@ -2259,12 +2259,11 @@ const ACTIONS = {
       const oldest = commandQueue
         .filter(c => c.status === 'pending')
         .sort((a, b) => a.time - b.time)[0];
-      if (oldest && oldest.source === 'voice' && _pendingVoiceTurns.has(oldest.id)) {
-        const turn = _pendingVoiceTurns.get(oldest.id);
-        if (!turn.dispatched_ts) turn.dispatched_ts = now;
-        if ((now - turn.dispatched_ts) <= VOICE_AUTOCORRELATE_MS) {
-          voiceTurn = turn;
-        }
+      if (oldest && oldest.source === 'voice'
+          && _pendingVoiceTurns.has(oldest.id)
+          && _pendingVoiceTurns.get(oldest.id).dispatched_ts
+          && (now - _pendingVoiceTurns.get(oldest.id).dispatched_ts) <= VOICE_AUTOCORRELATE_MS) {
+        voiceTurn = _pendingVoiceTurns.get(oldest.id);
       }
       // Otherwise (oldest is a chat turn OR no pending OR voice not yet
       // dispatched OR voice age past window): fall through to bot.chat().

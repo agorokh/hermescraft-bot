@@ -7,7 +7,8 @@ export function collapseKidStretch(s) {
 
 /** @returns {'iron'|'coal'|'diamond'|'copper'|'gold'|null} */
 export function extractOreFromBody(body) {
-  const m = body.match(/\b(irons+|coals+|diamonds+|coppers+|golds+|iron|coal|diamond|copper|gold)\b/i);
+  const normalized = collapseKidStretch(body);
+  const m = normalized.match(/\b(irons+|coals+|diamonds+|coppers+|golds+|iron|coal|diamond|copper|gold)\b/i);
   if (!m) return null;
   const t = collapseKidStretch(m[1].toLowerCase());
   for (const ore of ['diamond', 'iron', 'coal', 'copper', 'gold']) {
@@ -24,7 +25,8 @@ const GATHER_BLOCK = {
 
 /** @returns {string|null} minecraft block id */
 export function extractGatherBlockFromBody(body) {
-  const m = body.match(/\b(woods+|logs+|oaks+|dirts+|stones+|cobblestones+|cobbles+|sands+|wood|log|logs|oak|dirt|stone|cobblestone|cobble|sand)\b/i);
+  const normalized = collapseKidStretch(body);
+  const m = normalized.match(/\b(woods+|logs+|oaks+|dirts+|stones+|cobblestones+|cobbles+|sands+|wood|log|logs|oak|dirt|stone|cobblestone|cobble|sand)\b/i);
   if (!m) return null;
   const t = collapseKidStretch(m[1].toLowerCase());
   if (t.startsWith('wood')) return GATHER_BLOCK.wood;

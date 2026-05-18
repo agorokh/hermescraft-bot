@@ -112,7 +112,10 @@ function evalTrigger(trigger, ctx) {
 
     case 'player_chat': {
       if (!event || event.kind !== 'player_chat') return false;
-      if (trigger.player && event.player !== trigger.player) return false;
+      const targetPlayer = trigger.player === '@last_chatter'
+        ? ctx.last_chatter
+        : trigger.player;
+      if (targetPlayer && event.player !== targetPlayer) return false;
       try {
         const re = new RegExp(trigger.regex, trigger.flags || 'i');
         return re.test(event.message);

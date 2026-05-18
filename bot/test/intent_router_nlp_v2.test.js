@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tryRoute, recordLastSkill } from '../lib/intent_router_nlp.js';
+import { tryStopRoute } from '../lib/intent_router.js';
 
 function stubBot(senderName = 'Adalynn', opts = {}) {
   const senderEntity = {
@@ -175,7 +176,7 @@ test('show_me_diamonds: DIAMONDS yay → chat ack', async () => {
 const KID_VOICE = [
   { body: 'rosie come heeeere', want_routed: true },
   { body: 'kill it kill it', want_routed: true },
-  { body: 'i need fish for food', want_routed: 'chat' }, // fish_for_food → instant chat ACK (not a build skill)
+  { body: 'i need fish for food', want_routed: false }, // fish_for_food → brain queue (no chat stub)
   { body: 'wait WAIT', want_routed: false }, // fragment
   { body: 'lol you are funny', want_routed: false }, // pure chat
 ];
@@ -192,5 +193,16 @@ for (const k of KID_VOICE) {
     if (k.want_routed === false && r.matched) {
       assert.fail(`pure chat fired skill: ${r.action} (zone=${r.nlp_zone})`);
     }
+  });
+}
+
+const STOP_CORPUS = [
+  'quit it', 'knock it off', 'stahp', 'freeze', 'dont move', 'ugh stop pls', 'stop stop stop',
+];
+for (const body of STOP_CORPUS) {
+  test(`stop hot-path: "${body}"`, async () => {
+    const r = await tryStopRoute(stubBot(), body, 'Adalynn');
+    assert.equal(r.matched, true, `expected stop for "${body}"`);
+    assert.equal(r.action, 'stop');
   });
 }

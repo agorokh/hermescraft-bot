@@ -2076,11 +2076,32 @@ const ACTIONS = {
       };
       b.on('message', onMsg);
       try { b.chat(cmd); } catch (e) { /* fall through */ }
-      setTimeout(() => {
+      setTimeout(async () => {
         if (!resolved) {
           resolved = true;
           b.removeListener('message', onMsg);
-          resolve({ ok: false, reason: 'timeout', via: 'vanilla_fill' });
+          // Servers with command feedback disabled succeed silently — probe blocks.
+          await sleep(300);
+          const norm = (n) => String(n || '').toLowerCase().replace(/^minecraft:/, '');
+          const want = norm(blockName);
+          const probes = [
+            [minX, minY, minZ],
+            [maxX, maxY, maxZ],
+            [Math.floor((minX + maxX) / 2), Math.floor((minY + maxY) / 2), Math.floor((minZ + maxZ) / 2)],
+          ];
+          let verified = false;
+          for (const [px, py, pz] of probes) {
+            const blk = b.blockAt(new Vec3(px, py, pz));
+            if (blk && norm(blk.name) === want) {
+              verified = true;
+              break;
+            }
+          }
+          if (verified) {
+            resolve({ ok: true, placed: total, via: 'vanilla_fill_silent' });
+          } else {
+            resolve({ ok: false, reason: 'timeout', via: 'vanilla_fill' });
+          }
         }
       }, 4000);
     });

@@ -255,32 +255,27 @@ let _trainPromise = null;
 
 async function ensureTrained() {
   if (_nlp) return _nlp;
-  if (_trainPromise) {
-    try {
-      return await _trainPromise;
-    } catch (e) {
-      _trainPromise = null;
-      throw e;
+  if (_trainPromise) return await _trainPromise;
+
+  const training = (async () => {
+    const corpus = JSON.parse(readFileSync(CORPUS_PATH, 'utf8'));
+    const dock = await dockStart({ use: ['Basic'] });
+    const nlp = dock.get('nlp');
+    nlp.addLanguage('en');
+    for (const d of corpus.data) {
+      for (const u of d.utterances) nlp.addDocument('en', u, d.intent);
     }
-  }
-  _trainPromise = (async () => {
-    try {
-      const corpus = JSON.parse(readFileSync(CORPUS_PATH, 'utf8'));
-      const dock = await dockStart({ use: ['Basic'] });
-      const nlp = dock.get('nlp');
-      nlp.addLanguage('en');
-      for (const d of corpus.data) {
-        for (const u of d.utterances) nlp.addDocument('en', u, d.intent);
-      }
-      await nlp.train();
-      _nlp = nlp;
-      return nlp;
-    } catch (e) {
-      _trainPromise = null;
-      throw e;
-    }
+    await nlp.train();
+    _nlp = nlp;
+    return nlp;
   })();
-  return _trainPromise;
+
+  _trainPromise = training;
+  try {
+    return await training;
+  } finally {
+    if (_trainPromise === training) _trainPromise = null;
+  }
 }
 
 // Intent → action dispatch. The classifier picks the intent; this maps it

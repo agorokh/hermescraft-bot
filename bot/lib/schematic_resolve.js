@@ -1,6 +1,6 @@
 // Shared kid-keyword → schematic name mapping for regex and NLP routers.
 
-export function wantsSchematicList(body) {
+function wantsSchematicList(body) {
   const b = String(body).toLowerCase();
   return /\b(what can|what could|show me|list)\b/i.test(b)
     || /\bwhat\s+builds?\b/i.test(b)

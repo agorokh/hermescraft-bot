@@ -78,17 +78,9 @@ function resolvePosBox(trigger, qs) {
 }
 
 function shouldBindQuestParticipant(trigger, event) {
-  if (!event?.player) return false;
-  switch (trigger.kind) {
-    case 'player_chat':
-    case 'player_join':
-      return !trigger.player || trigger.player === event.player;
-    case 'player_has_item':
-      return event.kind === 'player_collected'
-        && (!trigger.player || trigger.player === '@last_chatter' || trigger.player === event.player);
-    default:
-      return false;
-  }
+  if (!event?.player || event.kind !== 'player_chat') return false;
+  if (!trigger.player || trigger.player === '@last_chatter') return true;
+  return trigger.player === event.player;
 }
 
 function evalTrigger(trigger, ctx) {
@@ -282,10 +274,12 @@ export async function installQuestEngine(bot, ACTIONS, log) {
           if (actionOutcomeFailed(result)) {
             stepOk = false;
             log && log(`[quests] action failed: ${result?.error || result?.result || 'unknown'}`);
+            break;
           }
         } catch (e) {
           stepOk = false;
           log && log(`[quests] action error: ${e.message}`);
+          break;
         }
       }
       if (stepOk) {

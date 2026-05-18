@@ -553,6 +553,9 @@ function log(msg) {
 
 async function createBot() {
   if (bot) {
+    _quest_install_gen++;
+    try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch {}
+    try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch {}
     try { bot.quit(); } catch {}
     bot = null;
     botReady = false;
@@ -3398,7 +3401,7 @@ function _clearPendingVoiceTurns(reason) {
   for (const [id, turn] of _pendingVoiceTurns) {
     clearTimeout(turn.timer);
     try {
-      turn.resolve({ ok: false, error: reason, id, in_reply_to: id });
+      turn.resolve({ ok: false, error: reason, id });
     } catch (e) { /* client already gone */ }
     _pendingVoiceTurns.delete(id);
   }

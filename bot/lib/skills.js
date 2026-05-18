@@ -34,7 +34,7 @@ const __dirname = dirname(__filename);
 const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 
 // Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
-const SETBLOCK_CHAT_INTERVAL_MS = 1100;
+const SETBLOCK_CHAT_INTERVAL_MS = 150;
 
 // ── helpers ──────────────────────────────────────────────────────────
 

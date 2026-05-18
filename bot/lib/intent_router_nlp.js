@@ -22,8 +22,8 @@
 //      sub-50ms safety primitive that doesn't tolerate any classification
 //      latency or error. NLP handles everything else.
 //
-// Training data lives in lib/intent_corpus.json (503 utterances / 17
-// intents). Train-from-cold is ~30ms; production-time inference is <5ms.
+// Training data lives in lib/intent_corpus.json (see file for utterance/
+// intent counts). Train-from-cold is ~30ms; production-time inference is <5ms.
 // The corpus is the spec — adding/removing intents = editing JSON.
 
 import { readFileSync } from 'node:fs';

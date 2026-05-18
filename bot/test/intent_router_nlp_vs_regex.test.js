@@ -1,4 +1,4 @@
-// Head-to-head: NLP.js router (intent_router_nlp.js, 503-utterance corpus)
+// Head-to-head: NLP.js router (intent_router_nlp.js) vs regex router
 // vs regex router (intent_router.js, 42 hand-rolled patterns).
 //
 // Acceptance bar for shipping the NLP router as default: it must match the
@@ -92,8 +92,8 @@ for (const p of KID_PROMPTS) {
   });
 }
 
-// Head-to-head: where NLP and regex disagree, surface the diff. We don't
-// fail on disagreement — just print it so the operator can sanity-check.
+// Head-to-head: canonical 6 kid prompts must agree between routers (fail
+// the suite on disagreement — this is the NLP-primary shipping gate).
 test('[NLP vs regex] agreement report on kid prompts', async () => {
   const disagreements = [];
   for (const p of KID_PROMPTS) {

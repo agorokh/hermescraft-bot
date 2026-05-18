@@ -24,7 +24,6 @@
 //
 // ctx = { sender, senderEntity, message, body }
 
-import { Vec3 } from 'vec3';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 

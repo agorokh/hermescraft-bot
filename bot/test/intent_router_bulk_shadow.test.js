@@ -2,8 +2,8 @@
 // (regex + NLP). Reports per-utterance disagreement and overall AGREE rate.
 // Council bar for flipping NLP to primary: 92-95% AGREE.
 //
-// This is NOT a pass/fail unit test — it's a measurement that prints to
-// stdout. The test always passes; read the console output for the rate.
+// Measurement test: prints agreement rate to stdout and enforces a 66%
+// regression floor (council bar for promoting NLP primary is 92–95%).
 
 import test from 'node:test';
 import assert from 'node:assert/strict';

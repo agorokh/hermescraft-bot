@@ -76,12 +76,10 @@ for (const p of PANIC) {
   });
 }
 
-// ── CONTEXTUAL MODIFIERS (Gemini/Mistral context buffer prediction) ─────────
-// "higher" / "another" / "again" — currently has no anaphora resolution.
-// These tests document current behavior so we can see what improves once
-// the context buffer ships. NOT asserting correctness — just printing what
-// the router does today.
-test('context modifiers — current behavior snapshot (no assertion)', async () => {
+// ── CONTEXTUAL MODIFIERS (anaphora / context buffer) ───────────────────────
+// Snapshot of modifier routing after the context buffer shipped in
+// intent_router_nlp.js. Prints behavior for operator sanity-checks.
+test('context modifiers — anaphora behavior snapshot (no assertion)', async () => {
   const bot = stubBot();
   await tryRoute(bot, 'build me a tower', 'Adalynn');  // prime
   for (const body of ['higher', 'now another one', 'do that again', 'over there', 'it']) {

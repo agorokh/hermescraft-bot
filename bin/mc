@@ -74,6 +74,20 @@ shift 2>/dev/null || true
 
 die() { echo "ERROR: $1" >&2; exit 1; }
 
+is_int() {
+    case "$1" in
+        ''|*[!0-9-]*) return 1 ;;
+        -) return 1 ;;
+        -*) case "${1#-}" in ''|*[!0-9]*) return 1 ;; esac ;;
+        *) case "$1" in *[!0-9]*) return 1 ;; esac ;;
+    esac
+    return 0
+}
+
+require_int() {
+    is_int "$1" || die "expected integer, got: $1"
+}
+
 api_get() {
     local path="$1"
     local resp
@@ -951,6 +965,16 @@ BUILDING:
   mc fill BLOCK X1 Y1 Z1 X2 Y2 Z2 [hollow] Fill rectangular area (hollow=true for walls/shells)
   mc interact X Y Z                        Right-click/activate block (chests, doors, etc)
 
+SKILL PRIMITIVES (high-level intent verbs):
+  mc place_near_player|pnp PLAYER ITEM [dir]  Place item near player (dir: side/front/behind)
+  mc give_to_player|give PLAYER ITEM [count]  Give item to player
+  mc build_tower|tower X Y Z [height] [mat]   Build pillar at coords
+  mc light_area|lit CX CY CZ [radius]        Torch grid around center
+  mc follow_player_v2|fpv2 PLAYER [distance]  Sustained follow
+  mc perceive|sense                           Full perception snapshot
+  mc build_schematic|schem NAME X Y Z         Place schematic at origin
+  mc list_schematics|schems                   List available schematics
+
 SOCIAL:
   mc chat "message"        Say something publicly (nearby players hear it)
   mc whisper PLAYER "msg"  Private /msg — only PLAYER sees it
@@ -1027,6 +1051,7 @@ EOF
         PLAYER="${1:?Usage: mc give_to_player PLAYER ITEM [count]}"
         ITEM="${2:?Usage: mc give_to_player PLAYER ITEM [count]}"
         COUNT="${3:-1}"
+        require_int "$COUNT"
         GIVE_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'item':sys.argv[2],'count':int(sys.argv[3])}))" "$PLAYER" "$ITEM" "$COUNT")
         pretty "$(api_post '/action/give_to_player' "$GIVE_JSON")"
         ;;
@@ -1037,6 +1062,7 @@ EOF
         Z="${3:?Usage: mc build_tower X Y Z [height] [material]}"
         HEIGHT="${4:-5}"
         MATERIAL="${5:-oak_planks}"
+        require_int "$X"; require_int "$Y"; require_int "$Z"; require_int "$HEIGHT"
         TOWER_JSON=$(python3 -c "import json,sys; print(json.dumps({'x':int(sys.argv[1]),'y':int(sys.argv[2]),'z':int(sys.argv[3]),'height':int(sys.argv[4]),'material':sys.argv[5]}))" "$X" "$Y" "$Z" "$HEIGHT" "$MATERIAL")
         pretty "$(api_post '/action/build_tower' "$TOWER_JSON")"
         ;;
@@ -1046,6 +1072,7 @@ EOF
         CY="${2:?Usage: mc light_area CX CY CZ [radius]}"
         CZ="${3:?Usage: mc light_area CX CY CZ [radius]}"
         RADIUS="${4:-6}"
+        require_int "$CX"; require_int "$CY"; require_int "$CZ"; require_int "$RADIUS"
         LIGHT_JSON=$(python3 -c "import json,sys; print(json.dumps({'cx':int(sys.argv[1]),'cy':int(sys.argv[2]),'cz':int(sys.argv[3]),'radius':int(sys.argv[4])}))" "$CX" "$CY" "$CZ" "$RADIUS")
         pretty "$(api_post '/action/light_area' "$LIGHT_JSON")"
         ;;
@@ -1053,6 +1080,7 @@ EOF
     follow_player_v2|fpv2)
         PLAYER="${1:?Usage: mc follow_player_v2 PLAYER [distance]}"
         DISTANCE="${2:-3}"
+        require_int "$DISTANCE"
         FPV2_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'distance':int(sys.argv[2])}))" "$PLAYER" "$DISTANCE")
         pretty "$(api_post '/action/follow_player_v2' "$FPV2_JSON")"
         ;;
@@ -1066,6 +1094,7 @@ EOF
         X="${2:?Usage: mc build_schematic NAME X Y Z}"
         Y="${3:?Usage: mc build_schematic NAME X Y Z}"
         Z="${4:?Usage: mc build_schematic NAME X Y Z}"
+        require_int "$X"; require_int "$Y"; require_int "$Z"
         SCHEM_JSON=$(python3 -c "import json,sys; print(json.dumps({'name':sys.argv[1],'x':int(sys.argv[2]),'y':int(sys.argv[3]),'z':int(sys.argv[4])}))" "$NAME" "$X" "$Y" "$Z")
         pretty "$(api_post '/action/build_schematic' "$SCHEM_JSON")"
         ;;

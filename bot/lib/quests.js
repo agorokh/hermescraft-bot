@@ -230,7 +230,7 @@ export async function installQuestEngine(bot, ACTIONS, log) {
     return () => {};
   }
 
-  const myQuests = quests.filter((q) => !q.owner || q.owner === botName);
+  const myQuests = quests.filter((q) => !q.owner || q.owner === 'both' || q.owner === botName);
   for (const q of myQuests) {
     if (!botState.has(q.name)) {
       botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now(), anchor: null });

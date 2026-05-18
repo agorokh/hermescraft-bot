@@ -505,7 +505,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   const anaphora = _isStrictAnaphoraPhrase(body) ? _tryAnaphora(bot, body, ctx) : null;
   if (anaphora) {
     // Pure repeats amend the last body but must not push duplicate buffer entries.
-    const skill_id = anaphora.anaphora === 'repeat'
+    const skill_id = (opts.dryRun || anaphora.anaphora === 'repeat')
       ? null
       : recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body, body);
     return {
@@ -554,7 +554,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   }
   // Record this for future repeat_last_action — only if NOT a repeat itself
   // (avoid recursion on "do it again ... do it again").
-  const skill_id = recordLastSkill(bot, intent, decision.action, decision.body, body);
+  const skill_id = opts.dryRun ? null : recordLastSkill(bot, intent, decision.action, decision.body, body);
   return {
     matched: true,
     intent_name: intent,

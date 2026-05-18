@@ -431,6 +431,9 @@ async function loadSchematic(name) {
   return { entry, data: JSON.parse(raw) };
 }
 
+// Per-bot cache: probe once per connection, not on every schematic build.
+const _setblockAuthByBot = new WeakMap();
+
 // Detect whether the bot has op-level permission for /setblock.  Council
 // review (Mistral, 2026-05-16) flagged a critical bug in the
 // listen-for-server-message-only version: a non-op bot on a server with
@@ -444,6 +447,7 @@ async function loadSchematic(name) {
 // to physical placement.  Clamps Y to <= 319 (vanilla 1.21 build limit)
 // to avoid the probe firing above world height.
 async function detectSetblockAuth(bot) {
+  if (_setblockAuthByBot.has(bot)) return _setblockAuthByBot.get(bot);
   // Probe at the bot's current position +1Y (a cell guaranteed to be in a
   // loaded chunk).  Use a sentinel block we can read back unambiguously
   // and that's cheap to roll back: white_wool (visible distinct, every
@@ -475,6 +479,7 @@ async function detectSetblockAuth(bot) {
   if (ok) {
     try { bot.chat(`/setblock ${px} ${py} ${pz} air`); } catch (e) {}
   }
+  _setblockAuthByBot.set(bot, ok);
   return ok;
 }
 

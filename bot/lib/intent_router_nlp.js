@@ -137,13 +137,13 @@ const ANAPHORA_RULES = [
   // Height adjustments for build_tower
   {
     pattern: /^(higher|taller|bigger|go higher|make it taller|taller please)( please| pls)?$/i,
-    appliesTo: ['build_tower'],
+    appliesTo: ['build_tower', 'build_schematic'],
     amend: (entry) => ({ ...entry.body, height: Math.min(20, (entry.body.height || 5) + 2) }),
     label: 'higher',
   },
   {
     pattern: /^(lower|shorter|smaller|less tall)( please| pls)?$/i,
-    appliesTo: ['build_tower'],
+    appliesTo: ['build_tower', 'build_schematic'],
     amend: (entry) => ({ ...entry.body, height: Math.max(2, (entry.body.height || 5) - 2) }),
     label: 'shorter',
   },
@@ -155,10 +155,10 @@ const ANAPHORA_RULES = [
     label: 'repeat',
   },
   // Move/offset ("to the left", "over there") — shift last action's anchor.
-  // appliesTo uses ACTION names (not intent names). torch_near_player omitted.
+  // appliesTo matches action or intent_name on the buffer entry.
   {
     pattern: /^(to the left|left more|further left)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area', 'collect', 'fight', 'place_near_player', 'give_to_player'],
     amend: (entry, bot, ctx) => {
       const { dx, dz } = _playerRelativeOffset(bot, ctx, 3, 'left');
       return _shiftAnchorBody(entry.body, dx, 0, dz);
@@ -167,7 +167,7 @@ const ANAPHORA_RULES = [
   },
   {
     pattern: /^(to the right|right more|further right)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area', 'collect', 'fight', 'place_near_player', 'give_to_player'],
     amend: (entry, bot, ctx) => {
       const { dx, dz } = _playerRelativeOffset(bot, ctx, 3, 'right');
       return _shiftAnchorBody(entry.body, dx, 0, dz);
@@ -176,7 +176,7 @@ const ANAPHORA_RULES = [
   },
   {
     pattern: /^(over there|over here|right here|here)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area', 'collect', 'fight', 'place_near_player', 'give_to_player'],
     amend: (entry, bot, ctx) => {
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return { ...entry.body };
@@ -185,6 +185,11 @@ const ANAPHORA_RULES = [
     label: 'here',
   },
 ];
+
+function _anaphoraApplies(rule, last) {
+  if (!rule.appliesTo) return true;
+  return rule.appliesTo.includes(last.action) || rule.appliesTo.includes(last.intent_name);
+}
 
 function _playerRelativeOffset(bot, ctx, dist, side) {
   const ent = ctx.senderEntity || findPlayerEntity(bot, ctx.sender);
@@ -241,7 +246,7 @@ function _tryAnaphora(bot, body, ctx) {
   if (last.success === false) return null;
   for (const rule of ANAPHORA_RULES) {
     if (!rule.pattern.test(body.trim())) continue;
-    if (rule.appliesTo && !rule.appliesTo.includes(last.action)) continue;
+    if (!_anaphoraApplies(rule, last)) continue;
     const newBody = rule.amend(last, bot, ctx);
     return {
       action: last.action,

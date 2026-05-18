@@ -109,6 +109,17 @@ async function tryRoute(bot, body, sender) {
   return nlp;  // propagate the NLP-side metadata
 }
 
+// Forward NLP classification hints when the router defers to the brain.
+function nlpHintsForQueue(route) {
+  if (!route?.nlp_intent || route.matched) return {};
+  if (route.nlp_zone !== 'no_dispatcher' && route.nlp_zone !== 'clarify') return {};
+  return {
+    nlp_intent: route.nlp_intent,
+    nlp_score: route.nlp_score,
+    nlp_zone: route.nlp_zone,
+  };
+}
+
 // Intent routers emit chat as { text }; ACTIONS.chat expects { message }.
 function actionBodyForRoute(route) {
   const body = route.body || {};
@@ -376,8 +387,9 @@ async function handleChat(username, message) {
       // place_near_player, give_to_player, etc.) and fire the matching
       // primitive WITHOUT waiting for the LLM brain. <500ms response.
       // Safe-by-design: only reversible/non-destructive actions route.
+      let route = { matched: false };
       try {
-        const route = await tryRoute(bot, routing.body, username);
+        route = await tryRoute(bot, routing.body, username);
         shadowRoute(bot, routing.body, username, route);  // fire-and-forget; doesn't block
         if (route.matched) {
           const ack = ackFor(route.intent_name);
@@ -422,7 +434,7 @@ async function handleChat(username, message) {
         // Fall through to normal queue path.
       }
 
-      commandQueue.push({
+      const queueEntry = {
         id: nextEnvelopeId(),
         time: Date.now(),
         from: username,
@@ -431,7 +443,12 @@ async function handleChat(username, message) {
         source: 'chat',
         originalMessage: message,
         status: 'pending',
-      });
+        ...nlpHintsForQueue(route),
+      };
+      commandQueue.push(queueEntry);
+      if (queueEntry.nlp_intent) {
+        log(`[Queued+NLP] ${username}: zone=${queueEntry.nlp_zone} intent=${queueEntry.nlp_intent} score=${queueEntry.nlp_score?.toFixed?.(2) ?? queueEntry.nlp_score}`);
+      }
       rememberSocialEvent({ actor: username, kind: 'heard', channel: routing.channel, command: true, message: routing.body });
       trimCommandQueue();
       log(`[Queued] ${username}: ${routing.body}`);
@@ -445,8 +462,9 @@ async function handleChat(username, message) {
           // kids almost always address with "Rosie do X" which hits this
           // branch, NOT the direct-name-colon branch. <500ms response with
           // no LLM round-trip when a keyword pattern matches.
+          let route = { matched: false };
           try {
-            const route = await tryRoute(bot, command, username);
+            route = await tryRoute(bot, command, username);
             shadowRoute(bot, command, username, route);  // fire-and-forget
             if (route.matched && ACTIONS[route.action]) {
               const ack = ackFor(route.intent_name);
@@ -483,7 +501,7 @@ async function handleChat(username, message) {
             log(`[IntentRouter via mention] error: ${e.message}`);
           }
 
-          commandQueue.push({
+          const queueEntry = {
             id: nextEnvelopeId(),
             time: Date.now(),
             from: username,
@@ -492,7 +510,12 @@ async function handleChat(username, message) {
             source: 'chat',
             originalMessage: message,
             status: 'pending',
-          });
+            ...nlpHintsForQueue(route),
+          };
+          commandQueue.push(queueEntry);
+          if (queueEntry.nlp_intent) {
+            log(`[Queued+NLP via mention] ${username}: zone=${queueEntry.nlp_zone} intent=${queueEntry.nlp_intent}`);
+          }
           rememberSocialEvent({ actor: username, kind: 'heard', channel: 'public_mention', command: true, message: command });
           trimCommandQueue();
           log(`[Queued via mention] ${username}: ${command}`);

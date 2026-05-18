@@ -165,7 +165,7 @@ const INTENTS = [
     patterns: [
       /\btorch\b.*\b(here|next to me|by me|right by|near me)\b/i,
       /\b(put|place|drop) a? torch\b/i,
-      /\blight (?:up )?(?:this )?(?:spot|area|here)\b/i,
+      /\blight (?:up )?(?:this )?(?:spot|here)\b/i,
     ],
     async handler(bot, ctx) {
       // Use place_near_player directly via skills module API (re-import

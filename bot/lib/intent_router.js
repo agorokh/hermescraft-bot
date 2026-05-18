@@ -114,7 +114,7 @@ const INTENTS = [
   {
     name: 'emote_sit',
     patterns: [
-      /\bsit( down| with me| next to me| here| please)?\b/i,
+      /\b(sit down|sit with me|sit next to me|sit here|please sit)\b/i,
     ],
     async handler(bot, ctx) {
       await runEmoteSit(bot, ctx.dryRun);

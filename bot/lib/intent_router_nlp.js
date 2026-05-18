@@ -279,7 +279,7 @@ async function ensureTrained() {
   }
   if (_trainPromise) return await _trainPromise;
 
-  const training = (async () => {
+  _trainPromise = (async () => {
     try {
       const corpus = JSON.parse(readFileSync(CORPUS_PATH, 'utf8'));
       const dock = await dockStart({ use: ['Basic'] });
@@ -296,8 +296,8 @@ async function ensureTrained() {
       throw e;
     }
   })();
+  const training = _trainPromise;
 
-  _trainPromise = training;
   try {
     return await training;
   } catch (e) {

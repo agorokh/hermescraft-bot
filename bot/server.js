@@ -88,12 +88,10 @@ async function tryRoute(bot, body, sender) {
   // Safety primitive: stop/cancel must never depend on NLP classification.
   const stop = await tryStopRoute(bot, body, sender);
   if (stop.matched) return stop;
-  // Primary path: NLP. Fall back to regex if NLP returns matched=false
-  // (clarify/oov/no-dispatcher) — gives the high-confidence regex catches
-  // (e.g. "come here") a second chance.
+  // Primary path: NLP. Regex fallback applies only when NLP defers for
+  // dispatcher_null / process_error — not for clarify/oov/no_dispatcher.
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
-  // Clarify/OOV zones defer to the brain — do not let regex steal ambiguous utterances.
   if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
     return nlp;
   }

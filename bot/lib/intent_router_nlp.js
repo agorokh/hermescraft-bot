@@ -489,22 +489,10 @@ const DISPATCHERS = {
   // body is deep-cloned (shallow spread) so callers that mutate the body
   // — e.g. anaphora 'higher' incrementing height — don't corrupt the
   // cached context entry. (cursor PR review catch.)
-  repeat_last_action: async (bot, ctx) => {
+  repeat_last_action: (bot) => {
     const last = getLastSkill(bot);
-    if (!last || last.success === false) return null;
-    // Replay the amended buffer body (anaphora chains), not the original utterance.
-    if (last.action && last.body) {
-      return { action: last.action, body: { ...last.body } };
-    }
-    const replayCtx = last.message
-      ? { ...ctx, body: last.message, message: last.message }
-      : ctx;
-    const redispatch = DISPATCHERS[last.intent_name];
-    if (redispatch) {
-      const decision = await Promise.resolve(redispatch(bot, replayCtx));
-      if (decision) return { action: decision.action, body: { ...decision.body } };
-    }
-    return null;
+    if (!last || last.success === false || !last.action || !last.body) return null;
+    return { action: last.action, body: { ...last.body } };
   },
 };
 

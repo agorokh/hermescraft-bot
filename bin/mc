@@ -1053,6 +1053,7 @@ EOF
         ITEM="${2:?Usage: mc give_to_player PLAYER ITEM [count]}"
         COUNT="${3:-1}"
         require_int "$COUNT"
+        [ "$COUNT" -ge 1 ] || die "count must be >= 1"
         GIVE_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'item':sys.argv[2],'count':int(sys.argv[3])}))" "$PLAYER" "$ITEM" "$COUNT")
         pretty "$(api_post '/action/give_to_player' "$GIVE_JSON")"
         ;;

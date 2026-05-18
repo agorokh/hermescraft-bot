@@ -41,14 +41,6 @@ async function loadQuestIndex() {
   }
 }
 
-async function loadQuest(name) {
-  const idx = await loadQuestIndex();
-  const entry = idx.quests?.[name];
-  if (!entry) return null;
-  const raw = await readFile(join(QUESTS_DIR, entry.file), 'utf8');
-  return { entry, ...JSON.parse(raw) };
-}
-
 async function loadAllQuests() {
   const idx = await loadQuestIndex();
   const quests = [];

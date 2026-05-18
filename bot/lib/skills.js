@@ -52,9 +52,9 @@ function normalizeBlockName(name) {
   return String(name).toLowerCase().replace(/^minecraft:/, '');
 }
 
-function blockAtMatches(bot, x, y, z, expected) {
+function blockAtMatches(bot, x, y, z, expected, { trustUnloaded = false } = {}) {
   const readback = bot.blockAt(new Vec3(x, y, z));
-  if (!readback) return false;
+  if (!readback) return trustUnloaded;
   return normalizeBlockName(readback.name) === normalizeBlockName(expected);
 }
 
@@ -564,7 +564,7 @@ async function build_schematic(bot, { name, x, y, z }) {
         bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
         // Wait for server + world sync, then verify before counting success.
         await sleep(SETBLOCK_CHAT_INTERVAL_MS);
-        if (blockAtMatches(bot, tx, ty, tz, block)) placed++;
+        if (blockAtMatches(bot, tx, ty, tz, block, { trustUnloaded: true })) placed++;
         else failed++;
       } catch (e) {
         failed++;

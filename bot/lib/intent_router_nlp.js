@@ -515,9 +515,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   if (anaphora) {
     let skill_id = null;
     if (!opts.dryRun) {
-      if (['higher', 'shorter'].includes(anaphora.anaphora)) {
-        skill_id = recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body, body);
-      } else if (['left', 'right', 'here'].includes(anaphora.anaphora)) {
+      if (['higher', 'shorter', 'left', 'right', 'here'].includes(anaphora.anaphora)) {
         skill_id = updateLastSkillBody(bot, anaphora.body);
       } else if (anaphora.anaphora === 'repeat') {
         skill_id = getLastSkill(bot)?.id ?? null;

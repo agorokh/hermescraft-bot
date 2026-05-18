@@ -149,13 +149,19 @@ const ANAPHORA_RULES = [
   {
     pattern: /^(to the left|left more|further left)$/i,
     appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
-    amend: (entry) => _shiftAnchorBody(entry.body, -3, 0, 0),
+    amend: (entry, bot, ctx) => {
+      const { dx, dz } = _playerRelativeOffset(bot, ctx, 3, 'left');
+      return _shiftAnchorBody(entry.body, dx, 0, dz);
+    },
     label: 'left',
   },
   {
     pattern: /^(to the right|right more|further right)$/i,
     appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
-    amend: (entry) => _shiftAnchorBody(entry.body, 3, 0, 0),
+    amend: (entry, bot, ctx) => {
+      const { dx, dz } = _playerRelativeOffset(bot, ctx, 3, 'right');
+      return _shiftAnchorBody(entry.body, dx, 0, dz);
+    },
     label: 'right',
   },
   {
@@ -169,6 +175,17 @@ const ANAPHORA_RULES = [
     label: 'here',
   },
 ];
+
+function _playerRelativeOffset(bot, ctx, dist, side) {
+  const ent = ctx.senderEntity || findPlayerEntity(bot, ctx.sender);
+  const yaw = ent?.yaw ?? bot.entity?.yaw ?? 0;
+  const fwdX = -Math.sin(yaw);
+  const fwdZ = Math.cos(yaw);
+  if (side === 'left') {
+    return { dx: Math.round(fwdZ * dist), dz: Math.round(-fwdX * dist) };
+  }
+  return { dx: Math.round(-fwdZ * dist), dz: Math.round(fwdX * dist) };
+}
 
 function _shiftAnchorBody(body, dx, dy, dz) {
   const out = { ...body };
@@ -379,7 +396,7 @@ const DISPATCHERS = {
     };
   },
 
-  follow_me: (_bot, ctx) => ({ action: 'follow_player_v2', body: { player: ctx.sender } }),
+  follow_me: (_bot, ctx) => ({ action: 'follow_player_v2', body: { player: ctx.sender, distance: 3 } }),
 
   race_to_coords: (_bot, ctx) => {
     const m = ctx.body.match(/(-?\d+)\s+(-?\d+)\s+(-?\d+)/);

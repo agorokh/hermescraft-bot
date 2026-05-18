@@ -54,23 +54,23 @@ test('"another one" after any build replays', async () => {
   assert.equal(dup.body.name, first.body.name);
 });
 
-test('"to the left" shifts last action x-3', async () => {
+test('"to the left" shifts last action player-relative (+X when facing south)', async () => {
   const bot = stubBot('LeftBot');
   const first = await tryRoute(bot, 'build me a tower', 'Adalynn');
   const leftX = first.body.x;
   const r = await tryRoute(bot, 'to the left', 'Adalynn');
   assert.equal(r.nlp_zone, 'anaphora');
-  assert.equal(r.body.x, leftX - 3);
+  assert.equal(r.body.x, leftX + 3);
 });
 
-test('"to the left" twice chains -6 from original', async () => {
+test('"to the left" twice chains +6 from original', async () => {
   const bot = stubBot('LeftChainBot');
   const first = await tryRoute(bot, 'build me a tower', 'Adalynn');
   const leftX = first.body.x;
   const r1 = await tryRoute(bot, 'to the left', 'Adalynn');
-  assert.equal(r1.body.x, leftX - 3);
+  assert.equal(r1.body.x, leftX + 3);
   const r2 = await tryRoute(bot, 'to the left', 'Adalynn');
-  assert.equal(r2.body.x, leftX - 6);
+  assert.equal(r2.body.x, leftX + 6);
 });
 
 test('"over there" re-anchors at sender position', async () => {

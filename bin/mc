@@ -78,6 +78,7 @@ is_int() {
     case "$1" in
         ''|*[!0-9-]*) return 1 ;;
         -) return 1 ;;
+        -?-) return 1 ;;
         -*) case "${1#-}" in ''|*[!0-9]*) return 1 ;; esac ;;
         *) case "$1" in *[!0-9]*) return 1 ;; esac ;;
     esac

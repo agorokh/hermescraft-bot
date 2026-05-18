@@ -89,6 +89,8 @@ async function tryRoute(bot, body, sender) {
   // (e.g. "come here") a second chance.
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
+  // Clarify/OOV zones defer to the brain — do not let regex steal ambiguous utterances.
+  if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov') return nlp;
   const regex = await tryRouteRegex(bot, body, sender);
   if (regex.matched) {
     // Annotate so the log line shows it was a fallback decision
@@ -2151,10 +2153,14 @@ const ACTIONS = {
     //   (C) in_reply_to absent → genuinely ambiguous. Try auto-correlate; if
     //       no voice turn pending, fall through to b.chat() (this is a real
     //       in-game chat reply, not a misrouted voice reply).
-    const has_irt = in_reply_to != null;  // loose: catches both null + undefined
+    let replyTo = in_reply_to;
+    if (replyTo != null && typeof replyTo === 'string' && /^\d+$/.test(replyTo)) {
+      replyTo = Number(replyTo);
+    }
+    const has_irt = replyTo != null;  // loose: catches both null + undefined
     let voiceTurn = null;
-    if (has_irt && _pendingVoiceTurns.has(in_reply_to)) {
-      voiceTurn = _pendingVoiceTurns.get(in_reply_to);  // case A
+    if (has_irt && _pendingVoiceTurns.has(replyTo)) {
+      voiceTurn = _pendingVoiceTurns.get(replyTo);  // case A
     } else if (!skip_voice_autocorrelate && !has_irt && !String(message).trimStart().startsWith('/')) {
       // case C: auto-correlate by GLOBAL FIFO across the whole commandQueue.
       // Slash-prefixed messages are in-game/Mineflayer commands (e.g.
@@ -2193,10 +2199,10 @@ const ACTIONS = {
       return { result: `Spoke to ${voiceTurn.kid} via voice (id=${voiceTurn.id})` };
     }
     if (has_irt) {
-      const qEntry = commandQueue.find((c) => c.id === in_reply_to);
+      const qEntry = commandQueue.find((c) => c.id === replyTo || String(c.id) === String(replyTo));
       if (!qEntry) {
-        log(`[voice✗] (id=${in_reply_to}) in_reply_to not in commandQueue (evicted or unknown) — dropped fail-closed`);
-        const err = new Error(`Command id ${in_reply_to} not found in queue; reply dropped fail-closed.`);
+        log(`[voice✗] (id=${replyTo}) in_reply_to not in commandQueue (evicted or unknown) — dropped fail-closed`);
+        const err = new Error(`Command id ${replyTo} not found in queue; reply dropped fail-closed.`);
         err.statusCode = 409;
         throw err;
       }
@@ -2205,11 +2211,11 @@ const ACTIONS = {
         b.chat(message);
         if (qEntry.status === 'pending') qEntry.status = 'completed';
         rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
-        return { result: `Sent: ${message} (in_reply_to=${in_reply_to})` };
+        return { result: `Sent: ${message} (in_reply_to=${replyTo})` };
       }
       // case B: voice turn intended but routing state is gone — fail closed.
-      log(`[voice✗] (id=${in_reply_to}) chat reply with stale in_reply_to — dropped fail-closed (no in-game chat fan-out)`);
-      const err = new Error(`Voice turn ${in_reply_to} no longer pending (timed out, client closed, or evicted); voice reply dropped fail-closed.`);
+      log(`[voice✗] (id=${replyTo}) chat reply with stale in_reply_to — dropped fail-closed (no in-game chat fan-out)`);
+      const err = new Error(`Voice turn ${replyTo} no longer pending (timed out, client closed, or evicted); voice reply dropped fail-closed.`);
       err.statusCode = 409;
       throw err;
     }

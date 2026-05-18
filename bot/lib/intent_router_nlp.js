@@ -458,14 +458,12 @@ const DISPATCHERS = {
   show_me_diamonds: () => ({ action: 'chat', body: { text: 'whoaaa look at those diamonds 💎' } }),
   ask_about_pet: () => ({ action: 'chat', body: { text: "lemme check on your pet — hang on" } }),
 
-  // fish_for_food, farm_food, cook_food, ride_horse, tame_animal: no
-  // server.js action wired yet. Return null → brain handles (which can
-  // chain raw mc.* verbs). Filed as follow-up.
-  fish_for_food: () => null,
-  farm_food: () => null,
-  cook_food: () => null,
-  ride_horse: () => null,
-  tame_animal: () => null,
+  // Not wired to server ACTIONS yet — instant chat ACK so kids aren't left silent.
+  fish_for_food: () => ({ action: 'chat', body: { text: "i'll try to catch some fish — hang on" } }),
+  farm_food: () => ({ action: 'chat', body: { text: "let me set up some crops for us" } }),
+  cook_food: () => ({ action: 'chat', body: { text: "i'll cook something up — one sec" } }),
+  ride_horse: () => ({ action: 'chat', body: { text: "ok let's find a horse to ride" } }),
+  tame_animal: () => ({ action: 'chat', body: { text: "i'll try to tame one — stay close" } }),
 
   // Council recommendation 2026-05-17 (Gemini + Mistral both flagged):
   // "do it again" / "another please" / "same as before" — kids constantly

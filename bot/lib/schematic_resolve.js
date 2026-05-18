@@ -20,8 +20,7 @@ export function resolveSchematicName(body) {
   if (/\b(house|cottage|home|cabin)\b/.test(b)) return 'small_house';
   if (/\b(well|fountain)\b/.test(b)) return 'well';
   if (/\b(garden|flower bed|flower patch|flower garden)\b/.test(b)) return 'garden';
-  if (/\b(castle|fort|palace)\b/.test(b)) return 'ice_castle';
-  if (/\b(tower|watchtower|outpost)\b/.test(b)) return 'small_tower';
+  if (/\b(castle|fort|palace|tower|watchtower|outpost)\b/.test(b)) return 'small_tower';
   if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(b)) return 'campfire_spot';
   return null;
 }

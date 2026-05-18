@@ -197,7 +197,7 @@ for (const k of KID_VOICE) {
 }
 
 const STOP_CORPUS = [
-  'quit it', 'knock it off', 'stahp', 'freeze', 'dont move', 'ugh stop pls', 'stop stop stop',
+  'quit it', 'knock it off', 'stahp', 'freeze', 'dont move', 'ugh stop pls', 'stop stop', 'stop stop stop',
 ];
 for (const body of STOP_CORPUS) {
   test(`stop hot-path: "${body}"`, async () => {

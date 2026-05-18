@@ -41,6 +41,7 @@ const INTENTS = [
       /\bstop (it|that|please|now)\b/i,
       /\bjust stop\b/i,
       /\bstop\s+(build|building|mining|the|doing)\b/i,
+      /\bstop\s+stop\b/i,
       /\b(stop[\s!.,?]+){2,}stop\b/i,
       /\b(don'?t|do not)\s+(build|mine|place|move)\b/i,
       /\bdont move\b/i,

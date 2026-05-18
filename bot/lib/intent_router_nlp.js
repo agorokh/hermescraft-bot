@@ -138,13 +138,23 @@ const ANAPHORA_RULES = [
   {
     pattern: /^(higher|taller|bigger|go higher|make it taller|taller please)( please| pls)?$/i,
     appliesTo: ['build_tower', 'build_schematic'],
-    amend: (entry) => ({ ...entry.body, height: Math.min(20, (entry.body.height || 5) + 2) }),
+    amend: (entry) => {
+      if (entry.intent_name === 'build_schematic' || entry.action === 'build_schematic') {
+        return { ...entry.body, y: (entry.body.y ?? 64) + 2 };
+      }
+      return { ...entry.body, height: Math.min(20, (entry.body.height || 5) + 2) };
+    },
     label: 'higher',
   },
   {
     pattern: /^(lower|shorter|smaller|less tall)( please| pls)?$/i,
     appliesTo: ['build_tower', 'build_schematic'],
-    amend: (entry) => ({ ...entry.body, height: Math.max(2, (entry.body.height || 5) - 2) }),
+    amend: (entry) => {
+      if (entry.intent_name === 'build_schematic' || entry.action === 'build_schematic') {
+        return { ...entry.body, y: Math.max(-64, (entry.body.y ?? 64) - 2) };
+      }
+      return { ...entry.body, height: Math.max(2, (entry.body.height || 5) - 2) };
+    },
     label: 'shorter',
   },
   // Repeat the same action ("another one", "one more")
@@ -266,16 +276,21 @@ async function ensureTrained() {
   if (_trainPromise) return await _trainPromise;
 
   const training = (async () => {
-    const corpus = JSON.parse(readFileSync(CORPUS_PATH, 'utf8'));
-    const dock = await dockStart({ use: ['Basic'] });
-    const nlp = dock.get('nlp');
-    nlp.addLanguage('en');
-    for (const d of corpus.data) {
-      for (const u of d.utterances) nlp.addDocument('en', u, d.intent);
+    try {
+      const corpus = JSON.parse(readFileSync(CORPUS_PATH, 'utf8'));
+      const dock = await dockStart({ use: ['Basic'] });
+      const nlp = dock.get('nlp');
+      nlp.addLanguage('en');
+      for (const d of corpus.data) {
+        for (const u of d.utterances) nlp.addDocument('en', u, d.intent);
+      }
+      await nlp.train();
+      _nlp = nlp;
+      return nlp;
+    } catch (e) {
+      _nlp = null;
+      throw e;
     }
-    await nlp.train();
-    _nlp = nlp;
-    return nlp;
   })();
 
   _trainPromise = training;

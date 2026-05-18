@@ -519,6 +519,8 @@ export async function tryRoute(bot, body, sender, opts = {}) {
         skill_id = recordLastSkill(bot, anaphora.intent_name, anaphora.action, anaphora.body, body);
       } else if (['left', 'right', 'here'].includes(anaphora.anaphora)) {
         skill_id = updateLastSkillBody(bot, anaphora.body);
+      } else if (anaphora.anaphora === 'repeat') {
+        skill_id = getLastSkill(bot)?.id ?? null;
       }
     }
     return {
@@ -567,7 +569,11 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   }
   // Record this for future repeat_last_action — only if NOT a repeat itself
   // (avoid recursion on "do it again ... do it again").
-  const skill_id = opts.dryRun ? null : recordLastSkill(bot, intent, decision.action, decision.body, body);
+  const skill_id = opts.dryRun
+    ? null
+    : (intent === 'repeat_last_action'
+      ? (getLastSkill(bot)?.id ?? null)
+      : recordLastSkill(bot, intent, decision.action, decision.body, body));
   return {
     matched: true,
     intent_name: intent,

@@ -113,6 +113,21 @@ function actionBodyForRoute(route) {
   return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true };
 }
 
+function routedActionFailed(result) {
+  if (!result || result.error) return true;
+  const text = String(result.result || '');
+  if (/\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/i.test(text)) {
+    return true;
+  }
+  const ratio = text.match(/\b(\d+)\s*\/\s*(\d+)\b/);
+  if (ratio) {
+    const num = parseInt(ratio[1], 10);
+    const den = parseInt(ratio[2], 10);
+    if (den > 0 && num < den) return true;
+  }
+  return false;
+}
+
 async function shadowRoute(bot, body, sender, primaryResult) {
   if (!SHADOW_NLP) return;
   try {
@@ -383,9 +398,7 @@ async function handleChat(username, message) {
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
             ACTIONS[route.action](actionBody).then((result) => {
-              const failed = !result || result.error
-                || /\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/i.test(String(result.result || ''));
-              if (failed) {
+              if (routedActionFailed(result)) {
                 if (route.skill_id != null) {
                   try { markLastSkillFailed(bot, route.skill_id); } catch {}
                 }
@@ -450,9 +463,7 @@ async function handleChat(username, message) {
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               ACTIONS[route.action](actionBody).then((result) => {
-                const failed = !result || result.error
-                  || /\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/i.test(String(result.result || ''));
-                if (failed) {
+                if (routedActionFailed(result)) {
                   if (route.skill_id != null) {
                     try { markLastSkillFailed(bot, route.skill_id); } catch {}
                   }
@@ -3130,7 +3141,8 @@ const httpServer = http.createServer(async (req, res) => {
           if (qEntry && qEntry.status === 'pending') qEntry.status = 'client_closed';
           log(`[voice✗] (id=${id}) client closed before reply`);
         };
-        req.on('close', onClientGone);
+        // req 'close' fires after the body is consumed on successful requests;
+        // only res 'close' indicates the client socket went away early.
         res.on('close', onClientGone);
         return; // do not call respond() now; resolver writes the response
       }

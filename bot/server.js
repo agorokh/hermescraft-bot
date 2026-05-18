@@ -259,6 +259,17 @@ const VOICE_TURN_TIMEOUT_MS = 75000;
 // to the oldest voice turn dispatched within this window.
 const VOICE_AUTOCORRELATE_MS = 60000;
 
+/** Start the voice auto-correlate window for the oldest pending voice turn. */
+function markOldestVoiceDispatchedIfPending() {
+  const oldest = commandQueue
+    .filter((c) => c.status === 'pending')
+    .sort((a, b) => a.time - b.time)[0];
+  if (oldest?.source === 'voice' && _pendingVoiceTurns.has(oldest.id)) {
+    const turn = _pendingVoiceTurns.get(oldest.id);
+    if (turn && !turn.dispatched_ts) turn.dispatched_ts = Date.now();
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Fair Play Mode — perception constraints for realistic gameplay
 // ═══════════════════════════════════════════════════════════════════
@@ -3070,16 +3081,11 @@ const httpServer = http.createServer(async (req, res) => {
       }
 
       if (path === '/commands') {
-        // Get pending commands queued by in-game chat OR voice (issue #54).
+        // Read-only queue peek. Voice dispatch timestamps are set when the
+        // brain claims work via POST /action/* (or ?claim=1 for explicit drain).
         const pending = commandQueue.filter(c => c.status === 'pending');
-        // Mark any voice turns as dispatched the first time the brain reads
-        // them, so auto-correlate in ACTIONS.chat can match the next reply
-        // to the right pending voice turn.
-        const now = Date.now();
-        const oldest = pending.sort((a, b) => a.time - b.time)[0];
-        if (oldest?.source === 'voice' && _pendingVoiceTurns.has(oldest.id)) {
-          const turn = _pendingVoiceTurns.get(oldest.id);
-          if (turn && !turn.dispatched_ts) turn.dispatched_ts = now;
+        if (url.searchParams.get('claim') === '1') {
+          markOldestVoiceDispatchedIfPending();
         }
         return respond(res, 200, { ok: true, data: { commands: pending } });
       }
@@ -3224,6 +3230,7 @@ const httpServer = http.createServer(async (req, res) => {
             : undefined,
         };
         // Fire and forget — runs in background
+        markOldestVoiceDispatchedIfPending();
         actionFn(body).then(result => {
           if (currentTask && currentTask.id === taskId && currentTask.status === 'running') {
             currentTask.status = 'done';
@@ -3260,6 +3267,7 @@ const httpServer = http.createServer(async (req, res) => {
         return respond(res, 400, { ok: false, error: `Unknown action "${actionName}". Available: ${available}` });
       }
 
+      markOldestVoiceDispatchedIfPending();
       const result = await actionFn(body);
       actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
       if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();

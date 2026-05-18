@@ -550,7 +550,7 @@ async function createBot() {
       moves.canDig = true;
       moves.allowParkour = true;
       bot.pathfinder.setMovements(moves);
-      bot.interrupt_code = false;
+      bot._stopGeneration = 0;
 
       // Configure auto-eat
       bot.autoEat.options = {
@@ -1640,7 +1640,7 @@ const ACTIONS = {
 
   async stop() {
     const b = ensureBot();
-    b.interrupt_code = true;
+    b._stopGeneration = (b._stopGeneration || 0) + 1;
     b.pathfinder.setGoal(null);
     try { b.stopDigging(); } catch {}
     if (b.pvp) try { b.pvp.stop(); } catch {}
@@ -3138,7 +3138,7 @@ const httpServer = http.createServer(async (req, res) => {
       // Cancel current task
       if (path === '/task/cancel') {
         const b = ensureBot();
-        b.interrupt_code = true;
+        b._stopGeneration = (b._stopGeneration || 0) + 1;
         b.pathfinder.setGoal(null);
         try { b.stopDigging(); } catch {}
         if (currentTask && currentTask.status === 'running') {

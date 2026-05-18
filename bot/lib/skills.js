@@ -8,8 +8,9 @@
 //   2. Skills loop INTERNALLY until done or interrupted. The LLM emits ONE
 //      tool call ("build_tower"); we emit N Mineflayer calls. This is the
 //      bandwidth fix for the chat-promise-without-tool-call failure mode.
-//   3. Cancel is via `bot.interrupt_code` boolean polled at 500ms intervals
-//      (Mindcraft pattern). Set it from /action/stop.
+//   3. Cancel is via `bot._stopGeneration` bumped from /action/stop (and
+//      /task/cancel). Each long skill captures the generation at start and
+//      polls — a new stop request does not get cleared by a later skill.
 //   4. Failures don't retry indefinitely — return a descriptive English
 //      sentence so the LLM can replan. "Couldn't reach -180 65 70 — pathfinder
 //      blocked. Try a closer coord." beats { ok: false, code: "ETIMEDOUT" }.
@@ -36,8 +37,12 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 // Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
 const SETBLOCK_CHAT_INTERVAL_MS = 150;
 
-function beginSkill(bot) {
-  bot.interrupt_code = false;
+function captureStopGen(bot) {
+  return bot._stopGeneration || 0;
+}
+
+function skillWasStopped(bot, stopGen) {
+  return (bot._stopGeneration || 0) !== stopGen;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -56,9 +61,9 @@ function normalizeBlockName(name) {
   return String(name).toLowerCase().replace(/^minecraft:/, '');
 }
 
-function blockAtMatches(bot, x, y, z, expected, { trustUnloaded = false } = {}) {
+function blockAtMatches(bot, x, y, z, expected) {
   const readback = bot.blockAt(new Vec3(x, y, z));
-  if (!readback) return trustUnloaded;
+  if (!readback) return false;
   return normalizeBlockName(readback.name) === normalizeBlockName(expected);
 }
 
@@ -161,7 +166,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
 // position via entity state, pick an adjacent open cell, and place.
 
 async function place_near_player(bot, { player, item, direction = 'side' }) {
-  beginSkill(bot);
+  const stopGen = captureStopGen(bot);
   if (!player || !item) {
     return { result: `place_near_player needs player + item` };
   }
@@ -198,7 +203,7 @@ async function place_near_player(bot, { player, item, direction = 'side' }) {
   }
 
   for (const [dx, dy, dz] of candidates) {
-    if (bot.interrupt_code) return { result: `place_near_player interrupted` };
+    if (skillWasStopped(bot, stopGen)) return { result: `place_near_player interrupted` };
     const tx = px + dx, ty = py + dy, tz = pz + dz;
     const r = await placeOne(bot, item, tx, ty, tz);
     if (r.ok) {
@@ -214,7 +219,7 @@ async function place_near_player(bot, { player, item, direction = 'side' }) {
 // confirm pickup. Returns English description.
 
 async function give_to_player(bot, { player, item, count = 1 }) {
-  beginSkill(bot);
+  const stopGen = captureStopGen(bot);
   if (!player || !item) return { result: `give_to_player needs player + item` };
   const entity = findPlayerEntity(bot, player);
   if (!entity) return { result: `Can't see ${player} nearby.` };
@@ -230,7 +235,7 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   } catch (e) {
     // Continue — toss anyway.
   }
-  if (bot.interrupt_code) return { result: `give_to_player interrupted` };
+  if (skillWasStopped(bot, stopGen)) return { result: `give_to_player interrupted` };
 
   await bot.lookAt(p);
   try {
@@ -249,7 +254,7 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   bot.on('playerCollect', onCollect);
   const start = Date.now();
   while (Date.now() - start < 3000 && !received) {
-    if (bot.interrupt_code) break;
+    if (skillWasStopped(bot, stopGen)) break;
     await sleep(200);
   }
   bot.removeListener('playerCollect', onCollect);
@@ -283,7 +288,7 @@ async function give_to_player(bot, { player, item, count = 1 }) {
 // placeBlock when the ref is exactly below feet.
 
 async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }) {
-  beginSkill(bot);
+  const stopGen = captureStopGen(bot);
   if (x == null || y == null || z == null) return { result: `build_tower needs x, y, z` };
   height = Math.max(1, Math.min(20, Math.floor(height)));
 
@@ -297,7 +302,7 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
     const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000));
     await Promise.race([bot.pathfinder.goto(goal), timeout]);
   } catch (e) { /* continue — close-enough is fine */ }
-  if (bot.interrupt_code) return { result: `build_tower interrupted` };
+  if (skillWasStopped(bot, stopGen)) return { result: `build_tower interrupted` };
 
   // Verify we have material.
   const matItem = findInventoryItem(bot, material);
@@ -308,7 +313,7 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
 
   let placed = 0;
   for (let i = 0; i < height; i++) {
-    if (bot.interrupt_code) break;
+    if (skillWasStopped(bot, stopGen)) break;
 
     // Find the block directly below feet — that's our reference for
     // placing the new block at feet level.
@@ -365,7 +370,7 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
 // is 6 blocks (vanilla torch effective light-suppression range is ~7).
 
 async function light_area(bot, { cx, cy, cz, radius = 6 }) {
-  beginSkill(bot);
+  const stopGen = captureStopGen(bot);
   if (cx == null || cy == null || cz == null) return { result: `light_area needs cx, cy, cz` };
   radius = Math.max(2, Math.min(16, Math.floor(radius)));
   const stride = 6;
@@ -376,7 +381,7 @@ async function light_area(bot, { cx, cy, cz, radius = 6 }) {
   let placed = 0;
   for (let tx = startX; tx <= endX; tx += stride) {
     for (let tz = startZ; tz <= endZ; tz += stride) {
-      if (bot.interrupt_code) break;
+      if (skillWasStopped(bot, stopGen)) break;
       let ty = Math.floor(cy);
       for (let y = Math.min(319, ty + 4); y >= Math.max(-64, ty - 4); y--) {
         const n = bot.blockAt(new Vec3(tx, y, tz))?.name || 'air';
@@ -388,7 +393,7 @@ async function light_area(bot, { cx, cy, cz, radius = 6 }) {
       const r = await placeOne(bot, 'torch', tx, ty, tz);
       if (r.ok) placed++;
     }
-    if (bot.interrupt_code) break;
+    if (skillWasStopped(bot, stopGen)) break;
   }
   return {
     result: placed > 0
@@ -503,7 +508,7 @@ async function detectSetblockAuth(bot) {
 }
 
 async function build_schematic(bot, { name, x, y, z }) {
-  beginSkill(bot);
+  const stopGen = captureStopGen(bot);
   if (!name) return { result: `build_schematic needs a schematic name` };
   if (x == null || y == null || z == null) return { result: `build_schematic needs x, y, z origin` };
 
@@ -546,7 +551,7 @@ async function build_schematic(bot, { name, x, y, z }) {
       await Promise.race([bot.pathfinder.goto(goal), timeout]).catch(() => {});
     } catch (e) { /* continue */ }
   }
-  if (bot.interrupt_code) return { result: `build_schematic interrupted` };
+  if (skillWasStopped(bot, stopGen)) return { result: `build_schematic interrupted` };
 
   const sorted = [...blocks].sort((a, b) => {
     if (a[1] !== b[1]) return a[1] - b[1];
@@ -558,7 +563,7 @@ async function build_schematic(bot, { name, x, y, z }) {
   );
 
   for (const [dx, dy, dz, block] of sorted) {
-    if (bot.interrupt_code) break;
+    if (skillWasStopped(bot, stopGen)) break;
     // Skip explicit air cells — schematic authors sometimes encode them as
     // "negative space" placeholders.  /setblock to air is a no-op crash
     // hazard; physical placeBlock just no-ops.
@@ -573,7 +578,9 @@ async function build_schematic(bot, { name, x, y, z }) {
         bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
         // Wait for server + world sync, then verify before counting success.
         await sleep(SETBLOCK_CHAT_INTERVAL_MS);
-        if (blockAtMatches(bot, tx, ty, tz, block, { trustUnloaded: true })) placed++;
+        const readback = bot.blockAt(new Vec3(tx, ty, tz));
+        if (!readback) { /* chunk unloaded — don't count as placed or failed */ }
+        else if (blockAtMatches(bot, tx, ty, tz, block)) placed++;
         else failed++;
       } catch (e) {
         failed++;

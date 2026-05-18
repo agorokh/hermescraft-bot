@@ -11,10 +11,9 @@
       "height": 4,
       "summary": "5x5 oak cottage with door, roof, and one window",
       "materials": {
-        "oak_planks": 60,
+        "oak_planks": 80,
         "oak_door": 1,
-        "glass_pane": 1,
-        "torch": 1
+        "glass_pane": 1
       }
     },
     "well": {
@@ -26,8 +25,8 @@
       "height": 4,
       "summary": "3x3 cobblestone well with water and pillar supports",
       "materials": {
-        "cobblestone": 16,
-        "water_bucket": 1
+        "cobblestone": 24,
+        "water": 1
       }
     },
     "garden": {
@@ -39,10 +38,10 @@
       "height": 1,
       "summary": "5x5 flower patch with grass path",
       "materials": {
-        "poppy": 4,
-        "dandelion": 4,
-        "blue_orchid": 1,
-        "stone": 5
+        "poppy": 8,
+        "dandelion": 6,
+        "blue_orchid": 2,
+        "stone": 9
       }
     },
     "small_tower": {
@@ -54,7 +53,7 @@
       "height": 7,
       "summary": "3x3 cobblestone tower with battlements, 7 blocks tall",
       "materials": {
-        "cobblestone": 36,
+        "cobblestone": 33,
         "oak_fence": 8
       }
     },
@@ -96,7 +95,7 @@
       "summary": "7x7 ice castle \u2014 blue ice floor, packed ice walls, snow roof, glowstone-topped corner pillars",
       "materials": {
         "blue_ice": 49,
-        "packed_ice": 80,
+        "packed_ice": 78,
         "snow_block": 49,
         "glowstone": 4,
         "torch": 1
@@ -111,7 +110,7 @@
       "height": 4,
       "summary": "5x5 snow igloo \u2014 small dome shelter for emergency night-safety",
       "materials": {
-        "snow_block": 39,
+        "snow_block": 49,
         "torch": 1
       }
     }

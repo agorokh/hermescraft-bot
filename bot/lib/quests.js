@@ -20,7 +20,7 @@
 // X" — that's the contract. Branching narratives + LLM-authored quests
 // come in a later round.
 
-import { readFile, readdir } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { actionOutcomeFailed } from './action_outcome.js';

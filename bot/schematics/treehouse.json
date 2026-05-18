@@ -1,0 +1,31 @@
+{
+  "_note": "5x5 oak treehouse on 4 oak_log stilts. Kid stands at ground; treehouse platform is at Y+5 with a roof at Y+8.",
+  "footprint": [5, 5],
+  "height": 9,
+  "blocks": [
+    [0, 0, 0, "oak_log"], [4, 0, 0, "oak_log"], [0, 0, 4, "oak_log"], [4, 0, 4, "oak_log"],
+    [0, 1, 0, "oak_log"], [4, 1, 0, "oak_log"], [0, 1, 4, "oak_log"], [4, 1, 4, "oak_log"],
+    [0, 2, 0, "oak_log"], [4, 2, 0, "oak_log"], [0, 2, 4, "oak_log"], [4, 2, 4, "oak_log"],
+    [0, 3, 0, "oak_log"], [4, 3, 0, "oak_log"], [0, 3, 4, "oak_log"], [4, 3, 4, "oak_log"],
+    [0, 4, 0, "oak_log"], [4, 4, 0, "oak_log"], [0, 4, 4, "oak_log"], [4, 4, 4, "oak_log"],
+
+    [0, 5, 0, "oak_planks"], [1, 5, 0, "oak_planks"], [2, 5, 0, "oak_planks"], [3, 5, 0, "oak_planks"], [4, 5, 0, "oak_planks"],
+    [0, 5, 1, "oak_planks"], [1, 5, 1, "oak_planks"], [2, 5, 1, "oak_planks"], [3, 5, 1, "oak_planks"], [4, 5, 1, "oak_planks"],
+    [0, 5, 2, "oak_planks"], [1, 5, 2, "oak_planks"], [2, 5, 2, "oak_planks"], [3, 5, 2, "oak_planks"], [4, 5, 2, "oak_planks"],
+    [0, 5, 3, "oak_planks"], [1, 5, 3, "oak_planks"], [2, 5, 3, "oak_planks"], [3, 5, 3, "oak_planks"], [4, 5, 3, "oak_planks"],
+    [0, 5, 4, "oak_planks"], [1, 5, 4, "oak_planks"], [2, 5, 4, "oak_planks"], [3, 5, 4, "oak_planks"], [4, 5, 4, "oak_planks"],
+
+    [0, 6, 0, "oak_fence"], [1, 6, 0, "oak_fence"], [3, 6, 0, "oak_fence"], [4, 6, 0, "oak_fence"],
+    [0, 6, 4, "oak_fence"], [1, 6, 4, "oak_fence"], [3, 6, 4, "oak_fence"], [4, 6, 4, "oak_fence"],
+    [0, 6, 1, "oak_fence"], [0, 6, 2, "oak_fence"], [0, 6, 3, "oak_fence"],
+    [4, 6, 1, "oak_fence"], [4, 6, 2, "oak_fence"], [4, 6, 3, "oak_fence"],
+
+    [1, 7, 1, "oak_log"], [3, 7, 1, "oak_log"], [1, 7, 3, "oak_log"], [3, 7, 3, "oak_log"],
+
+    [0, 8, 0, "oak_planks"], [1, 8, 0, "oak_planks"], [2, 8, 0, "oak_planks"], [3, 8, 0, "oak_planks"], [4, 8, 0, "oak_planks"],
+    [0, 8, 1, "oak_planks"], [1, 8, 1, "oak_planks"], [2, 8, 1, "oak_planks"], [3, 8, 1, "oak_planks"], [4, 8, 1, "oak_planks"],
+    [0, 8, 2, "oak_planks"], [1, 8, 2, "oak_planks"], [2, 8, 2, "oak_planks"], [3, 8, 2, "oak_planks"], [4, 8, 2, "oak_planks"],
+    [0, 8, 3, "oak_planks"], [1, 8, 3, "oak_planks"], [2, 8, 3, "oak_planks"], [3, 8, 3, "oak_planks"], [4, 8, 3, "oak_planks"],
+    [0, 8, 4, "oak_planks"], [1, 8, 4, "oak_planks"], [2, 8, 4, "oak_planks"], [3, 8, 4, "oak_planks"], [4, 8, 4, "oak_planks"]
+  ]
+}

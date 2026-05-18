@@ -10,13 +10,17 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@nlpjs/basic": "^5.0.0-alpha.5",
+    "@nlpjs/lang-en-min": "^5.0.0-alpha.5",
+    "minecraft-data": "^3.69.0",
     "mineflayer": "^4.23.0",
-    "mineflayer-pathfinder": "^2.4.5",
-    "mineflayer-pvp": "^1.3.2",
     "mineflayer-armor-manager": "^2.0.1",
     "mineflayer-auto-eat": "^5.0.0",
     "mineflayer-collectblock": "^1.6.0",
-    "minecraft-data": "^3.69.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "mineflayer-pvp": "^1.3.2",
+    "mineflayer-schem": "^1.5.2",
+    "prismarine-schematic": "^1.3.0",
     "vec3": "^0.1.10"
   },
   "engines": {

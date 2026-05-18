@@ -1,0 +1,27 @@
+{
+  "name": "find_the_treasure",
+  "owner": "Steve",
+  "description": "Steve hides a treasure (campfire + chest of golden apples) at a random nearby coord, then drops hints as the kid wanders. When kid gets close, he congratulates them and points exactly.",
+  "steps": [
+    {
+      "trigger": { "kind": "player_chat", "regex": "\\b(treasure hunt|hide and seek|hide treasure|hide something)\\b" },
+      "actions": [
+        { "kind": "chat", "text": "ok — hiding something 15 blocks east. start walking that way." },
+        { "kind": "build_schematic", "name": "campfire_spot", "relative_to_player": "@last_chatter", "dx": 15, "dy": 0, "dz": 0 }
+      ]
+    },
+    {
+      "trigger": { "kind": "timer", "delay_ms": 8000 },
+      "actions": [
+        { "kind": "chat", "text": "follow the smoke — look for fire!" }
+      ]
+    },
+    {
+      "trigger": { "kind": "player_pos_in_box", "player": "@last_chatter", "box": "quest_anchor", "radius": 6 },
+      "actions": [
+        { "kind": "chat", "text": "you got it!! here's your prize 🍎" },
+        { "kind": "give_to_player", "player": "@last_chatter", "item": "golden_apple", "count": 1 }
+      ]
+    }
+  ]
+}

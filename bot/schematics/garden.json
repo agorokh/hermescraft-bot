@@ -1,0 +1,12 @@
+{
+  "_note": "5x5 flower garden with stone path crosses through the middle.",
+  "footprint": [5, 5],
+  "height": 1,
+  "blocks": [
+    [0, 0, 0, "poppy"], [1, 0, 0, "dandelion"], [2, 0, 0, "stone"], [3, 0, 0, "poppy"], [4, 0, 0, "dandelion"],
+    [0, 0, 1, "blue_orchid"], [1, 0, 1, "poppy"], [2, 0, 1, "stone"], [3, 0, 1, "dandelion"], [4, 0, 1, "poppy"],
+    [0, 0, 2, "stone"], [1, 0, 2, "stone"], [2, 0, 2, "stone"], [3, 0, 2, "stone"], [4, 0, 2, "stone"],
+    [0, 0, 3, "poppy"], [1, 0, 3, "dandelion"], [2, 0, 3, "stone"], [3, 0, 3, "poppy"], [4, 0, 3, "blue_orchid"],
+    [0, 0, 4, "dandelion"], [1, 0, 4, "poppy"], [2, 0, 4, "stone"], [3, 0, 4, "dandelion"], [4, 0, 4, "poppy"]
+  ]
+}

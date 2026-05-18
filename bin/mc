@@ -74,6 +74,21 @@ shift 2>/dev/null || true
 
 die() { echo "ERROR: $1" >&2; exit 1; }
 
+is_int() {
+    case "$1" in
+        ''|*[!0-9-]*) return 1 ;;
+        -) return 1 ;;
+        -?-) return 1 ;;
+        -*) case "${1#-}" in ''|*[!0-9]*) return 1 ;; esac ;;
+        *) case "$1" in *[!0-9]*) return 1 ;; esac ;;
+    esac
+    return 0
+}
+
+require_int() {
+    is_int "$1" || die "expected integer, got: $1"
+}
+
 api_get() {
     local path="$1"
     local resp
@@ -320,7 +335,7 @@ except: print(sys.argv[1])
 " "$RESULT"
         ;;
 
-    scene|perceive|vision)
+    scene|vision|perceive)
         RANGE="${1:-16}"
         RESULT=$(api_get "/scene?range=$RANGE")
         python3 -c "
@@ -350,10 +365,41 @@ except: print(sys.argv[1])
         ;;
 
     chat|say)
-        MSG="${1:?Usage: mc chat \"message\"}"
-        # Escape the message for JSON
+        # Usage:  mc chat "message"                      (in-game chat)
+        #         mc chat "message" --in-reply-to <id>   (voice reply — id from mc commands)
+        # The --in-reply-to flag (issue #54) lets the brain explicitly
+        # disambiguate voice vs in-game replies when both a voice turn AND
+        # a chat turn are pending in commandQueue. Without it, the bot
+        # auto-correlates by FIFO which CAN misroute if brain replies
+        # out-of-queue-order. Pass --in-reply-to <id> whenever responding
+        # to a commandQueue entry; the bot routes voice replies to the
+        # voice channel (fail-closed) and chat replies to in-game chat.
+        MSG="${1:?Usage: mc chat \"message\" [--in-reply-to <id>]}"
+        shift
+        IRT=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --in-reply-to|-r)
+                    if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                        echo "mc chat: --in-reply-to requires a positive integer id" >&2
+                        exit 2
+                    fi
+                    IRT="$2"
+                    shift 2
+                    ;;
+                *) echo "mc chat: unknown flag '$1' (expected --in-reply-to <id>)" >&2; exit 2 ;;
+            esac
+        done
         ESCAPED_MSG=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$MSG")
-        pretty "$(api_post '/action/chat' "{\"message\":$ESCAPED_MSG}")"
+        if [[ -n "$IRT" ]]; then
+            if ! [[ "$IRT" =~ ^[1-9][0-9]*$ ]]; then
+                echo "mc chat: --in-reply-to must be a positive integer (got '$IRT')" >&2
+                exit 2
+            fi
+            pretty "$(api_post '/action/chat' "{\"message\":$ESCAPED_MSG,\"in_reply_to\":$IRT}")"
+        else
+            pretty "$(api_post '/action/chat' "{\"message\":$ESCAPED_MSG}")"
+        fi
         ;;
 
     read_chat|messages|msg)
@@ -437,7 +483,12 @@ except: print(sys.argv[1])
         fi
         ;;
 
-    commands|cmds|queue)
+    commands|cmds)
+        # claim=1 starts the voice auto-correlate window (brain dequeue path).
+        pretty "$(api_get '/commands?claim=1')"
+        ;;
+    queue)
+        # Read-only peek — does not stamp voice dispatch timestamps.
         pretty "$(api_get '/commands')"
         ;;
 
@@ -920,6 +971,17 @@ BUILDING:
   mc fill BLOCK X1 Y1 Z1 X2 Y2 Z2 [hollow] Fill rectangular area (hollow=true for walls/shells)
   mc interact X Y Z                        Right-click/activate block (chests, doors, etc)
 
+SKILL PRIMITIVES (high-level intent verbs):
+  mc place_near_player|pnp PLAYER ITEM [dir]  Place item near player (dir: side/front/behind)
+  mc give_to_player|give PLAYER ITEM [count]  Give item to player
+  mc build_tower|tower X Y Z [height] [mat]   Build pillar at coords
+  mc light_area|lit CX CY CZ [radius]        Torch grid around center
+  mc follow_player_v2|fpv2 PLAYER [distance]  Sustained follow
+  mc scene|perceive [range]                   Scene summary (GET /scene; legacy mc perceive)
+  mc sense                                    Full perception snapshot (POST /action/perceive)
+  mc build_schematic|schem NAME X Y Z         Place schematic at origin
+  mc list_schematics|schems                   List available schematics
+
 SOCIAL:
   mc chat "message"        Say something publicly (nearby players hear it)
   mc whisper PLAYER "msg"  Private /msg — only PLAYER sees it
@@ -977,6 +1039,76 @@ FLAGS:
 ENVIRONMENT:
   MC_API_URL             Bot server URL (default: http://localhost:3001)
 EOF
+        ;;
+
+    # ── High-level skill primitives (square-zero rebuild 2026-05-16) ──
+    # Mindcraft-shaped intent verbs. The body server loops the low-level
+    # Mineflayer calls internally and returns an English sentence describing
+    # what happened, designed for the next LLM turn to read.
+
+    place_near_player|pnp)
+        PLAYER="${1:?Usage: mc place_near_player PLAYER ITEM [direction]}"
+        ITEM="${2:?Usage: mc place_near_player PLAYER ITEM [direction]}"
+        DIR="${3:-side}"
+        PNP_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'item':sys.argv[2],'direction':sys.argv[3]}))" "$PLAYER" "$ITEM" "$DIR")
+        pretty "$(api_post '/action/place_near_player' "$PNP_JSON")"
+        ;;
+
+    give_to_player|give)
+        PLAYER="${1:?Usage: mc give_to_player PLAYER ITEM [count]}"
+        ITEM="${2:?Usage: mc give_to_player PLAYER ITEM [count]}"
+        COUNT="${3:-1}"
+        require_int "$COUNT"
+        [ "$COUNT" -ge 1 ] || die "count must be >= 1"
+        GIVE_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'item':sys.argv[2],'count':int(sys.argv[3])}))" "$PLAYER" "$ITEM" "$COUNT")
+        pretty "$(api_post '/action/give_to_player' "$GIVE_JSON")"
+        ;;
+
+    build_tower|tower)
+        X="${1:?Usage: mc build_tower X Y Z [height] [material]}"
+        Y="${2:?Usage: mc build_tower X Y Z [height] [material]}"
+        Z="${3:?Usage: mc build_tower X Y Z [height] [material]}"
+        HEIGHT="${4:-5}"
+        MATERIAL="${5:-oak_planks}"
+        require_int "$X"; require_int "$Y"; require_int "$Z"; require_int "$HEIGHT"
+        TOWER_JSON=$(python3 -c "import json,sys; print(json.dumps({'x':int(sys.argv[1]),'y':int(sys.argv[2]),'z':int(sys.argv[3]),'height':int(sys.argv[4]),'material':sys.argv[5]}))" "$X" "$Y" "$Z" "$HEIGHT" "$MATERIAL")
+        pretty "$(api_post '/action/build_tower' "$TOWER_JSON")"
+        ;;
+
+    light_area|lit)
+        CX="${1:?Usage: mc light_area CX CY CZ [radius]}"
+        CY="${2:?Usage: mc light_area CX CY CZ [radius]}"
+        CZ="${3:?Usage: mc light_area CX CY CZ [radius]}"
+        RADIUS="${4:-6}"
+        require_int "$CX"; require_int "$CY"; require_int "$CZ"; require_int "$RADIUS"
+        LIGHT_JSON=$(python3 -c "import json,sys; print(json.dumps({'cx':int(sys.argv[1]),'cy':int(sys.argv[2]),'cz':int(sys.argv[3]),'radius':int(sys.argv[4])}))" "$CX" "$CY" "$CZ" "$RADIUS")
+        pretty "$(api_post '/action/light_area' "$LIGHT_JSON")"
+        ;;
+
+    follow_player_v2|fpv2)
+        PLAYER="${1:?Usage: mc follow_player_v2 PLAYER [distance]}"
+        DISTANCE="${2:-3}"
+        require_int "$DISTANCE"
+        FPV2_JSON=$(python3 -c "import json,sys; print(json.dumps({'player':sys.argv[1],'distance':int(sys.argv[2])}))" "$PLAYER" "$DISTANCE")
+        pretty "$(api_post '/action/follow_player_v2' "$FPV2_JSON")"
+        ;;
+
+    sense)
+        pretty "$(api_post '/action/perceive' '{}')"
+        ;;
+
+    build_schematic|schem|bsch)
+        NAME="${1:?Usage: mc build_schematic NAME X Y Z}"
+        X="${2:?Usage: mc build_schematic NAME X Y Z}"
+        Y="${3:?Usage: mc build_schematic NAME X Y Z}"
+        Z="${4:?Usage: mc build_schematic NAME X Y Z}"
+        require_int "$X"; require_int "$Y"; require_int "$Z"
+        SCHEM_JSON=$(python3 -c "import json,sys; print(json.dumps({'name':sys.argv[1],'x':int(sys.argv[2]),'y':int(sys.argv[3]),'z':int(sys.argv[4])}))" "$NAME" "$X" "$Y" "$Z")
+        pretty "$(api_post '/action/build_schematic' "$SCHEM_JSON")"
+        ;;
+
+    list_schematics|schematics|schems)
+        pretty "$(api_post '/action/list_schematics' '{}')"
         ;;
 
     *)

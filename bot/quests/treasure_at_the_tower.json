@@ -1,0 +1,27 @@
+{
+  "name": "treasure_at_the_tower",
+  "owner": "Rosie",
+  "description": "Kid says 'treasure'/'gold'/'adventure' → Rosie builds a small watchtower nearby and tells the kid where it is. When kid reaches the base, Rosie gives a golden apple.",
+  "steps": [
+    {
+      "trigger": { "kind": "player_chat", "regex": "\\b(treasure|gold|adventure|quest)\\b" },
+      "actions": [
+        { "kind": "chat", "text": "oooh treasure time! let me build a tower for you to climb..." },
+        { "kind": "build_schematic", "name": "small_tower", "relative_to_player": "@last_chatter", "dx": 8, "dy": 0, "dz": 0 }
+      ]
+    },
+    {
+      "trigger": { "kind": "timer", "delay_ms": 60000 },
+      "actions": [
+        { "kind": "chat", "text": "tower's up 8 blocks east of where you were standing — climb to the top!" }
+      ]
+    },
+    {
+      "trigger": { "kind": "player_pos_in_box", "player": "@last_chatter", "box": "quest_anchor", "radius": 4 },
+      "actions": [
+        { "kind": "chat", "text": "you found it!! here's your treasure 🍎" },
+        { "kind": "give_to_player", "player": "@last_chatter", "item": "golden_apple", "count": 1 }
+      ]
+    }
+  ]
+}

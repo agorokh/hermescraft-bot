@@ -206,6 +206,12 @@ function autoRememberFact(line) {
 // Marks commandQueue entries `status='stale'` after STALE_INTENT_TIMEOUT_MS
 // with no progress, writes a one-line memory fact, and records the
 // player+command so the brain can acknowledge later. Surfaced via /commands.
+//
+// Gemini council #72: a queue-only mark is too passive — if the kid said
+// "dig a massive hole" and walked away, Steve will keep digging while the
+// stale flag sits idle in the queue. Physical interrupt: if `currentTask`
+// was started in service of a now-stale intent (best-effort heuristic:
+// same player, task started after the queue entry was created), stop it.
 function sweepStaleIntents() {
   if (!commandQueue || commandQueue.length === 0) return;
   const now = Date.now();
@@ -221,6 +227,32 @@ function sweepStaleIntents() {
     const fact = `${player} asked "${cmd}" at ${new Date(entry.time).toLocaleTimeString()} then walked away — paused. (stale after ${Math.round(age/1000)}s no follow-up)`;
     autoRememberFact(fact);
     log(`[stale] ${player}: "${cmd}" stale after ${Math.round(age/1000)}s`);
+
+    // Physical interrupt: if currentTask is plausibly serving this entry
+    // (started after entry.time, kid not online to chat anew), stop the
+    // bot's in-flight action so it doesn't keep digging/walking forever.
+    // Conservative: only interrupt SLOW_TASK / movement-typed tasks. The
+    // brain on its next turn sees the stale entry on /commands AND the
+    // cancelled task → emits an acknowledgement chat ("oh you walked off,
+    // pausing — let me know when you're back").
+    try {
+      if (currentTask && currentTask.status === 'running'
+          && currentTask.started && currentTask.started > entry.time - 5000) {
+        const STALE_INTERRUPTIBLE = new Set([
+          'collect', 'bg_collect', 'goto', 'goto_near', 'follow',
+          'fight', 'sprint_attack', 'pickup', 'flee',
+        ]);
+        if (STALE_INTERRUPTIBLE.has(currentTask.action)) {
+          log(`[stale] interrupting currentTask=${currentTask.action} for stale intent of ${player}`);
+          try { if (bot?.pathfinder) bot.pathfinder.setGoal(null); } catch {}
+          try { if (bot) bot.stopDigging?.(); } catch {}
+          try { if (bot) bot.clearControlStates?.(); } catch {}
+          currentTask.status = 'cancelled';
+          currentTask.error = `Cancelled — ${player}'s intent stale (${Math.round(age/1000)}s no follow-up)`;
+          entry.physical_interrupt = true;
+        }
+      }
+    } catch (e) { log(`[stale] interrupt error: ${e.message}`); }
   }
 }
 
@@ -532,7 +564,137 @@ async function createBot() {
       // doesn't burn anything.
       try {
         registerHighLevelSkills(ACTIONS, ensureBot);
-        log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2');
+        // ── Auto-memory wrappers on marquee skills (issue #68 / cherry-picked
+        // from f557003 after PR #69 bumped vendor to the wrong commit). The
+        // brain reliably calls these high-level verbs; auto-write the
+        // completion fact to MEMORY.md so cross-session continuity doesn't
+        // depend on Sonnet remembering to ALSO emit a memory.add tool call
+        // (emitting text-wrapped <tool_call>s alongside native Bash tool_use
+        // is rare for Sonnet under load — primary failure mode of PR #54).
+        const _origBuildSchematic = ACTIONS.build_schematic;
+        if (_origBuildSchematic) {
+          ACTIONS.build_schematic = async (body) => {
+            const result = await _origBuildSchematic(body);
+            try {
+              const r = result?.result || '';
+              const m = r.match(/Built (?:schematic )?"?([\w_-]+)"? at ([-\d]+),([-\d]+),([-\d]+) — (\d+)\/(\d+)/);
+              if (m) {
+                const [, schemName, x, y, z, placed, total] = m;
+                if (Number(placed) > 0) {
+                  // If body carries `kid_name` (kid said "name it X"), record
+                  // it FIRST so the object-permanence gate (issue #68) can
+                  // recover the kid-facing name next session. body.name is the
+                  // schematic id; not the kid's name.
+                  const kidName = body && typeof body.kid_name === 'string' && body.kid_name.trim()
+                    ? body.kid_name.trim()
+                    : null;
+                  const label = kidName ? `${kidName} (${schemName})` : schemName;
+                  autoRememberFact(`Built ${label} for kid at ${x},${y},${z} (${placed}/${total} blocks). Schematic build.`);
+                }
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+        }
+        const _origBuildTower = ACTIONS.build_tower;
+        if (_origBuildTower) {
+          ACTIONS.build_tower = async (body) => {
+            const result = await _origBuildTower(body);
+            try {
+              const x = body.x, y = body.y, z = body.z, mat = body.material;
+              const r = result?.result || '';
+              const m = r.match(/(\d+)\/(\d+)/);
+              if (m && Number(m[1]) > 0) {
+                const kidName = body && typeof body.kid_name === 'string' && body.kid_name.trim()
+                  ? body.kid_name.trim()
+                  : null;
+                const label = kidName ? `${kidName} (${mat || 'block'} tower)` : `${mat || 'block'} tower`;
+                autoRememberFact(`Built ${label} at ${x},${y},${z} (${m[1]}/${m[2]} blocks). Kid build.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+        }
+        const _origGiveToPlayer = ACTIONS.give_to_player;
+        if (_origGiveToPlayer) {
+          ACTIONS.give_to_player = async (body) => {
+            const result = await _origGiveToPlayer(body);
+            try {
+              const r = result?.result || '';
+              if (/gave|tossed|delivered/i.test(r) || /^\s*Sent /i.test(r)) {
+                autoRememberFact(`Gave ${body.count || ''} ${body.item} to ${body.player}.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+        }
+        const _origFindBlocks = ACTIONS.find_blocks;
+        if (_origFindBlocks) {
+          ACTIONS.find_blocks = async (body) => {
+            const result = await _origFindBlocks(body);
+            try {
+              // find_blocks returns `{ result: "Found 5 iron_ore", locations: [{x,y,z}, ...] }`
+              // — coords are in `locations`, NOT the result string.
+              const locs = Array.isArray(result?.locations) ? result.locations : [];
+              if (locs.length > 0) {
+                const nearest = locs[0];
+                if (typeof nearest.x === 'number' && typeof nearest.y === 'number' && typeof nearest.z === 'number') {
+                  const blockName = body.block || body.type || 'block';
+                  autoRememberFact(`Found ${blockName} vein at ${nearest.x},${nearest.y},${nearest.z} (${locs.length} block${locs.length === 1 ? '' : 's'} visible).`);
+                }
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+        }
+        const _origLightArea = ACTIONS.light_area;
+        if (_origLightArea) {
+          ACTIONS.light_area = async (body) => {
+            const result = await _origLightArea(body);
+            try {
+              const r = result?.result || '';
+              const m = r.match(/(\d+)/);
+              if (m && Number(m[1]) > 0) {
+                autoRememberFact(`Lit area around ${body.cx},${body.cy},${body.cz} with ${m[1]} torches.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+        }
+        const _origPlaceNearPlayer = ACTIONS.place_near_player;
+        if (_origPlaceNearPlayer) {
+          ACTIONS.place_near_player = async (body) => {
+            const result = await _origPlaceNearPlayer(body);
+            try {
+              const r = result?.result || '';
+              if (/placed|put|set/i.test(r) && !/cannot|couldn't/i.test(r)) {
+                autoRememberFact(`Placed ${body.item} near ${body.player}.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+        }
+        for (const collectVerb of ['collect', 'bg_collect']) {
+          const orig = ACTIONS[collectVerb];
+          if (!orig) continue;
+          ACTIONS[collectVerb] = async (body) => {
+            const result = await orig(body);
+            try {
+              const r = result?.result || '';
+              const m = r.match(/(?:Collected|collected|gathered|mined)\s+(\d+)(?:\/\d+)?\s+([\w_-]+)/);
+              if (m) {
+                const [, count, item] = m;
+                if (Number(count) > 0) {
+                  const pos = bot?.entity?.position;
+                  const where = pos ? ` at ~${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}` : '';
+                  autoRememberFact(`Mined ${count} ${item}${where}.`);
+                }
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+        }
+        log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2 + auto-memory wrappers on 8 marquee verbs (#68)');
       } catch (e) {
         log(`skill registration failed: ${e.message}`);
       }

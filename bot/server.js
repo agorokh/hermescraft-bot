@@ -124,6 +124,18 @@ let reconnectAttempts = 0;
 const MAX_LOG = 100;
 const MAX_QUEUE = 20;
 
+// ── Stale-intent timeout (issue #68 Patch 2) ──────────────────────
+// Kids walk away mid-request. Without this sweep, a pending commandQueue
+// entry would sit forever, polluting `mc commands` and (worse) letting the
+// brain blindly act on a 10-min-old request after the kid logged off. The
+// sweep marks entries `status === 'stale'` after STALE_INTENT_TIMEOUT_MS
+// with no in-flight progress, writes a durable "<player> asked for X then
+// walked away — paused" memory entry, and surfaces them on `/commands` so
+// the brain can acknowledge ("oh you came back — want me to finish?") on
+// the kid's next turn.
+const STALE_INTENT_TIMEOUT_MS = parseInt(process.env.STALE_INTENT_TIMEOUT_MS || '120000', 10);
+const STALE_SWEEP_INTERVAL_MS = parseInt(process.env.STALE_SWEEP_INTERVAL_MS || '30000', 10);
+
 // Rolling buffer of recent action outcomes for loop detection
 let actionHistory = []; // { action, status, time }
 const MAX_ACTION_HISTORY = 10;
@@ -153,6 +165,65 @@ function trimCommandQueue() {
     }
   }
 }
+// ── Auto-memory side-effect (issue #68 Patch 2) ──────────────────
+// Minimal MEMORY.md append helper for server-side stale-intent notices
+// (and future side-effect writes when the brain is unreliable under load).
+// Companion home is set by start_companion_phase3.sh via
+// HERMES_COMPANION_HOME; fall back to ~/.hermes-companion-<lowercase username>.
+// Content-dedup window prevents spam when the brain is mid-restart.
+const AUTOMEM_DEDUP_WINDOW_MS = 5 * 60_000;
+let _autoMemoryRecent = []; // [{ ts, content }]
+function _companionMemoryFile() {
+  const home = process.env.HERMES_COMPANION_HOME
+    || (process.env.HOME && path.join(process.env.HOME, `.hermes-companion-${(config?.mc?.username || 'rosie').toLowerCase()}`));
+  if (!home) return null;
+  return path.join(home, 'memories', 'MEMORY.md');
+}
+function autoRememberFact(line) {
+  if (!line || typeof line !== 'string') return false;
+  const memFile = _companionMemoryFile();
+  if (!memFile) return false;
+  try {
+    const now = Date.now();
+    // Drop dedup entries outside the window
+    while (_autoMemoryRecent.length && now - _autoMemoryRecent[0].ts > AUTOMEM_DEDUP_WINDOW_MS) {
+      _autoMemoryRecent.shift();
+    }
+    if (_autoMemoryRecent.some((e) => e.content === line)) return false;
+    fs.mkdirSync(path.dirname(memFile), { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 10);
+    fs.appendFileSync(memFile, `\n§\n${stamp}: ${line}\n`);
+    _autoMemoryRecent.push({ ts: now, content: line });
+    log(`[automem] wrote "${line.slice(0, 100)}" to ${memFile}`);
+    return true;
+  } catch (e) {
+    log(`[automem] write failed: ${e.message}`);
+    return false;
+  }
+}
+
+// ── Stale-intent sweep (issue #68 Patch 2) ───────────────────────
+// Marks commandQueue entries `status='stale'` after STALE_INTENT_TIMEOUT_MS
+// with no progress, writes a one-line memory fact, and records the
+// player+command so the brain can acknowledge later. Surfaced via /commands.
+function sweepStaleIntents() {
+  if (!commandQueue || commandQueue.length === 0) return;
+  const now = Date.now();
+  for (const entry of commandQueue) {
+    if (entry.status !== 'pending') continue;
+    const age = now - (entry.time || now);
+    if (age < STALE_INTENT_TIMEOUT_MS) continue;
+    entry.status = 'stale';
+    entry.stale_at = now;
+    const player = entry.from || 'someone';
+    // Compact the command — strip long quotes, keep first 80 chars.
+    const cmd = (entry.command || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const fact = `${player} asked "${cmd}" at ${new Date(entry.time).toLocaleTimeString()} then walked away — paused. (stale after ${Math.round(age/1000)}s no follow-up)`;
+    autoRememberFact(fact);
+    log(`[stale] ${player}: "${cmd}" stale after ${Math.round(age/1000)}s`);
+  }
+}
+
 // Pending voice turns waiting for the brain's reply. Map<id, {resolve, timer, kid, ts}>
 // where `resolve` is the HTTP response resolver and `timer` is the fail-closed
 // timeout handle. When ACTIONS.chat fires while a voice turn is in flight,
@@ -1723,11 +1794,15 @@ const ACTIONS = {
   // ── Command queue management ────────────────────
   async complete_command({ index = 0 }) {
     if (commandQueue.length === 0) return { result: 'No commands in queue.' };
-    const pending = commandQueue.filter(c => c.status === 'pending');
-    if (index >= pending.length) return { result: 'No pending command at that index.' };
-    pending[index].status = 'completed';
-    rememberSocialEvent({ actor: pending[index].from, kind: 'completed_command', channel: pending[index].channel || 'direct', message: pending[index].command });
-    return { result: `Marked command as completed: "${pending[index].command}"` };
+    // Accept both pending and stale entries (issue #68 Patch 2). Stale
+    // entries surface on /commands so the brain can acknowledge them;
+    // marking them done is the same FIFO motion.
+    const surfaced = commandQueue.filter(c => c.status === 'pending' || c.status === 'stale');
+    if (index >= surfaced.length) return { result: 'No pending command at that index.' };
+    const wasStale = surfaced[index].status === 'stale';
+    surfaced[index].status = 'completed';
+    rememberSocialEvent({ actor: surfaced[index].from, kind: 'completed_command', channel: surfaced[index].channel || 'direct', message: surfaced[index].command });
+    return { result: `Marked command as completed${wasStale ? ' (was stale)' : ''}: "${surfaced[index].command}"` };
   },
 
   // ── Crafting ─────────────────────────────────────
@@ -2894,19 +2969,23 @@ const httpServer = http.createServer(async (req, res) => {
       }
 
       if (path === '/commands') {
-        // Get pending commands queued by in-game chat OR voice (issue #54).
-        const pending = commandQueue.filter(c => c.status === 'pending');
+        // Get pending + stale commands queued by in-game chat OR voice.
+        // Stale entries (issue #68 Patch 2) surface so the brain can
+        // acknowledge "you walked away — want me to finish?" on the kid's
+        // next turn. Brain marks them done via complete_command like any
+        // other entry once it has processed them.
+        const surfaced = commandQueue.filter(c => c.status === 'pending' || c.status === 'stale');
         // Mark any voice turns as dispatched the first time the brain reads
         // them, so auto-correlate in ACTIONS.chat can match the next reply
         // to the right pending voice turn.
         const now = Date.now();
-        for (const entry of pending) {
+        for (const entry of surfaced) {
           if (entry.source === 'voice' && _pendingVoiceTurns.has(entry.id)) {
             const turn = _pendingVoiceTurns.get(entry.id);
             if (!turn.dispatched_ts) turn.dispatched_ts = now;
           }
         }
-        return respond(res, 200, { ok: true, data: { commands: pending } });
+        return respond(res, 200, { ok: true, data: { commands: surfaced } });
       }
 
       if (path === '/sounds') {
@@ -3165,6 +3244,17 @@ setInterval(() => {
     }
   }
 }, 5000);
+
+// ── Stale-intent sweep loop (issue #68 Patch 2) ───────────────────
+// Independent of the 5s stuck-detection interval — STALE_SWEEP_INTERVAL_MS
+// defaults to 30s so we don't burn CPU walking the queue when nothing
+// can possibly be stale (entries only become stale after 120s by default).
+const _staleSweepTimer = setInterval(() => {
+  try { sweepStaleIntents(); } catch (e) { log(`[stale] sweep error: ${e.message}`); }
+}, STALE_SWEEP_INTERVAL_MS);
+// Keep `_staleSweepTimer` referenced so node doesn't warn about an
+// unused identifier; the timer is implicitly cleared on process exit.
+void _staleSweepTimer;
 
 // ═══════════════════════════════════════════════════════════════════
 // Startup

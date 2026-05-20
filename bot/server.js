@@ -179,6 +179,69 @@ function _companionMemoryFile() {
   if (!home) return null;
   return path.join(home, 'memories', 'MEMORY.md');
 }
+// ── readMemoryAnchorsNear — issue #68 Phase C (memory anchors in perceive) ──
+// Reads MEMORY.md, extracts named-build / named-place entries with explicit
+// coordinates, filters to entries within `radius` blocks of `pos`, returns the
+// `limit` nearest ones as { label, x, y, z, distance } objects.
+//
+// Recognized line shapes (matches autoRememberFact + brain-side memory.add
+// formats):
+//   "Built <NAME> ... at X,Y,Z (..."             — auto-memory build wrapper
+//   "Built <name> (<schem>) for kid at X,Y,Z"    — kid_name + schematic
+//   "Built <thing> at X,Y,Z"                     — generic build
+//   "Found <ore> vein at X,Y,Z"                  — discovery
+//   "<freeform name>: X,Y,Z"                     — brain memory.add convention
+//   "the fairy treehouse: 1691,73,1712"          — kid-given names
+//
+// Defensive: caps at LIMIT entries, ignores malformed lines, fail-silent.
+const MEMORY_ANCHOR_LINE_LIMIT = 500; // scan at most N lines for cost control
+function readMemoryAnchorsNear(pos, radius = 200, limit = 6) {
+  const memFile = _companionMemoryFile();
+  if (!memFile) return [];
+  let raw;
+  try { raw = fs.readFileSync(memFile, 'utf8'); } catch { return []; }
+  const px = Math.floor(pos?.x ?? 0);
+  const py = Math.floor(pos?.y ?? 0);
+  const pz = Math.floor(pos?.z ?? 0);
+  const lines = raw.split('\n').slice(-MEMORY_ANCHOR_LINE_LIMIT);
+  const out = [];
+  // Two extractor patterns — first match wins per line, prefer the
+  // "Built/Found/Mined ... at X,Y,Z" shape because it has a verb-anchored
+  // name; fallback to "<name>: X,Y,Z".
+  const verbRe = /\b(?:Built|Placed|Found|Mined|Lit|Gave)\s+(.+?)\s+(?:at|near|around)\s+(-?\d{1,5})\s*,\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})/i;
+  const colonRe = /^([A-Za-z][^:\n]{2,60}):\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})/;
+  for (const line of lines) {
+    if (!line || line.trim().length === 0) continue;
+    let m = line.match(verbRe);
+    let label, x, y, z;
+    if (m) {
+      label = m[1].replace(/\s+for\s+kid$|\s+for\s+\w+$|\s*\(\d+\/\d+\s+blocks\).*$/i, '').trim();
+      x = +m[2]; y = +m[3]; z = +m[4];
+    } else {
+      m = line.match(colonRe);
+      if (!m) continue;
+      label = m[1].trim();
+      x = +m[2]; y = +m[3]; z = +m[4];
+    }
+    // Strip leading date prefix ("2026-05-20: Built ...")
+    label = label.replace(/^\d{4}-\d{2}-\d{2}:\s*/, '').trim();
+    if (!label || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const dx = x - px, dz = z - pz;
+    const distance = Math.round(Math.sqrt(dx * dx + dz * dz));
+    if (distance > radius) continue;
+    // Cap label length for prompt budget
+    out.push({ label: label.slice(0, 60), x, y, z, distance });
+  }
+  // Sort nearest first; dedup by label+coords (latest entry wins so the most
+  // recent fact about a named place is shown, not the earliest)
+  const seen = new Map();
+  for (const a of out) {
+    const key = `${a.label.toLowerCase()}|${a.x},${a.y},${a.z}`;
+    seen.set(key, a);
+  }
+  return Array.from(seen.values()).sort((a, b) => a.distance - b.distance).slice(0, limit);
+}
+
 function autoRememberFact(line) {
   if (!line || typeof line !== 'string') return false;
   const memFile = _companionMemoryFile();
@@ -1707,6 +1770,27 @@ const ACTIONS = {
     // Pending commands (kid requests waiting for action)
     if (data.pending_commands && data.pending_commands > 0) {
       lines.push(`## pending kid requests: ${data.pending_commands} (run mc commands to drain)`);
+    }
+    // ── Memory anchors (issue #68 Phase C fix; gemini council 2026-05-20) ──
+    // Inject nearby named-build entries from MEMORY.md as live sensory data.
+    // The brain skips pure-recall replies because §1.0d ("world must change
+    // THIS turn") makes chat-only turns feel like no-ops. But if the perceive
+    // output INCLUDES the named build as a "you can see" anchor, referencing
+    // it becomes a grounded act — same as referencing a nearby block or entity.
+    // Bot reads its own MEMORY.md (HERMES_COMPANION_HOME injected by launcher),
+    // extracts "Built X (or similar) at A,B,C" entries within 200 blocks, and
+    // surfaces them alongside nearby blocks. Cheap on-disk read (<5ms), no API.
+    try {
+      const anchors = readMemoryAnchorsNear(pos, 200, 6);
+      if (anchors.length > 0) {
+        lines.push('## remembered nearby builds (from your memory.md):');
+        for (const a of anchors) {
+          lines.push(`  - ${a.label} at ${a.x},${a.y},${a.z} (${a.distance}m away)`);
+        }
+      }
+    } catch (e) {
+      // never fail perceive due to memory read; log + continue
+      log(`[memory-anchors] perceive read failed: ${e.message}`);
     }
     return { result: lines.join('\n') };
   },

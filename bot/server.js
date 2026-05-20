@@ -3231,6 +3231,28 @@ const httpServer = http.createServer(async (req, res) => {
             if (!turn.dispatched_ts) turn.dispatched_ts = now;
           }
         }
+        // ── Pre-flight memory injection (issue #68 Phase C; gemini council
+        // 2026-05-20 "Passive Perception"): when a queue entry's command body
+        // matches a recall/spatial query pattern, attach memory anchors right
+        // there so the brain sees them WHEN it drains the queue. Doesn't
+        // require the brain to call `mc perceive` (Sonnet-discipline gap
+        // proven 3 cycles in a row). Anchors travel WITH the question.
+        try {
+          const recallRe = /\b(?:where|what|when|do you remember|recall|hang out|our spot|fairy|spire|treehouse|beacon|lighthouse|build(?: did| we| last| together)|last build)\b/i;
+          for (const entry of surfaced) {
+            if (!entry || entry.memory_context) continue;
+            const body = entry.command || entry.originalMessage || '';
+            if (!recallRe.test(body)) continue;
+            const pos = bot && bot.entity ? bot.entity.position : { x: 0, y: 64, z: 0 };
+            const anchors = readMemoryAnchorsNear(pos, 300, 6);
+            if (anchors.length > 0) {
+              entry.memory_context = {
+                hint: "the kid asked something recall-shaped; here's what's near you from your MEMORY.md — reply with the name + coords + a personal aside in YOUR voice. This IS the world-change.",
+                nearby_remembered_builds: anchors,
+              };
+            }
+          }
+        } catch (e) { log(`[memory-injection] /commands enrichment failed: ${e.message}`); }
         return respond(res, 200, { ok: true, data: { commands: surfaced } });
       }
 

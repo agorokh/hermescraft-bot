@@ -260,17 +260,29 @@ const INTENTS = [
         return { action: 'list_schematics', body: {} };
       }
       if (!name) return null;
+      // 2026-05-19 — Extract kid-given name when the prompt includes
+      // "name it X" / "call it X" / "called X" / "named the X". Auto-memory
+      // wrapper (server.js, body.kid_name) records it alongside coords so
+      // object-permanence recall finds the build by the kid's chosen label,
+      // not just the schematic id. Issue #68 Phase A failure mode (the
+      // "Aurora Spire" 20-min cycle showed the build ran but no kid_name
+      // reached MEMORY.md).
+      const kidNameMatch = ctx.body.match(
+        /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
+      );
+      const kidName = kidNameMatch
+        ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
+        : null;
       // Origin = 2 blocks away from the anchor (kid pos if known, else
       // bot's own pos), ground level.
-      return {
-        action: 'build_schematic',
-        body: {
-          name,
-          x: Math.floor(p.x) + 2,
-          y: Math.floor(p.y),
-          z: Math.floor(p.z),
-        },
+      const schemBody = {
+        name,
+        x: Math.floor(p.x) + 2,
+        y: Math.floor(p.y),
+        z: Math.floor(p.z),
       };
+      if (kidName) schemBody.kid_name = kidName;
+      return { action: 'build_schematic', body: schemBody };
     },
   },
   {
@@ -304,16 +316,25 @@ const INTENTS = [
           break;
         }
       }
-      return {
-        action: 'build_tower',
-        body: {
-          x: Math.floor(p.x) + chosen[0],
-          y: baseY,
-          z: Math.floor(p.z) + chosen[1],
-          height,
-          material,
-        },
+      // 2026-05-19 — same kid_name extraction as build_schematic. The auto-
+      // memory wrapper (server.js) records `Built <kid_name> (<material> tower)
+      // at X,Y,Z` when kid_name is present, so object-permanence Phase C HARD
+      // recall can match by the kid's chosen label.
+      const kidNameMatch = ctx.body.match(
+        /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
+      );
+      const kidName = kidNameMatch
+        ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
+        : null;
+      const towerBody = {
+        x: Math.floor(p.x) + chosen[0],
+        y: baseY,
+        z: Math.floor(p.z) + chosen[1],
+        height,
+        material,
       };
+      if (kidName) towerBody.kid_name = kidName;
+      return { action: 'build_tower', body: towerBody };
     },
   },
   {

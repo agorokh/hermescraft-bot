@@ -61,9 +61,11 @@ import { registerHighLevelSkills } from './lib/skills.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute, ackFor } from './lib/intent_router.js';
 import { installQuestEngine } from './lib/quests.js';
+import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
 let _quest_tear_down = null;
+let _survival_tear_down = null;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
 const DATA_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'data');
@@ -779,6 +781,17 @@ async function createBot() {
         }).catch((e) => log(`quest engine install failed: ${e.message}`));
       } catch (e) {
         log(`quest engine sync failure: ${e.message}`);
+      }
+
+      // Survival tick — rule-based background loops (hunger/health/torch/
+      // unstuck). Zero LLM calls. Enables survival_easy mode by keeping the
+      // bot alive between kid-directed turns. SURVIVAL_TICK_ENABLED=0 to
+      // disable in peaceful-mode deployments.
+      try {
+        if (_survival_tear_down) _survival_tear_down();
+        _survival_tear_down = startSurvivalTick(bot, log);
+      } catch (e) {
+        log(`survival tick install failed: ${e.message}`);
       }
 
       // ── Reactive Events ──────────────────────────────
@@ -3104,6 +3117,215 @@ const ACTIONS = {
   async set_fair_play({ enabled }) {
     fairPlayMode = !!enabled;
     return { result: `Fair play mode: ${fairPlayMode ? 'ON (LOS, sound, reaction delay)' : 'OFF (god-mode perception)'}` };
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Survival skills (issue #81 — closes #59 + #61)
+  // fish_for_food, farm_food, cook_food, return_home, feed_player,
+  // build_shelter_for_night
+  // ═══════════════════════════════════════════════════════════════
+
+  async fish_for_food({ duration = 45 }) {
+    const b = ensureBot();
+    // 1. Find fishing rod in inventory
+    const rod = b.inventory.items().find((i) => i.name === 'fishing_rod');
+    if (!rod) return { result: "I don't have a fishing rod. Need one to fish!" };
+
+    // 2. Find water within 16 blocks
+    const waterBlock = b.findBlock({ matching: (blk) => blk.name === 'water', maxDistance: 16 });
+    if (!waterBlock) return { result: "No water nearby to fish — let's find a lake or river first." };
+
+    // 3. Pathfind close to water
+    const { goals } = (await import('mineflayer-pathfinder')).default || await import('mineflayer-pathfinder');
+    await b.pathfinder.goto(new goals.GoalNear(
+      waterBlock.position.x, waterBlock.position.y, waterBlock.position.z, 2
+    )).catch(() => {});
+
+    // 4. Equip rod and cast
+    await b.equip(rod, 'hand');
+    b.lookAt(waterBlock.position.offset(0.5, 0, 0.5));
+    await new Promise((r) => setTimeout(r, 400));
+
+    let fishCaught = 0;
+    const stopAt = Date.now() + duration * 1000;
+
+    // 5. Fish loop — mineflayer fires 'playerCollect' on catch
+    const catchListener = (collector) => {
+      if (collector.username === b.username) fishCaught++;
+    };
+    b.on('playerCollect', catchListener);
+
+    try {
+      while (Date.now() < stopAt && !b.interrupt_code) {
+        await b.fish().catch(() => {});
+        if (fishCaught > 0) break; // got one, stop
+      }
+    } finally {
+      b.removeListener('playerCollect', catchListener);
+    }
+
+    const result = fishCaught > 0
+      ? `Caught ${fishCaught} fish! Fresh food ready.`
+      : `Fished for ${duration}s but no bites — might need a better spot or enchanted rod.`;
+    autoRememberFact(`Fished near ${waterBlock.position.toFloor()} — caught ${fishCaught}.`);
+    return { result };
+  },
+
+  async farm_food({ radius = 4 }) {
+    const b = ensureBot();
+    let harvested = 0;
+    let tilled = 0;
+
+    // 1. Harvest ready crops (age === 7) within radius
+    const cropBlocks = b.findBlocks({
+      matching: (blk) => ['wheat', 'carrots', 'potatoes', 'beetroots'].includes(blk.name),
+      maxDistance: radius,
+      count: 20,
+    });
+    for (const pos of cropBlocks) {
+      if (b.interrupt_code) break;
+      const blk = b.blockAt(pos);
+      if (!blk) continue;
+      const age = blk.getProperties()?.age;
+      if (age !== undefined && parseInt(age) < 7) continue;
+      try {
+        const { goals } = (await import('mineflayer-pathfinder')).default || await import('mineflayer-pathfinder');
+        await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+        await b.dig(blk);
+        harvested++;
+      } catch { /* can't reach */ }
+    }
+
+    // 2. Till nearby dirt/grass and plant seeds if we have them
+    const hoe = b.inventory.items().find((i) => i.name.includes('hoe'));
+    const seeds = b.inventory.items().find((i) => ['wheat_seeds', 'carrot', 'potato'].includes(i.name));
+    if (hoe && seeds) {
+      const dirtBlocks = b.findBlocks({
+        matching: (blk) => ['dirt', 'grass_block', 'rooted_dirt'].includes(blk.name),
+        maxDistance: 3,
+        count: 9,
+      });
+      for (const pos of dirtBlocks) {
+        if (b.interrupt_code || tilled >= 9) break;
+        const blk = b.blockAt(pos);
+        if (!blk) continue;
+        const above = b.blockAt(pos.offset(0, 1, 0));
+        if (!above || above.name !== 'air') continue;
+        try {
+          const { goals } = (await import('mineflayer-pathfinder')).default || await import('mineflayer-pathfinder');
+          await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+          await b.equip(hoe, 'hand');
+          await b.activateBlock(blk);
+          tilled++;
+          await new Promise((r) => setTimeout(r, 200));
+          const currentSeeds = b.inventory.items().find((i) => ['wheat_seeds', 'carrot', 'potato'].includes(i.name));
+          if (currentSeeds) {
+            const { Vec3 } = await import('vec3');
+            const farmland = b.blockAt(pos);
+            if (farmland && farmland.name === 'farmland') {
+              await b.equip(currentSeeds, 'hand');
+              await b.placeBlock(farmland, new Vec3(0, 1, 0)).catch(() => {});
+            }
+          }
+        } catch { /* can't reach or can't till */ }
+      }
+    }
+
+    const result = `Farmed: harvested ${harvested} crop${harvested === 1 ? '' : 's'}, tilled+planted ${tilled} plot${tilled === 1 ? '' : 's'}.`;
+    if (harvested + tilled > 0) autoRememberFact(`Farmed at ${b.entity.position.toFloor()} — ${harvested} harvested, ${tilled} planted.`);
+    return { result };
+  },
+
+  async cook_food({ input, fuel = 'coal', count = 4 }) {
+    const b = ensureBot();
+    // Find a furnace nearby
+    const furnaceBlock = b.findBlock({ matching: (blk) => blk.name === 'furnace', maxDistance: 16 });
+    if (!furnaceBlock) {
+      // Try to craft a furnace from cobblestone
+      return { result: "No furnace nearby. Place one first or I can craft one if you have cobblestone." };
+    }
+    const rawFood = input || (() => {
+      const raw = ['beef', 'porkchop', 'mutton', 'chicken', 'cod', 'salmon', 'rabbit', 'potato'];
+      const item = b.inventory.items().find((i) => raw.includes(i.name));
+      return item?.name;
+    })();
+    if (!rawFood) return { result: "No raw food to cook — I'd need beef, chicken, fish, or similar." };
+
+    // Use existing ACTIONS.smelt chain
+    const smeltResult = await ACTIONS.smelt_start({ input: rawFood, fuel, count });
+    const smeltMsg = smeltResult?.result || '';
+    if (smeltMsg.includes('no') || smeltMsg.includes('error') || smeltMsg.includes('can\'t')) {
+      return { result: smeltMsg };
+    }
+    // Wait for smelting
+    await new Promise((r) => setTimeout(r, Math.min(count * 10000, 40000)));
+    const takeResult = await ACTIONS.furnace_take({ x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z });
+    const cooked = takeResult?.result || 'done';
+    autoRememberFact(`Cooked ${rawFood} x${count} in furnace at ${furnaceBlock.position.toFloor()}.`);
+    return { result: `Cooked ${rawFood}: ${cooked}` };
+  },
+
+  async return_home({}) {
+    const b = ensureBot();
+    // Look for a mark named 'home' or 'base' or 'spawn'
+    const HOME_NAMES = ['home', 'base', 'spawn', 'our_base'];
+    const marksResult = await ACTIONS.marks({});
+    const text = marksResult?.result || '';
+    const found = HOME_NAMES.find((n) => text.toLowerCase().includes(n));
+    if (found) {
+      return await ACTIONS.go_mark({ name: found });
+    }
+    // Fallback: deathpoint
+    const dp = await ACTIONS.deathpoint({});
+    if (dp?.result && !dp.result.includes('no death')) {
+      return { result: `No home mark set — heading to my last deathpoint. ${dp.result}` };
+    }
+    return { result: "No home mark and no deathpoint yet. Use 'mc mark home' after you reach your base to set it." };
+  },
+
+  async feed_player({ player }) {
+    const b = ensureBot();
+    const target = player || 'DanceO';
+    // 1. Check for cooked food in inventory
+    const COOKED = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken',
+      'cooked_cod', 'cooked_salmon', 'bread', 'baked_potato', 'apple'];
+    const cookedItem = b.inventory.items().find((i) => COOKED.includes(i.name));
+    if (cookedItem) {
+      return await ACTIONS.give_to_player({ player: target, item: cookedItem.name, count: 2 });
+    }
+    // 2. Try to cook something first
+    const cookResult = await ACTIONS.cook_food({ count: 2 });
+    if (!cookResult.result.includes('No') && !cookResult.result.includes('no')) {
+      const freshCooked = b.inventory.items().find((i) => COOKED.includes(i.name));
+      if (freshCooked) {
+        return await ACTIONS.give_to_player({ player: target, item: freshCooked.name, count: 2 });
+      }
+    }
+    // 3. Fallback: give raw food
+    const RAW = ['beef', 'porkchop', 'chicken', 'cod', 'salmon', 'potato', 'carrot', 'apple'];
+    const rawItem = b.inventory.items().find((i) => RAW.includes(i.name));
+    if (rawItem) {
+      return await ACTIONS.give_to_player({ player: target, item: rawItem.name, count: 2 });
+    }
+    return { result: `Nothing to give — my food inventory is empty. We should fish or farm first!` };
+  },
+
+  async build_shelter_for_night({ x, y, z }) {
+    const b = ensureBot();
+    // Use the bot's current position if no coords given
+    const bx = (x !== undefined ? Math.round(x) : Math.round(b.entity.position.x) + 2);
+    const by = (y !== undefined ? Math.round(y) : Math.round(b.entity.position.y));
+    const bz = (z !== undefined ? Math.round(z) : Math.round(b.entity.position.z));
+    // Build dirt_shelter schematic
+    const shelterResult = await ACTIONS.build_schematic({ name: 'dirt_shelter', x: bx, y: by, z: bz });
+    const placed = shelterResult?.result || '';
+    if (placed.includes('0/')) {
+      return { result: `Couldn't place the shelter at ${bx},${by},${bz} — might be in the air or blocked. Try a flat spot.` };
+    }
+    // Light the inside
+    await ACTIONS.light_area({ cx: bx + 1, cy: by + 1, cz: bz + 1, radius: 1 }).catch(() => {});
+    autoRememberFact(`Built emergency shelter at ${bx},${by},${bz}. 3x3 dirt hut.`);
+    return { result: `Shelter built at ${bx},${by},${bz}! ${placed} Get inside — torched it up.` };
   },
 };
 

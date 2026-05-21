@@ -3188,11 +3188,14 @@ const ACTIONS = {
     let harvested = 0;
     let tilled = 0;
 
+    const blockIds = (names) => names
+      .map((n) => b.registry.blocksByName[n]?.id)
+      .filter((id) => id != null);
     const cropMaxAge = (name) => (name === 'beetroots' ? 3 : 7);
 
     // 1. Harvest mature crops within radius
     const cropBlocks = b.findBlocks({
-      matching: (blk) => ['wheat', 'carrots', 'potatoes', 'beetroots'].includes(blk.name),
+      matching: blockIds(['wheat', 'carrots', 'potatoes', 'beetroots']),
       maxDistance: radius,
       count: 20,
     });
@@ -3216,7 +3219,7 @@ const ACTIONS = {
     let planted = 0;
     if (seeds) {
       const farmlandBlocks = b.findBlocks({
-        matching: (blk) => blk.name === 'farmland',
+        matching: blockIds(['farmland']),
         maxDistance: radius,
         count: 20,
       });
@@ -3239,7 +3242,7 @@ const ACTIONS = {
     }
     if (hoe && seeds) {
       const dirtBlocks = b.findBlocks({
-        matching: (blk) => ['dirt', 'grass_block', 'rooted_dirt'].includes(blk.name),
+        matching: blockIds(['dirt', 'grass_block', 'rooted_dirt']),
         maxDistance: 3,
         count: 9,
       });

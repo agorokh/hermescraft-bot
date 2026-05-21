@@ -889,6 +889,7 @@ async function createBot() {
         botReady = false;
         positionHistory = []; // clear stuck detection history
         if (bot?._soundCheckInterval) { clearInterval(bot._soundCheckInterval); bot._soundCheckInterval = null; }
+        if (_survival_tear_down) { _survival_tear_down(); _survival_tear_down = null; }
         
         // In hardcore mode, death = permanent. Don't reconnect.
         if (hardcoreDead) {
@@ -3142,7 +3143,7 @@ const ACTIONS = {
 
     // 4. Equip rod and cast
     await b.equip(rod, 'hand');
-    b.lookAt(waterBlock.position.offset(0.5, 0, 0.5));
+    await b.lookAt(waterBlock.position.offset(0.5, 0, 0.5));
     await new Promise((r) => setTimeout(r, 400));
 
     let fishCaught = 0;
@@ -3332,8 +3333,12 @@ const ACTIONS = {
     const shelterResult = await ACTIONS.build_schematic({ name: 'dirt_shelter', x: bx, y: by, z: bz });
     const placed = shelterResult?.result || '';
     const placedFrac = placed.match(/(\d+)\/(\d+)/);
-    if (placedFrac && parseInt(placedFrac[1], 10) === 0) {
-      return { result: `Couldn't place the shelter at ${bx},${by},${bz} — might be in the air or blocked. Try a flat spot.` };
+    const placedCount = placedFrac ? parseInt(placedFrac[1], 10) : 0;
+    const buildFailed = !placedFrac
+      ? /interrupted|couldn't|could not|is empty|needs /i.test(placed)
+      : placedCount === 0;
+    if (buildFailed) {
+      return { result: `Couldn't build shelter at ${bx},${by},${bz}: ${placed || 'build failed.'}` };
     }
     // Light the inside
     await ACTIONS.light_area({ cx: bx + 1, cy: by + 1, cz: bz + 1, radius: 1 }).catch(() => {});

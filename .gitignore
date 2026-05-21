@@ -38,6 +38,9 @@ data/locations-*.json
 # NLP.js trained model (generated locally by bot)
 bot/model.nlp
 
+# Cursor / editor local state
+.cursor/
+
 # Editor / screenshots
 *.swp
 *.swo

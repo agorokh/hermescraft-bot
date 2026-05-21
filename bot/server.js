@@ -3209,10 +3209,34 @@ const ACTIONS = {
       } catch { /* can't reach */ }
     }
 
-    // 2. Till nearby dirt/grass and plant seeds if we have them
+    // 2. Replant harvested farmland and till nearby dirt if we have seeds
     const hoe = b.inventory.items().find((i) => i.name.includes('hoe'));
     const seedNames = ['wheat_seeds', 'carrot', 'potato', 'beetroot_seeds'];
     const seeds = b.inventory.items().find((i) => seedNames.includes(i.name));
+    let planted = 0;
+    if (seeds) {
+      const farmlandBlocks = b.findBlocks({
+        matching: (blk) => blk.name === 'farmland',
+        maxDistance: radius,
+        count: 20,
+      });
+      for (const pos of farmlandBlocks) {
+        if (b.interrupt_code || planted >= 20) break;
+        const above = b.blockAt(pos.offset(0, 1, 0));
+        if (!above || above.name !== 'air') continue;
+        try {
+          await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+          const currentSeeds = b.inventory.items().find((i) => seedNames.includes(i.name));
+          if (!currentSeeds) break;
+          const farmland = b.blockAt(pos);
+          if (farmland && farmland.name === 'farmland') {
+            await b.equip(currentSeeds, 'hand');
+            await b.placeBlock(farmland, new Vec3(0, 1, 0));
+            planted++;
+          }
+        } catch { /* can't reach or can't plant */ }
+      }
+    }
     if (hoe && seeds) {
       const dirtBlocks = b.findBlocks({
         matching: (blk) => ['dirt', 'grass_block', 'rooted_dirt'].includes(blk.name),
@@ -3243,8 +3267,8 @@ const ACTIONS = {
       }
     }
 
-    const result = `Farmed: harvested ${harvested} crop${harvested === 1 ? '' : 's'}, tilled+planted ${tilled} plot${tilled === 1 ? '' : 's'}.`;
-    if (harvested + tilled > 0) autoRememberFact(`Farmed at ${b.entity.position.floored()} — ${harvested} harvested, ${tilled} planted.`);
+    const result = `Farmed: harvested ${harvested} crop${harvested === 1 ? '' : 's'}, replanted ${planted}, tilled+planted ${tilled} plot${tilled === 1 ? '' : 's'}.`;
+    if (harvested + planted + tilled > 0) autoRememberFact(`Farmed at ${b.entity.position.floored()} — ${harvested} harvested, ${planted + tilled} planted.`);
     return { result };
   },
 

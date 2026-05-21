@@ -76,10 +76,7 @@ function hasTorchInInventory(bot) {
 function currentLightLevel(bot) {
   const pos = bot.entity.position.floored();
   const block = bot.blockAt(pos);
-  if (!block) return 15;
-  const blockLight = block.light ?? 0;
-  const skyLight = block.skyLight ?? 0;
-  return Math.max(blockLight, skyLight);
+  return block ? block.light : 15;
 }
 
 function clearGoalIfStill(bot, goal) {
@@ -188,6 +185,9 @@ export function startSurvivalTick(bot, log, opts = {}) {
       if (now - lastTorchAt < TORCH_COOLDOWN_MS) continue;
 
       const light = currentLightLevel(bot);
+      const isDay = bot.time?.timeOfDay < 12000;
+      // Outdoors in daylight, block.light can be 0 while the area is still bright.
+      if (isDay && light === 0) continue;
       if (light > TORCH_LIGHT_THRESHOLD) continue;
       if (!hasTorchInInventory(bot)) continue;
 

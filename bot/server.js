@@ -3280,7 +3280,7 @@ const ACTIONS = {
 
   async return_home({}) {
     ensureBot();
-    const HOME_NAMES = ['home', 'base', 'spawn', 'our_base'];
+    const HOME_NAMES = ['home', 'base', 'our_base', 'spawn'];
     const locs = loadLocations();
     const found = HOME_NAMES.find((n) => locs[n]);
     if (found) {

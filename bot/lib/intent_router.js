@@ -458,8 +458,8 @@ const INTENTS = [
   {
     name: 'farm_food',
     patterns: [
-      /\b(plant|grow|farm|harvest|till)\b.*(wheat|carrot|potato|food|crops?)\b/i,
-      /\b(wheat|carrot|potato)\s+(farm|field|garden)\b/i,
+      /\b(plant|grow|farm|harvest|till)\b.*(wheat|carrots?|potatoes?|food|crops?)\b/i,
+      /\b(wheat|carrots?|potatoes?)\s+(farm|field|garden)\b/i,
       /\bplant (some |a )?(seeds?|crops?|food)\b/i,
     ],
     async handler(bot, ctx) {
@@ -497,7 +497,7 @@ const INTENTS = [
   {
     name: 'build_shelter_for_night',
     patterns: [
-      /\b(build|make|create|put up) (a |an |)(shelter|hut|emergency\s+shelter|safe\s+(spot|place|house))\b/i,
+      /\b(build|make|create|put up)(?:\s+me)?\s+(?:a |an |)?(shelter|hut|emergency\s+shelter|safe\s+(?:spot|place|house))\b/i,
       /\bit'?s getting dark\b/i,
       /\bnight is coming\b/i,
       /\bwe need a place to (hide|sleep|stay)\b/i,

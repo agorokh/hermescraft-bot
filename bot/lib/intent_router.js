@@ -458,8 +458,8 @@ const INTENTS = [
   {
     name: 'farm_food',
     patterns: [
-      /\b(plant|grow|farm|harvest|till)\b.*(wheat|carrots?|potatoes?|food|crops?)\b/i,
-      /\b(wheat|carrots?|potatoes?)\s+(farm|field|garden)\b/i,
+      /\b(plant|grow|farm|harvest|till)\b.*(wheat|carrots?|potatoes?|beetroots?|food|crops?)\b/i,
+      /\b(wheat|carrots?|potatoes?|beetroots?)\s+(farm|field|garden)\b/i,
       /\bplant (some |a )?(seeds?|crops?|food)\b/i,
     ],
     async handler(bot, ctx) {

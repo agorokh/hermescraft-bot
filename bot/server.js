@@ -2949,10 +2949,11 @@ const ACTIONS = {
     const isFurnaceBlock = (block) =>
       block.name === 'furnace' || block.name === 'lit_furnace' || block.name === 'blast_furnace' || block.name === 'smoker';
     let furnaceBlock;
+    const isFoodFurnace = (block) => ['furnace', 'lit_furnace', 'smoker'].includes(block.name);
     if (x != null && y != null && z != null) {
       furnaceBlock = b.blockAt(new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)));
-      if (!furnaceBlock || !isFurnaceBlock(furnaceBlock)) {
-        throw new Error(`No furnace at ${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}.`);
+      if (!furnaceBlock || !isFoodFurnace(furnaceBlock)) {
+        throw new Error(`No food-capable furnace at ${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}.`);
       }
     } else {
       furnaceBlock = b.findBlock({ matching: isFurnaceBlock, maxDistance: 4 });
@@ -3153,7 +3154,7 @@ const ACTIONS = {
     await b.lookAt(waterBlock.position.offset(0.5, 0, 0.5));
     await new Promise((r) => setTimeout(r, 400));
 
-    const fishNames = ['cod', 'salmon', 'pufferfish', 'tropical_fish'];
+    const fishNames = ['cod', 'salmon'];
     const countFish = () => b.inventory.items()
       .filter((i) => fishNames.includes(i.name))
       .reduce((sum, i) => sum + i.count, 0);
@@ -3240,6 +3241,7 @@ const ACTIONS = {
 
   async cook_food({ input, fuel, count = 4 }) {
     const b = ensureBot();
+    // Blast furnaces smelt ores only — not food. Smoker/regular furnace for cook_food.
     const isFurnace = (blk) => ['furnace', 'lit_furnace', 'smoker'].includes(blk.name);
 
     let furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 16 });

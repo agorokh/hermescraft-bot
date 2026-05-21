@@ -31,5 +31,8 @@ jobs:
         run: |
           bash -n civilization.sh
           bash -n hermescraft.sh
+          bash -n landfolk.sh
           bash -n setup.sh
           bash -n server/start.sh
+          bash -n scripts/run-landfolk-agent.sh
+          bash -n scripts/run-landfolk-bots.sh

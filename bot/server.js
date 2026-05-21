@@ -3278,9 +3278,10 @@ const ACTIONS = {
     if (found) {
       return await ACTIONS.go_mark({ name: found });
     }
-    // Fallback: deathpoint
+    // Fallback: deathpoint (deathpoint() navigates when a death is recorded)
     const dp = await ACTIONS.deathpoint({});
-    if (dp?.result && !dp.result.toLowerCase().includes('no death')) {
+    const noDeathRecorded = !dp?.result || /no deaths recorded/i.test(dp.result);
+    if (!noDeathRecorded) {
       return { result: `No home mark set — heading to my last deathpoint. ${dp.result}` };
     }
     return { result: "No home mark and no deathpoint yet. Use 'mc mark home' after you reach your base to set it." };

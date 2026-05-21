@@ -3234,7 +3234,7 @@ const ACTIONS = {
     return { result };
   },
 
-  async cook_food({ input, fuel = 'coal', count = 4 }) {
+  async cook_food({ input, fuel, count = 4 }) {
     const b = ensureBot();
     const isFurnace = (blk) => ['furnace', 'lit_furnace', 'blast_furnace', 'smoker'].includes(blk.name);
 
@@ -3271,12 +3271,10 @@ const ACTIONS = {
   },
 
   async return_home({}) {
-    const b = ensureBot();
-    // Look for a mark named 'home' or 'base' or 'spawn'
+    ensureBot();
     const HOME_NAMES = ['home', 'base', 'spawn', 'our_base'];
-    const marksResult = await ACTIONS.marks({});
-    const text = marksResult?.result || '';
-    const found = HOME_NAMES.find((n) => text.toLowerCase().includes(n));
+    const locs = loadLocations();
+    const found = HOME_NAMES.find((n) => locs[n]);
     if (found) {
       return await ACTIONS.go_mark({ name: found });
     }

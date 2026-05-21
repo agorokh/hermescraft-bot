@@ -76,7 +76,10 @@ function hasTorchInInventory(bot) {
 function currentLightLevel(bot) {
   const pos = bot.entity.position.floored();
   const block = bot.blockAt(pos);
-  return block ? block.light : 15;
+  if (!block) return 15;
+  const blockLight = block.light ?? 0;
+  const skyLight = block.skyLight ?? 0;
+  return Math.max(blockLight, skyLight);
 }
 
 function clearGoalIfStill(bot, goal) {

@@ -3286,7 +3286,14 @@ const ACTIONS = {
     }
     // Wait for smelting
     await new Promise((r) => setTimeout(r, Math.min(count * 10000, 40000)));
-    const takeResult = await ACTIONS.furnace_take({ x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z });
+    let takeResult;
+    try {
+      takeResult = await ACTIONS.furnace_take({
+        x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z,
+      });
+    } catch (err) {
+      return { result: `Couldn't cook ${rawFood}: ${err.message || 'lost access to furnace.'}` };
+    }
     const cooked = takeResult?.result || '';
     if (!cooked || /no output|could not|couldn't/i.test(cooked)) {
       return { result: `Couldn't cook ${rawFood}: ${cooked || 'furnace produced nothing.'}` };

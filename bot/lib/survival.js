@@ -213,10 +213,9 @@ export function startSurvivalTick(bot, log, opts = {}) {
       if (opts.unstuckEnabled === false) continue;
 
       const pos = bot.entity.position;
-      const hasMovementGoal = bot.pathfinder?.goal != null
-        || (typeof bot.pathfinder?.isMoving === 'function' && bot.pathfinder.isMoving());
+      const isActivelyPathing = typeof bot.pathfinder?.isMoving === 'function' && bot.pathfinder.isMoving();
 
-      if (!hasMovementGoal) {
+      if (!isActivelyPathing) {
         stuckPos = pos.clone();
         stuckCount = 0;
         continue;

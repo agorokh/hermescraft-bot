@@ -424,17 +424,32 @@ const INTENTS = [
   },
 
   // ── Survival intents (issue #81 — closes #59 + #61) ──────────────────────
+  // cook_food before fish_for_food — bare "fish" must not steal "cook fish".
+
+  {
+    name: 'cook_food',
+    patterns: [
+      /\bcook\b/i,
+      /\b(roast|grill|fry|bake)\b/i,
+      /\bput .*(in|into|on) the furnace\b/i,
+      /\bsmelt (some )?(food|meat|fish)\b/i,
+    ],
+    async handler(bot, ctx) {
+      return { action: 'cook_food', body: { count: 4 } };
+    },
+  },
 
   {
     name: 'fish_for_food',
     patterns: [
-      /\bfish\b/i,
       /\bgo (catch|get) (some )?(fish|food)\b/i,
       /\bcatch (some )?(fish|dinner|food)\b/i,
       /\bfishing\b/i,
       /\bcan you fish\b/i,
+      /\b(let'?s |please )?fish\b/i,
     ],
     async handler(bot, ctx) {
+      if (/\bcook\b/i.test(ctx.body)) return null;
       return { action: 'fish_for_food', body: { duration: 45 } };
     },
   },
@@ -449,19 +464,6 @@ const INTENTS = [
     ],
     async handler(bot, ctx) {
       return { action: 'farm_food', body: { radius: 5 } };
-    },
-  },
-
-  {
-    name: 'cook_food',
-    patterns: [
-      /\bcook\b/i,
-      /\b(roast|grill|fry|bake)\b/i,
-      /\bput .*(in|into|on) the furnace\b/i,
-      /\bsmelt (some )?(food|meat|fish)\b/i,
-    ],
-    async handler(bot, ctx) {
-      return { action: 'cook_food', body: { count: 4 } };
     },
   },
 

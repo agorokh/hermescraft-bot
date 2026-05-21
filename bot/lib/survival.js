@@ -79,6 +79,14 @@ function currentLightLevel(bot) {
   return block ? block.light : 15;
 }
 
+function clearGoalIfStill(bot, goal) {
+  try {
+    if (bot.pathfinder?.goal === goal) {
+      bot.pathfinder.setGoal(null);
+    }
+  } catch { /* swallow */ }
+}
+
 // ── main export ───────────────────────────────────────────────────────────────
 
 /**
@@ -133,7 +141,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
             const awayGoal = new goals.GoalInvert(new goals.GoalFollow(hostile.entity, 4));
             bot.pathfinder.setGoal(awayGoal, true);
             await sleep(3000);
-            bot.pathfinder.setGoal(null);
+            clearGoalIfStill(bot, awayGoal);
           } catch (e) { logSurv(`flee error: ${e.message}`); }
         }
       }
@@ -160,7 +168,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
           );
           bot.pathfinder.setGoal(awayGoal, true);
           await sleep(2500);
-          bot.pathfinder.setGoal(null);
+          clearGoalIfStill(bot, awayGoal);
         } catch (e) { logSurv(`creeper flee error: ${e.message}`); }
       }
     }

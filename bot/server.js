@@ -3330,7 +3330,8 @@ const ACTIONS = {
     // Build dirt_shelter schematic
     const shelterResult = await ACTIONS.build_schematic({ name: 'dirt_shelter', x: bx, y: by, z: bz });
     const placed = shelterResult?.result || '';
-    if (placed.includes('0/')) {
+    const placedFrac = placed.match(/(\d+)\/(\d+)/);
+    if (placedFrac && parseInt(placedFrac[1], 10) === 0) {
       return { result: `Couldn't place the shelter at ${bx},${by},${bz} — might be in the air or blocked. Try a flat spot.` };
     }
     // Light the inside

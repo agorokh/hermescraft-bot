@@ -61,9 +61,11 @@ import { registerHighLevelSkills } from './lib/skills.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute, ackFor } from './lib/intent_router.js';
 import { installQuestEngine } from './lib/quests.js';
+import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
 let _quest_tear_down = null;
+let _survival_tear_down = null;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
 const DATA_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'data');
@@ -781,6 +783,17 @@ async function createBot() {
         log(`quest engine sync failure: ${e.message}`);
       }
 
+      // Survival tick — rule-based background loops (hunger/health/torch/
+      // unstuck). Zero LLM calls. Enables survival_easy mode by keeping the
+      // bot alive between kid-directed turns. SURVIVAL_TICK_ENABLED=0 to
+      // disable in peaceful-mode deployments.
+      try {
+        if (_survival_tear_down) _survival_tear_down();
+        _survival_tear_down = startSurvivalTick(bot, log);
+      } catch (e) {
+        log(`survival tick install failed: ${e.message}`);
+      }
+
       // ── Reactive Events ──────────────────────────────
 
       // Chat listener — name-routed message system
@@ -876,6 +889,7 @@ async function createBot() {
         botReady = false;
         positionHistory = []; // clear stuck detection history
         if (bot?._soundCheckInterval) { clearInterval(bot._soundCheckInterval); bot._soundCheckInterval = null; }
+        if (_survival_tear_down) { _survival_tear_down(); _survival_tear_down = null; }
         
         // In hardcore mode, death = permanent. Don't reconnect.
         if (hardcoreDead) {
@@ -2930,12 +2944,19 @@ const ACTIONS = {
   // Fire-and-Forget Smelting
   // ═══════════════════════════════════════════════════════════════
 
-  async smelt_start({ input, fuel, count = 1 }) {
+  async smelt_start({ input, fuel, count = 1, x, y, z }) {
     const b = ensureBot();
-    const furnaceBlock = b.findBlock({
-      matching: block => block.name === 'furnace' || block.name === 'lit_furnace' || block.name === 'blast_furnace' || block.name === 'smoker',
-      maxDistance: 4,
-    });
+    const isFurnaceBlock = (block) =>
+      block.name === 'furnace' || block.name === 'lit_furnace' || block.name === 'blast_furnace' || block.name === 'smoker';
+    let furnaceBlock;
+    if (x != null && y != null && z != null) {
+      furnaceBlock = b.blockAt(new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)));
+      if (!furnaceBlock || !isFurnaceBlock(furnaceBlock)) {
+        throw new Error(`No furnace at ${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}.`);
+      }
+    } else {
+      furnaceBlock = b.findBlock({ matching: isFurnaceBlock, maxDistance: 4 });
+    }
     if (!furnaceBlock) throw new Error('No furnace within 4 blocks. Place one first.');
 
     const furnace = await b.openFurnace(furnaceBlock);
@@ -3104,6 +3125,295 @@ const ACTIONS = {
   async set_fair_play({ enabled }) {
     fairPlayMode = !!enabled;
     return { result: `Fair play mode: ${fairPlayMode ? 'ON (LOS, sound, reaction delay)' : 'OFF (god-mode perception)'}` };
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Survival skills (issue #81 — closes #59 + #61)
+  // fish_for_food, farm_food, cook_food, return_home, feed_player,
+  // build_shelter_for_night
+  // ═══════════════════════════════════════════════════════════════
+
+  async fish_for_food({ duration = 45 }) {
+    const b = ensureBot();
+    // 1. Find fishing rod in inventory
+    const rod = b.inventory.items().find((i) => i.name === 'fishing_rod');
+    if (!rod) return { result: "I don't have a fishing rod. Need one to fish!" };
+
+    // 2. Find water within 16 blocks
+    const waterBlock = b.findBlock({ matching: (blk) => blk.name === 'water', maxDistance: 16 });
+    if (!waterBlock) return { result: "No water nearby to fish — let's find a lake or river first." };
+
+    // 3. Pathfind close to water
+    await b.pathfinder.goto(new goals.GoalNear(
+      waterBlock.position.x, waterBlock.position.y, waterBlock.position.z, 2
+    )).catch(() => {});
+
+    // 4. Equip rod and cast
+    await b.equip(rod, 'hand');
+    await b.lookAt(waterBlock.position.offset(0.5, 0, 0.5));
+    await new Promise((r) => setTimeout(r, 400));
+
+    const fishNames = ['cod', 'salmon'];
+    const countFish = () => b.inventory.items()
+      .filter((i) => fishNames.includes(i.name))
+      .reduce((sum, i) => sum + i.count, 0);
+    const fishBefore = countFish();
+    const stopAt = Date.now() + duration * 1000;
+
+    // 5. Fish loop — stop when edible fish appear in inventory
+    let consecutiveFails = 0;
+    while (Date.now() < stopAt && !b.interrupt_code) {
+      try {
+        await b.fish();
+        consecutiveFails = 0;
+      } catch {
+        consecutiveFails++;
+        await new Promise((r) => setTimeout(r, 800));
+        if (consecutiveFails >= 5) break;
+        continue;
+      }
+      if (countFish() > fishBefore) break;
+    }
+
+    const fishCaught = countFish() - fishBefore;
+    const result = fishCaught > 0
+      ? `Caught ${fishCaught} fish! Fresh food ready.`
+      : `Fished for ${duration}s but no bites — might need a better spot or enchanted rod.`;
+    autoRememberFact(`Fished near ${waterBlock.position.floored()} — caught ${fishCaught}.`);
+    return { result };
+  },
+
+  async farm_food({ radius = 4 }) {
+    const b = ensureBot();
+    let harvested = 0;
+    let tilled = 0;
+
+    const blockIds = (names) => names
+      .map((n) => b.registry.blocksByName[n]?.id)
+      .filter((id) => id != null);
+    const cropMaxAge = (name) => (name === 'beetroots' ? 3 : 7);
+
+    // 1. Harvest mature crops within radius
+    const cropBlocks = b.findBlocks({
+      matching: blockIds(['wheat', 'carrots', 'potatoes', 'beetroots']),
+      maxDistance: radius,
+      count: 20,
+    });
+    for (const pos of cropBlocks) {
+      if (b.interrupt_code) break;
+      const blk = b.blockAt(pos);
+      if (!blk) continue;
+      const age = blk.getProperties()?.age;
+      if (age !== undefined && parseInt(age) < cropMaxAge(blk.name)) continue;
+      try {
+        await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+        await b.dig(blk);
+        harvested++;
+      } catch { /* can't reach */ }
+    }
+
+    // 2. Replant harvested farmland and till nearby dirt if we have seeds
+    const hoe = b.inventory.items().find((i) => i.name.includes('hoe'));
+    const seedNames = ['wheat_seeds', 'carrot', 'potato', 'beetroot_seeds'];
+    const seeds = b.inventory.items().find((i) => seedNames.includes(i.name));
+    let planted = 0;
+    if (seeds) {
+      const farmlandBlocks = b.findBlocks({
+        matching: blockIds(['farmland']),
+        maxDistance: radius,
+        count: 20,
+      });
+      for (const pos of farmlandBlocks) {
+        if (b.interrupt_code || planted >= 20) break;
+        const above = b.blockAt(pos.offset(0, 1, 0));
+        if (!above || above.name !== 'air') continue;
+        try {
+          await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+          const currentSeeds = b.inventory.items().find((i) => seedNames.includes(i.name));
+          if (!currentSeeds) break;
+          const farmland = b.blockAt(pos);
+          if (farmland && farmland.name === 'farmland') {
+            await b.equip(currentSeeds, 'hand');
+            await b.placeBlock(farmland, new Vec3(0, 1, 0));
+            planted++;
+          }
+        } catch { /* can't reach or can't plant */ }
+      }
+    }
+    if (hoe && seeds) {
+      const dirtBlocks = b.findBlocks({
+        matching: blockIds(['dirt', 'grass_block', 'rooted_dirt']),
+        maxDistance: 3,
+        count: 9,
+      });
+      for (const pos of dirtBlocks) {
+        if (b.interrupt_code || tilled >= 9) break;
+        const blk = b.blockAt(pos);
+        if (!blk) continue;
+        const above = b.blockAt(pos.offset(0, 1, 0));
+        if (!above || above.name !== 'air') continue;
+        try {
+          await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+          await b.equip(hoe, 'hand');
+          await b.activateBlock(blk);
+          tilled++;
+          await new Promise((r) => setTimeout(r, 200));
+          const currentSeeds = b.inventory.items().find((i) => seedNames.includes(i.name));
+          if (currentSeeds) {
+            const farmland = b.blockAt(pos);
+            if (farmland && farmland.name === 'farmland') {
+              await b.equip(currentSeeds, 'hand');
+              await b.placeBlock(farmland, new Vec3(0, 1, 0)).catch(() => {});
+            }
+          }
+        } catch { /* can't reach or can't till */ }
+      }
+    }
+
+    const result = `Farmed: harvested ${harvested} crop${harvested === 1 ? '' : 's'}, replanted ${planted}, tilled+planted ${tilled} plot${tilled === 1 ? '' : 's'}.`;
+    if (harvested + planted + tilled > 0) autoRememberFact(`Farmed at ${b.entity.position.floored()} — ${harvested} harvested, ${planted + tilled} planted.`);
+    return { result };
+  },
+
+  async cook_food({ input, fuel, count = 4 }) {
+    const b = ensureBot();
+    // Blast furnaces smelt ores only — not food. Smoker/regular furnace for cook_food.
+    const isFurnace = (blk) => ['furnace', 'lit_furnace', 'smoker'].includes(blk.name);
+
+    let furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 16 });
+    if (!furnaceBlock) {
+      return { result: "No furnace nearby. Place one first or I can craft one if you have cobblestone." };
+    }
+    await b.pathfinder.goto(new goals.GoalNear(
+      furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 2
+    )).catch(() => {});
+    furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 4 });
+    if (!furnaceBlock) {
+      return { result: "Found a furnace but couldn't get within range. Move closer and try again." };
+    }
+    if (furnaceBlock.name === 'blast_furnace') {
+      return { result: 'Blast furnaces cannot cook food — need a regular furnace or smoker nearby.' };
+    }
+
+    const rawFood = input || (() => {
+      const raw = ['beef', 'porkchop', 'mutton', 'chicken', 'cod', 'salmon', 'rabbit', 'potato'];
+      const item = b.inventory.items().find((i) => raw.includes(i.name));
+      return item?.name;
+    })();
+    if (!rawFood) return { result: "No raw food to cook — I'd need beef, chicken, fish, or similar." };
+
+    const fp = furnaceBlock.position;
+    try {
+      await ACTIONS.smelt_start({
+        input: rawFood, fuel, count,
+        x: fp.x, y: fp.y, z: fp.z,
+      });
+    } catch (err) {
+      return { result: err.message || 'Could not start smelting.' };
+    }
+    // Wait for smelting
+    await new Promise((r) => setTimeout(r, Math.min(count * 10000, 40000)));
+    let takeResult;
+    try {
+      takeResult = await ACTIONS.furnace_take({
+        x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z,
+      });
+    } catch (err) {
+      return { result: `Couldn't cook ${rawFood}: ${err.message || 'lost access to furnace.'}` };
+    }
+    const cooked = takeResult?.result || '';
+    if (!cooked || /no output|could not|couldn't/i.test(cooked)) {
+      return { result: `Couldn't cook ${rawFood}: ${cooked || 'furnace produced nothing.'}` };
+    }
+    autoRememberFact(`Cooked ${rawFood} x${count} in furnace at ${furnaceBlock.position.floored()}.`);
+    return { result: `Cooked ${rawFood}: ${cooked}` };
+  },
+
+  async return_home({}) {
+    ensureBot();
+    const HOME_NAMES = ['home', 'base', 'our_base', 'spawn'];
+    const locs = loadLocations();
+    const locKeys = Object.keys(locs);
+    const foundKey = HOME_NAMES.map((n) => locKeys.find((k) => k.toLowerCase() === n)).find(Boolean);
+    if (foundKey) {
+      return await ACTIONS.go_mark({ name: foundKey });
+    }
+    // Fallback: deathpoint (deathpoint() navigates when a death is recorded)
+    let dp;
+    try {
+      dp = await ACTIONS.deathpoint({});
+    } catch (err) {
+      return { result: `No home mark set — couldn't reach last deathpoint (${err.message || 'pathfinding failed'}). Use 'mc mark home' after you reach your base.` };
+    }
+    const noDeathRecorded = !dp?.result || /no deaths recorded/i.test(dp.result);
+    if (!noDeathRecorded) {
+      return { result: `No home mark set — heading to my last deathpoint. ${dp.result}` };
+    }
+    return { result: "No home mark and no deathpoint yet. Use 'mc mark home' after you reach your base to set it." };
+  },
+
+  async feed_player({ player }) {
+    const b = ensureBot();
+    if (!player) return { result: 'No player specified — tell me who to feed.' };
+    const target = player;
+    // 1. Check for cooked food in inventory
+    const COOKED = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken',
+      'cooked_cod', 'cooked_salmon', 'bread', 'baked_potato', 'apple'];
+    const cookedItem = b.inventory.items().find((i) => COOKED.includes(i.name));
+    if (cookedItem) {
+      return await ACTIONS.give_to_player({ player: target, item: cookedItem.name, count: 2 });
+    }
+    // 2. Try to cook something first
+    let cookResult;
+    try {
+      cookResult = await ACTIONS.cook_food({ count: 2 });
+    } catch (err) {
+      cookResult = { result: err.message || '' };
+    }
+    const cookFailed = !cookResult?.result
+      || /^(no |could not|couldn't|found a furnace)/i.test(cookResult.result);
+    if (!cookFailed) {
+      const freshCooked = b.inventory.items().find((i) => COOKED.includes(i.name));
+      if (freshCooked) {
+        return await ACTIONS.give_to_player({ player: target, item: freshCooked.name, count: 2 });
+      }
+    }
+    // 3. Fallback: give raw food
+    const RAW = ['beef', 'porkchop', 'chicken', 'cod', 'salmon', 'potato', 'carrot', 'apple'];
+    const rawItem = b.inventory.items().find((i) => RAW.includes(i.name));
+    if (rawItem) {
+      return await ACTIONS.give_to_player({ player: target, item: rawItem.name, count: 2 });
+    }
+    return { result: `Nothing to give — my food inventory is empty. We should fish or farm first!` };
+  },
+
+  async build_shelter_for_night({ x, y, z }) {
+    const b = ensureBot();
+    // Use the bot's current position if no coords given
+    const bx = (x !== undefined ? Math.round(x) : Math.round(b.entity.position.x) + 2);
+    const by = (y !== undefined ? Math.round(y) : Math.round(b.entity.position.y));
+    const bz = (z !== undefined ? Math.round(z) : Math.round(b.entity.position.z));
+    // Build dirt_shelter schematic
+    const shelterResult = await ACTIONS.build_schematic({ name: 'dirt_shelter', x: bx, y: by, z: bz });
+    const placed = shelterResult?.result || '';
+    const placedFrac = placed.match(/(\d+)\/(\d+)/);
+    const placedCount = placedFrac ? parseInt(placedFrac[1], 10) : 0;
+    const totalCount = placedFrac ? parseInt(placedFrac[2], 10) : 0;
+    const minPlaced = totalCount > 0 ? Math.ceil(totalCount * 0.75) : 1;
+    const buildFailed = !placedFrac
+      ? /interrupted|couldn't|could not|is empty|needs /i.test(placed)
+      : placedCount < minPlaced;
+    if (buildFailed) {
+      return { result: `Couldn't build shelter at ${bx},${by},${bz}: ${placed || 'build failed.'}` };
+    }
+    // Light the inside
+    await ACTIONS.light_area({ cx: bx + 1, cy: by + 1, cz: bz + 1, radius: 1 }).catch(() => {});
+    const partial = placedFrac && placedCount < totalCount;
+    autoRememberFact(`Built emergency shelter at ${bx},${by},${bz}. 3x3 dirt hut.`);
+    if (partial) {
+      return { result: `Shelter mostly built at ${bx},${by},${bz} (${placed}). Get inside — torched what I could.` };
+    }
+    return { result: `Shelter built at ${bx},${by},${bz}! ${placed} Get inside — torched it up.` };
   },
 };
 

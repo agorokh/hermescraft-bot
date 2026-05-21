@@ -3257,15 +3257,10 @@ const ACTIONS = {
     })();
     if (!rawFood) return { result: "No raw food to cook — I'd need beef, chicken, fish, or similar." };
 
-    let smeltResult;
     try {
-      smeltResult = await ACTIONS.smelt_start({ input: rawFood, fuel, count });
+      await ACTIONS.smelt_start({ input: rawFood, fuel, count });
     } catch (err) {
       return { result: err.message || 'Could not start smelting.' };
-    }
-    const smeltMsg = smeltResult?.result || '';
-    if (smeltMsg.includes('no') || smeltMsg.includes('error') || smeltMsg.includes('can\'t')) {
-      return { result: smeltMsg };
     }
     // Wait for smelting
     await new Promise((r) => setTimeout(r, Math.min(count * 10000, 40000)));
@@ -3311,7 +3306,9 @@ const ACTIONS = {
     } catch (err) {
       cookResult = { result: err.message || '' };
     }
-    if (cookResult?.result && !cookResult.result.includes('No') && !cookResult.result.includes('no')) {
+    const cookFailed = !cookResult?.result
+      || /^(no |could not|found a furnace)/i.test(cookResult.result);
+    if (!cookFailed) {
       const freshCooked = b.inventory.items().find((i) => COOKED.includes(i.name));
       if (freshCooked) {
         return await ACTIONS.give_to_player({ player: target, item: freshCooked.name, count: 2 });

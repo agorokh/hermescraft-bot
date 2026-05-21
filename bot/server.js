@@ -3236,14 +3236,20 @@ const ACTIONS = {
 
   async cook_food({ input, fuel = 'coal', count = 4 }) {
     const b = ensureBot();
-    // Find a furnace nearby
-    const furnaceBlock = b.findBlock({ matching: (blk) => blk.name === 'furnace', maxDistance: 16 });
+    const isFurnace = (blk) => ['furnace', 'lit_furnace', 'blast_furnace', 'smoker'].includes(blk.name);
+
+    let furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 16 });
     if (!furnaceBlock) {
       return { result: "No furnace nearby. Place one first or I can craft one if you have cobblestone." };
     }
     await b.pathfinder.goto(new goals.GoalNear(
       furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 2
     )).catch(() => {});
+    furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 4 });
+    if (!furnaceBlock) {
+      return { result: "Found a furnace but couldn't get within range. Move closer and try again." };
+    }
+
     const rawFood = input || (() => {
       const raw = ['beef', 'porkchop', 'mutton', 'chicken', 'cod', 'salmon', 'rabbit', 'potato'];
       const item = b.inventory.items().find((i) => raw.includes(i.name));
@@ -3251,8 +3257,12 @@ const ACTIONS = {
     })();
     if (!rawFood) return { result: "No raw food to cook — I'd need beef, chicken, fish, or similar." };
 
-    // Use existing ACTIONS.smelt chain
-    const smeltResult = await ACTIONS.smelt_start({ input: rawFood, fuel, count });
+    let smeltResult;
+    try {
+      smeltResult = await ACTIONS.smelt_start({ input: rawFood, fuel, count });
+    } catch (err) {
+      return { result: err.message || 'Could not start smelting.' };
+    }
     const smeltMsg = smeltResult?.result || '';
     if (smeltMsg.includes('no') || smeltMsg.includes('error') || smeltMsg.includes('can\'t')) {
       return { result: smeltMsg };
@@ -3295,8 +3305,13 @@ const ACTIONS = {
       return await ACTIONS.give_to_player({ player: target, item: cookedItem.name, count: 2 });
     }
     // 2. Try to cook something first
-    const cookResult = await ACTIONS.cook_food({ count: 2 });
-    if (!cookResult.result.includes('No') && !cookResult.result.includes('no')) {
+    let cookResult;
+    try {
+      cookResult = await ACTIONS.cook_food({ count: 2 });
+    } catch (err) {
+      cookResult = { result: err.message || '' };
+    }
+    if (cookResult?.result && !cookResult.result.includes('No') && !cookResult.result.includes('no')) {
       const freshCooked = b.inventory.items().find((i) => COOKED.includes(i.name));
       if (freshCooked) {
         return await ACTIONS.give_to_player({ player: target, item: freshCooked.name, count: 2 });

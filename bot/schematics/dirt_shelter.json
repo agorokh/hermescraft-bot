@@ -1,8 +1,8 @@
 {
   "footprint": [3, 3],
   "height": 3,
-  "summary": "3x3 dirt emergency shelter — panic button for nightfall (22 blocks of dirt, door gap at front)",
-  "materials": {"dirt": 22},
+  "summary": "3x3 dirt emergency shelter — panic button for nightfall (23 blocks of dirt, door gap at front)",
+  "materials": {"dirt": 23},
   "blocks": [
     [0, 0, 0, "dirt"], [1, 0, 0, "dirt"], [2, 0, 0, "dirt"],
     [0, 0, 1, "dirt"],                    [2, 0, 1, "dirt"],

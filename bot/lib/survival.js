@@ -1,3 +1,7 @@
+import { Vec3 } from 'vec3';
+import pathfinderPkg from 'mineflayer-pathfinder';
+const { goals } = pathfinderPkg;
+
 // HermesCraft survival background tick — Mindcraft modes.js pattern.
 //
 // Design contract:
@@ -126,7 +130,6 @@ export function startSurvivalTick(bot, log, opts = {}) {
           logSurv(`health ${bot.health} ≤ ${HEALTH_FLEE_THRESHOLD} + hostile near — fleeing`);
           try {
             // GoalInvert(GoalFollow) — Mindcraft creeper back-pedal pattern
-            const { goals, Movements } = await import('mineflayer-pathfinder').then(m => m.default || m);
             const awayGoal = new goals.GoalInvert(new goals.GoalFollow(hostile.entity, 4));
             bot.pathfinder.setGoal(awayGoal, true);
             await sleep(3000);
@@ -152,9 +155,8 @@ export function startSurvivalTick(bot, log, opts = {}) {
       if (isCrpr && hostile.dist < HOSTILE_FLEE_RADIUS) {
         logSurv(`creeper at ${hostile.dist.toFixed(1)}m — fleeing (never fight creepers)`);
         try {
-          const pathfinderPkg = await import('mineflayer-pathfinder').then(m => m.default || m);
-          const awayGoal = new pathfinderPkg.goals.GoalInvert(
-            new pathfinderPkg.goals.GoalFollow(hostile.entity, 2)
+          const awayGoal = new goals.GoalInvert(
+            new goals.GoalFollow(hostile.entity, 2)
           );
           bot.pathfinder.setGoal(awayGoal, true);
           await sleep(2500);
@@ -186,7 +188,8 @@ export function startSurvivalTick(bot, log, opts = {}) {
         if (referenceBlock && referenceBlock.boundingBox === 'block') {
           const torchItem = bot.inventory.items().find((i) => i.name === 'torch');
           await bot.equip(torchItem, 'hand');
-          await bot.placeBlock(referenceBlock, new (await import('vec3')).Vec3(0, 1, 0));
+          await bot.lookAt(referenceBlock.position.offset(0.5, 1, 0.5));
+          await bot.placeBlock(referenceBlock, new Vec3(0, 1, 0));
           lastTorchAt = Date.now();
           logSurv('torch placed');
         }
@@ -206,7 +209,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
       if (stuckPos && pos.distanceTo(stuckPos) < 0.5) {
         stuckCount++;
         if (stuckCount >= 3) {
-          logSurv(`stuck (${stuckCount}x same pos ${pos.toFloor()}) — jiggling`);
+          logSurv(`stuck (${stuckCount}x same pos ${pos.floored()}) — jiggling`);
           try {
             // Try jumping + moving forward
             bot.setControlState('jump', true);

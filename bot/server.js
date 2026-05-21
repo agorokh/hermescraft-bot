@@ -3136,7 +3136,6 @@ const ACTIONS = {
     if (!waterBlock) return { result: "No water nearby to fish — let's find a lake or river first." };
 
     // 3. Pathfind close to water
-    const { goals } = (await import('mineflayer-pathfinder')).default || await import('mineflayer-pathfinder');
     await b.pathfinder.goto(new goals.GoalNear(
       waterBlock.position.x, waterBlock.position.y, waterBlock.position.z, 2
     )).catch(() => {});
@@ -3167,7 +3166,7 @@ const ACTIONS = {
     const result = fishCaught > 0
       ? `Caught ${fishCaught} fish! Fresh food ready.`
       : `Fished for ${duration}s but no bites — might need a better spot or enchanted rod.`;
-    autoRememberFact(`Fished near ${waterBlock.position.toFloor()} — caught ${fishCaught}.`);
+    autoRememberFact(`Fished near ${waterBlock.position.floored()} — caught ${fishCaught}.`);
     return { result };
   },
 
@@ -3176,7 +3175,9 @@ const ACTIONS = {
     let harvested = 0;
     let tilled = 0;
 
-    // 1. Harvest ready crops (age === 7) within radius
+    const cropMaxAge = (name) => (name === 'beetroots' ? 3 : 7);
+
+    // 1. Harvest mature crops within radius
     const cropBlocks = b.findBlocks({
       matching: (blk) => ['wheat', 'carrots', 'potatoes', 'beetroots'].includes(blk.name),
       maxDistance: radius,
@@ -3187,9 +3188,8 @@ const ACTIONS = {
       const blk = b.blockAt(pos);
       if (!blk) continue;
       const age = blk.getProperties()?.age;
-      if (age !== undefined && parseInt(age) < 7) continue;
+      if (age !== undefined && parseInt(age) < cropMaxAge(blk.name)) continue;
       try {
-        const { goals } = (await import('mineflayer-pathfinder')).default || await import('mineflayer-pathfinder');
         await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
         await b.dig(blk);
         harvested++;
@@ -3212,7 +3212,6 @@ const ACTIONS = {
         const above = b.blockAt(pos.offset(0, 1, 0));
         if (!above || above.name !== 'air') continue;
         try {
-          const { goals } = (await import('mineflayer-pathfinder')).default || await import('mineflayer-pathfinder');
           await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
           await b.equip(hoe, 'hand');
           await b.activateBlock(blk);
@@ -3220,7 +3219,6 @@ const ACTIONS = {
           await new Promise((r) => setTimeout(r, 200));
           const currentSeeds = b.inventory.items().find((i) => ['wheat_seeds', 'carrot', 'potato'].includes(i.name));
           if (currentSeeds) {
-            const { Vec3 } = await import('vec3');
             const farmland = b.blockAt(pos);
             if (farmland && farmland.name === 'farmland') {
               await b.equip(currentSeeds, 'hand');
@@ -3232,7 +3230,7 @@ const ACTIONS = {
     }
 
     const result = `Farmed: harvested ${harvested} crop${harvested === 1 ? '' : 's'}, tilled+planted ${tilled} plot${tilled === 1 ? '' : 's'}.`;
-    if (harvested + tilled > 0) autoRememberFact(`Farmed at ${b.entity.position.toFloor()} — ${harvested} harvested, ${tilled} planted.`);
+    if (harvested + tilled > 0) autoRememberFact(`Farmed at ${b.entity.position.floored()} — ${harvested} harvested, ${tilled} planted.`);
     return { result };
   },
 
@@ -3241,9 +3239,11 @@ const ACTIONS = {
     // Find a furnace nearby
     const furnaceBlock = b.findBlock({ matching: (blk) => blk.name === 'furnace', maxDistance: 16 });
     if (!furnaceBlock) {
-      // Try to craft a furnace from cobblestone
       return { result: "No furnace nearby. Place one first or I can craft one if you have cobblestone." };
     }
+    await b.pathfinder.goto(new goals.GoalNear(
+      furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 2
+    )).catch(() => {});
     const rawFood = input || (() => {
       const raw = ['beef', 'porkchop', 'mutton', 'chicken', 'cod', 'salmon', 'rabbit', 'potato'];
       const item = b.inventory.items().find((i) => raw.includes(i.name));
@@ -3261,7 +3261,7 @@ const ACTIONS = {
     await new Promise((r) => setTimeout(r, Math.min(count * 10000, 40000)));
     const takeResult = await ACTIONS.furnace_take({ x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z });
     const cooked = takeResult?.result || 'done';
-    autoRememberFact(`Cooked ${rawFood} x${count} in furnace at ${furnaceBlock.position.toFloor()}.`);
+    autoRememberFact(`Cooked ${rawFood} x${count} in furnace at ${furnaceBlock.position.floored()}.`);
     return { result: `Cooked ${rawFood}: ${cooked}` };
   },
 
@@ -3277,7 +3277,7 @@ const ACTIONS = {
     }
     // Fallback: deathpoint
     const dp = await ACTIONS.deathpoint({});
-    if (dp?.result && !dp.result.includes('no death')) {
+    if (dp?.result && !dp.result.toLowerCase().includes('no death')) {
       return { result: `No home mark set — heading to my last deathpoint. ${dp.result}` };
     }
     return { result: "No home mark and no deathpoint yet. Use 'mc mark home' after you reach your base to set it." };
@@ -3285,7 +3285,8 @@ const ACTIONS = {
 
   async feed_player({ player }) {
     const b = ensureBot();
-    const target = player || 'DanceO';
+    if (!player) return { result: 'No player specified — tell me who to feed.' };
+    const target = player;
     // 1. Check for cooked food in inventory
     const COOKED = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken',
       'cooked_cod', 'cooked_salmon', 'bread', 'baked_potato', 'apple'];

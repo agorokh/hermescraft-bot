@@ -2949,11 +2949,10 @@ const ACTIONS = {
     const isFurnaceBlock = (block) =>
       block.name === 'furnace' || block.name === 'lit_furnace' || block.name === 'blast_furnace' || block.name === 'smoker';
     let furnaceBlock;
-    const isFoodFurnace = (block) => ['furnace', 'lit_furnace', 'smoker'].includes(block.name);
     if (x != null && y != null && z != null) {
       furnaceBlock = b.blockAt(new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)));
-      if (!furnaceBlock || !isFoodFurnace(furnaceBlock)) {
-        throw new Error(`No food-capable furnace at ${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}.`);
+      if (!furnaceBlock || !isFurnaceBlock(furnaceBlock)) {
+        throw new Error(`No furnace at ${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}.`);
       }
     } else {
       furnaceBlock = b.findBlock({ matching: isFurnaceBlock, maxDistance: 4 });
@@ -3203,7 +3202,8 @@ const ACTIONS = {
 
     // 2. Till nearby dirt/grass and plant seeds if we have them
     const hoe = b.inventory.items().find((i) => i.name.includes('hoe'));
-    const seeds = b.inventory.items().find((i) => ['wheat_seeds', 'carrot', 'potato'].includes(i.name));
+    const seedNames = ['wheat_seeds', 'carrot', 'potato', 'beetroot_seeds'];
+    const seeds = b.inventory.items().find((i) => seedNames.includes(i.name));
     if (hoe && seeds) {
       const dirtBlocks = b.findBlocks({
         matching: (blk) => ['dirt', 'grass_block', 'rooted_dirt'].includes(blk.name),
@@ -3222,7 +3222,7 @@ const ACTIONS = {
           await b.activateBlock(blk);
           tilled++;
           await new Promise((r) => setTimeout(r, 200));
-          const currentSeeds = b.inventory.items().find((i) => ['wheat_seeds', 'carrot', 'potato'].includes(i.name));
+          const currentSeeds = b.inventory.items().find((i) => seedNames.includes(i.name));
           if (currentSeeds) {
             const farmland = b.blockAt(pos);
             if (farmland && farmland.name === 'farmland') {
@@ -3254,6 +3254,9 @@ const ACTIONS = {
     furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 4 });
     if (!furnaceBlock) {
       return { result: "Found a furnace but couldn't get within range. Move closer and try again." };
+    }
+    if (furnaceBlock.name === 'blast_furnace') {
+      return { result: 'Blast furnaces cannot cook food — need a regular furnace or smoker nearby.' };
     }
 
     const rawFood = input || (() => {

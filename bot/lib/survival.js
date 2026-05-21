@@ -80,11 +80,6 @@ function lightAtBot(bot) {
   return { blockLight: block.light, skyLight: block.skyLight ?? 0 };
 }
 
-function currentLightLevel(bot) {
-  const { blockLight, skyLight } = lightAtBot(bot);
-  return Math.max(blockLight, skyLight);
-}
-
 function clearGoalIfStill(bot, goal) {
   try {
     if (bot.pathfinder?.goal === goal) {

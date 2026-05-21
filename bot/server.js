@@ -3287,7 +3287,10 @@ const ACTIONS = {
     // Wait for smelting
     await new Promise((r) => setTimeout(r, Math.min(count * 10000, 40000)));
     const takeResult = await ACTIONS.furnace_take({ x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z });
-    const cooked = takeResult?.result || 'done';
+    const cooked = takeResult?.result || '';
+    if (!cooked || /no output|could not|couldn't/i.test(cooked)) {
+      return { result: `Couldn't cook ${rawFood}: ${cooked || 'furnace produced nothing.'}` };
+    }
     autoRememberFact(`Cooked ${rawFood} x${count} in furnace at ${furnaceBlock.position.floored()}.`);
     return { result: `Cooked ${rawFood}: ${cooked}` };
   },
@@ -3296,9 +3299,10 @@ const ACTIONS = {
     ensureBot();
     const HOME_NAMES = ['home', 'base', 'our_base', 'spawn'];
     const locs = loadLocations();
-    const found = HOME_NAMES.find((n) => locs[n]);
-    if (found) {
-      return await ACTIONS.go_mark({ name: found });
+    const locKeys = Object.keys(locs);
+    const foundKey = HOME_NAMES.map((n) => locKeys.find((k) => k.toLowerCase() === n)).find(Boolean);
+    if (foundKey) {
+      return await ACTIONS.go_mark({ name: foundKey });
     }
     // Fallback: deathpoint (deathpoint() navigates when a death is recorded)
     let dp;
@@ -3333,7 +3337,7 @@ const ACTIONS = {
       cookResult = { result: err.message || '' };
     }
     const cookFailed = !cookResult?.result
-      || /^(no |could not|found a furnace)/i.test(cookResult.result);
+      || /^(no |could not|couldn't|found a furnace)/i.test(cookResult.result);
     if (!cookFailed) {
       const freshCooked = b.inventory.items().find((i) => COOKED.includes(i.name));
       if (freshCooked) {
@@ -3361,15 +3365,20 @@ const ACTIONS = {
     const placedFrac = placed.match(/(\d+)\/(\d+)/);
     const placedCount = placedFrac ? parseInt(placedFrac[1], 10) : 0;
     const totalCount = placedFrac ? parseInt(placedFrac[2], 10) : 0;
+    const minPlaced = totalCount > 0 ? Math.ceil(totalCount * 0.75) : 1;
     const buildFailed = !placedFrac
       ? /interrupted|couldn't|could not|is empty|needs /i.test(placed)
-      : placedCount === 0 || placedCount < totalCount;
+      : placedCount < minPlaced;
     if (buildFailed) {
       return { result: `Couldn't build shelter at ${bx},${by},${bz}: ${placed || 'build failed.'}` };
     }
     // Light the inside
     await ACTIONS.light_area({ cx: bx + 1, cy: by + 1, cz: bz + 1, radius: 1 }).catch(() => {});
+    const partial = placedFrac && placedCount < totalCount;
     autoRememberFact(`Built emergency shelter at ${bx},${by},${bz}. 3x3 dirt hut.`);
+    if (partial) {
+      return { result: `Shelter mostly built at ${bx},${by},${bz} (${placed}). Get inside — torched what I could.` };
+    }
     return { result: `Shelter built at ${bx},${by},${bz}! ${placed} Get inside — torched it up.` };
   },
 };

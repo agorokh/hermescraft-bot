@@ -3292,7 +3292,12 @@ const ACTIONS = {
       return await ACTIONS.go_mark({ name: found });
     }
     // Fallback: deathpoint (deathpoint() navigates when a death is recorded)
-    const dp = await ACTIONS.deathpoint({});
+    let dp;
+    try {
+      dp = await ACTIONS.deathpoint({});
+    } catch (err) {
+      return { result: `No home mark set — couldn't reach last deathpoint (${err.message || 'pathfinding failed'}). Use 'mc mark home' after you reach your base.` };
+    }
     const noDeathRecorded = !dp?.result || /no deaths recorded/i.test(dp.result);
     if (!noDeathRecorded) {
       return { result: `No home mark set — heading to my last deathpoint. ${dp.result}` };
@@ -3346,9 +3351,10 @@ const ACTIONS = {
     const placed = shelterResult?.result || '';
     const placedFrac = placed.match(/(\d+)\/(\d+)/);
     const placedCount = placedFrac ? parseInt(placedFrac[1], 10) : 0;
+    const totalCount = placedFrac ? parseInt(placedFrac[2], 10) : 0;
     const buildFailed = !placedFrac
       ? /interrupted|couldn't|could not|is empty|needs /i.test(placed)
-      : placedCount === 0;
+      : placedCount === 0 || placedCount < totalCount;
     if (buildFailed) {
       return { result: `Couldn't build shelter at ${bx},${by},${bz}: ${placed || 'build failed.'}` };
     }

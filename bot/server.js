@@ -3161,8 +3161,17 @@ const ACTIONS = {
     const stopAt = Date.now() + duration * 1000;
 
     // 5. Fish loop — stop when edible fish appear in inventory
+    let consecutiveFails = 0;
     while (Date.now() < stopAt && !b.interrupt_code) {
-      await b.fish().catch(() => {});
+      try {
+        await b.fish();
+        consecutiveFails = 0;
+      } catch {
+        consecutiveFails++;
+        await new Promise((r) => setTimeout(r, 800));
+        if (consecutiveFails >= 5) break;
+        continue;
+      }
       if (countFish() > fishBefore) break;
     }
 

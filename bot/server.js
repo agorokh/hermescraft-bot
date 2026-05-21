@@ -2944,12 +2944,19 @@ const ACTIONS = {
   // Fire-and-Forget Smelting
   // ═══════════════════════════════════════════════════════════════
 
-  async smelt_start({ input, fuel, count = 1 }) {
+  async smelt_start({ input, fuel, count = 1, x, y, z }) {
     const b = ensureBot();
-    const furnaceBlock = b.findBlock({
-      matching: block => block.name === 'furnace' || block.name === 'lit_furnace' || block.name === 'blast_furnace' || block.name === 'smoker',
-      maxDistance: 4,
-    });
+    const isFurnaceBlock = (block) =>
+      block.name === 'furnace' || block.name === 'lit_furnace' || block.name === 'blast_furnace' || block.name === 'smoker';
+    let furnaceBlock;
+    if (x != null && y != null && z != null) {
+      furnaceBlock = b.blockAt(new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)));
+      if (!furnaceBlock || !isFurnaceBlock(furnaceBlock)) {
+        throw new Error(`No furnace at ${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}.`);
+      }
+    } else {
+      furnaceBlock = b.findBlock({ matching: isFurnaceBlock, maxDistance: 4 });
+    }
     if (!furnaceBlock) throw new Error('No furnace within 4 blocks. Place one first.');
 
     const furnace = await b.openFurnace(furnaceBlock);
@@ -3146,24 +3153,20 @@ const ACTIONS = {
     await b.lookAt(waterBlock.position.offset(0.5, 0, 0.5));
     await new Promise((r) => setTimeout(r, 400));
 
-    let fishCaught = 0;
+    const fishNames = ['cod', 'salmon', 'pufferfish', 'tropical_fish'];
+    const countFish = () => b.inventory.items()
+      .filter((i) => fishNames.includes(i.name))
+      .reduce((sum, i) => sum + i.count, 0);
+    const fishBefore = countFish();
     const stopAt = Date.now() + duration * 1000;
 
-    // 5. Fish loop — mineflayer fires 'playerCollect' on catch
-    const catchListener = (collector) => {
-      if (collector.username === b.username) fishCaught++;
-    };
-    b.on('playerCollect', catchListener);
-
-    try {
-      while (Date.now() < stopAt && !b.interrupt_code) {
-        await b.fish().catch(() => {});
-        if (fishCaught > 0) break; // got one, stop
-      }
-    } finally {
-      b.removeListener('playerCollect', catchListener);
+    // 5. Fish loop — stop when edible fish appear in inventory
+    while (Date.now() < stopAt && !b.interrupt_code) {
+      await b.fish().catch(() => {});
+      if (countFish() > fishBefore) break;
     }
 
+    const fishCaught = countFish() - fishBefore;
     const result = fishCaught > 0
       ? `Caught ${fishCaught} fish! Fresh food ready.`
       : `Fished for ${duration}s but no bites — might need a better spot or enchanted rod.`;
@@ -3237,7 +3240,7 @@ const ACTIONS = {
 
   async cook_food({ input, fuel, count = 4 }) {
     const b = ensureBot();
-    const isFurnace = (blk) => ['furnace', 'lit_furnace', 'blast_furnace', 'smoker'].includes(blk.name);
+    const isFurnace = (blk) => ['furnace', 'lit_furnace', 'smoker'].includes(blk.name);
 
     let furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 16 });
     if (!furnaceBlock) {
@@ -3258,8 +3261,12 @@ const ACTIONS = {
     })();
     if (!rawFood) return { result: "No raw food to cook — I'd need beef, chicken, fish, or similar." };
 
+    const fp = furnaceBlock.position;
     try {
-      await ACTIONS.smelt_start({ input: rawFood, fuel, count });
+      await ACTIONS.smelt_start({
+        input: rawFood, fuel, count,
+        x: fp.x, y: fp.y, z: fp.z,
+      });
     } catch (err) {
       return { result: err.message || 'Could not start smelting.' };
     }

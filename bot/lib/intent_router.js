@@ -249,6 +249,7 @@ const INTENTS = [
       if (!p) return null;
       // Map kid keywords → schematic names. Falls through if no match.
       const body = ctx.body.toLowerCase();
+      if (/\bsafe\s+house\b/i.test(body)) return null;
       let name = null;
       if (/\b(treehouse|tree house|tree fort|tree home)\b/.test(body)) name = 'treehouse';
       else if (/\b(house|cottage|home|cabin)\b/.test(body)) name = 'small_house';

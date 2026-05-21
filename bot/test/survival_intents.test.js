@@ -30,6 +30,7 @@ const CASES = [
   { body: 'head home', expect: 'return_home' },
   { body: "i'm hungry", expect: 'feed_player', sender: 'Adalynn' },
   { body: "it's getting dark", expect: 'build_shelter_for_night' },
+  { body: 'build a safe house', expect: 'build_shelter_for_night' },
 ];
 
 for (const { body, expect, sender = 'Adalynn' } of CASES) {

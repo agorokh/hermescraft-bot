@@ -430,6 +430,10 @@ function sweepStaleIntents() {
           try { if (bot?.pathfinder) bot.pathfinder.setGoal(null); } catch {}
           try { if (bot) bot.stopDigging?.(); } catch {}
           try { if (bot) bot.clearControlStates?.(); } catch {}
+          if (bot) {
+            bot.interrupt_code = true;
+            bot._stopGeneration = (bot._stopGeneration || 0) + 1;
+          }
           currentTask.status = 'cancelled';
           currentTask.error = `Cancelled — ${player}'s intent stale (${Math.round(age/1000)}s no follow-up)`;
           entry.physical_interrupt = true;
@@ -613,7 +617,8 @@ async function handleChat(username, message) {
           log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
           if (ACTIONS[route.action]) {
             const actionBody = actionBodyForRoute(route);
-            if (route.action !== 'stop') bot.interrupt_code = false;
+            if (route.action === 'stop') bot.interrupt_code = true;
+            else bot.interrupt_code = false;
             // Fire-and-forget — long-running actions don't block chat thread.
             runIntentRoutedAction(route.action, actionBody).then((result) => {
               if (intentRouterOutcomeFailed(route.action, result)) {
@@ -685,10 +690,11 @@ async function handleChat(username, message) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }
               const actionBody = actionBodyForRoute(route);
-              if (route.action !== 'stop') bot.interrupt_code = false;
+              if (route.action === 'stop') bot.interrupt_code = true;
+              else bot.interrupt_code = false;
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
-              ACTIONS[route.action](actionBody).then((result) => {
-                if (actionOutcomeFailed(result)) {
+              runIntentRoutedAction(route.action, actionBody).then((result) => {
+                if (intentRouterOutcomeFailed(route.action, result)) {
                   if (route.skill_id != null) {
                     try { markLastSkillFailed(bot, route.skill_id); } catch {}
                   }
@@ -3685,9 +3691,9 @@ const ACTIONS = {
     const partial = placedFrac && placedCount < totalCount;
     autoRememberFact(`Built emergency shelter at ${bx},${by},${bz}. 3x3 dirt hut.`);
     if (partial) {
-      return { result: `Shelter mostly built at ${bx},${by},${bz} (${placed}). Get inside — torched what I could.` };
+      return { result: `Shelter mostly built at ${bx},${by},${bz}. Get inside — torched what I could.` };
     }
-    return { result: `Shelter built at ${bx},${by},${bz}! ${placed} Get inside — torched it up.` };
+    return { result: `Shelter built at ${bx},${by},${bz}! Get inside — torched it up.` };
   },
 };
 

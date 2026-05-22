@@ -434,8 +434,8 @@ const INTENTS = [
       /\b(build|make|create|put up)(?:\s+me)?\s+(?:a |an |)?(shelter|hut|emergency\s+shelter|safe\s+(?:spot|place|house|home))\b/i,
       /\bit'?s getting dark\b/i,
       /\bnight is coming\b/i,
-      /\bwe need a place to (hide|sleep|stay)\b/i,
-      /\bquick.*(shelter|hide|hut)\b/i,
+      /\bwe need a place to (sleep|stay)\b/i,
+      /\bquick.*(shelter|hut)\b/i,
     ],
     async handler(bot, ctx) {
       return { action: 'build_shelter_for_night', body: {} };

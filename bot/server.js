@@ -717,10 +717,12 @@ async function createBot() {
           ACTIONS.light_area = async (body) => {
             const result = await _origLightArea(body);
             try {
-              const r = result?.result || '';
-              const m = r.match(/(\d+)/);
-              if (m && Number(m[1]) > 0) {
-                autoRememberFact(`Lit area around ${body.cx},${body.cy},${body.cz} with ${m[1]} torches.`);
+              // Use structured `placed` count from skills.light_area, not regex —
+              // the result string starts with the center coords, so /(\d+)/
+              // would match cx (e.g. 1627) instead of the torch count.
+              const placed = Number(result?.placed);
+              if (Number.isFinite(placed) && placed > 0) {
+                autoRememberFact(`Lit area around ${body.cx},${body.cy},${body.cz} with ${placed} torch${placed === 1 ? '' : 'es'}.`);
               }
             } catch { /* swallow */ }
             return result;

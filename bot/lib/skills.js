@@ -422,6 +422,7 @@ async function light_area(bot, { cx, cy, cz, radius = 6 }) {
     result: placed > 0
       ? `Lit the area around ${cx},${cy},${cz} with ${placed} torches.`
       : `Couldn't place any torches — area may already be lit or I don't have torches.`,
+    placed,
   };
 }
 

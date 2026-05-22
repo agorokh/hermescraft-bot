@@ -3963,6 +3963,7 @@ const httpServer = http.createServer(async (req, res) => {
       if (path === '/task/cancel') {
         const b = ensureBot();
         b._stopGeneration = (b._stopGeneration || 0) + 1;
+        b._actionEpoch = (b._actionEpoch || 0) + 1;
         b.interrupt_code = true;
         b.pathfinder.setGoal(null);
         try { b.stopDigging(); } catch {}
@@ -4039,7 +4040,11 @@ const httpServer = http.createServer(async (req, res) => {
       }
 
       markOldestVoiceDispatchedIfPending();
-      if (actionName !== 'stop' && bot) bot.interrupt_code = false;
+      if (actionName === 'stop') {
+        armIntentRoutedAction('stop');
+      } else if (bot) {
+        armIntentRoutedAction(actionName);
+      }
       const result = await actionFn(body);
       actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
       if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();

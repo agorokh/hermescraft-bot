@@ -75,6 +75,10 @@ function currentLightLevel(bot) {
   return block ? block.light : 15;
 }
 
+export function formatStuckPos(pos) {
+  return `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
+}
+
 // ── main export ───────────────────────────────────────────────────────────────
 
 /**
@@ -206,7 +210,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
       if (stuckPos && pos.distanceTo(stuckPos) < 0.5) {
         stuckCount++;
         if (stuckCount >= 3) {
-          logSurv(`stuck (${stuckCount}x same pos ${pos.toFloor()}) — jiggling`);
+          logSurv(`stuck (${stuckCount}x same pos ${formatStuckPos(pos)}) — jiggling`);
           try {
             // Try jumping + moving forward
             bot.setControlState('jump', true);

@@ -1133,9 +1133,8 @@ EOF
     cook_food|cook)
         if [ -n "${1:-}" ]; then
             INPUT="$1"; FUEL="${2:-coal}"; COUNT="${3:-4}"
-            INPUT_ESC=$(json_str "$INPUT")
-            FUEL_ESC=$(json_str "$FUEL")
-            pretty "$(api_post '/action/cook_food' "{\"input\":$INPUT_ESC,\"fuel\":$FUEL_ESC,\"count\":$COUNT}")"
+            COOK_JSON=$(python3 -c "import json,sys; print(json.dumps({'input':sys.argv[1],'fuel':sys.argv[2],'count':int(sys.argv[3])}))" "$INPUT" "$FUEL" "$COUNT")
+            pretty "$(api_post '/action/cook_food' "$COOK_JSON")"
         else
             pretty "$(api_post '/action/cook_food' '{}')"
         fi

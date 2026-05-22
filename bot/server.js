@@ -545,6 +545,18 @@ function getMemoryHints(limit = 4) {
 }
 
 // Handle incoming chat message with routing
+function runIntentRoutedAction(actionName, actionBody) {
+  bot._hc_intent_action_depth = (bot._hc_intent_action_depth || 0) + 1;
+  return ACTIONS[actionName](actionBody).finally(() => {
+    bot._hc_intent_action_depth = Math.max(0, (bot._hc_intent_action_depth || 1) - 1);
+  });
+}
+
+function intentRouterOutcomeFailed(actionName, result) {
+  const opts = actionName === 'build_shelter_for_night' ? { allowPartialPlacement: true } : {};
+  return actionOutcomeFailed(result, opts);
+}
+
 async function handleChat(username, message) {
   const knownNames = buildKnownNames(getMyName(), getNearbyPlayerNames());
   const routing = parseMessageRouting(message, { knownNames });
@@ -603,8 +615,8 @@ async function handleChat(username, message) {
             const actionBody = actionBodyForRoute(route);
             if (route.action !== 'stop') bot.interrupt_code = false;
             // Fire-and-forget — long-running actions don't block chat thread.
-            ACTIONS[route.action](actionBody).then((result) => {
-              if (actionOutcomeFailed(result)) {
+            runIntentRoutedAction(route.action, actionBody).then((result) => {
+              if (intentRouterOutcomeFailed(route.action, result)) {
                 if (route.skill_id != null) {
                   try { markLastSkillFailed(bot, route.skill_id); } catch {}
                 }
@@ -809,8 +821,6 @@ async function createBot() {
         // depend on Sonnet remembering to ALSO emit a memory.add tool call
         // (emitting text-wrapped <tool_call>s alongside native Bash tool_use
         // is rare for Sonnet under load — primary failure mode of PR #54).
-        if (!ACTIONS._hc_automem_wrapped) {
-        ACTIONS._hc_automem_wrapped = true;
         const _origBuildSchematic = ACTIONS.build_schematic;
         if (_origBuildSchematic) {
           ACTIONS.build_schematic = async (body) => {
@@ -937,7 +947,6 @@ async function createBot() {
           };
         }
         log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2 + auto-memory wrappers on 8 marquee verbs (#68)');
-        } // ACTIONS._hc_automem_wrapped
       } catch (e) {
         log(`skill registration failed: ${e.message}`);
       }
@@ -974,7 +983,11 @@ async function createBot() {
       try {
         if (_survival_tear_down) _survival_tear_down();
         _survival_tear_down = startSurvivalTick(bot, log, {
-          isKidTaskActive: () => !!(bot.interrupt_code || currentTask?.status === 'running'),
+          isKidTaskActive: () => !!(
+            bot.interrupt_code
+            || currentTask?.status === 'running'
+            || (bot._hc_intent_action_depth || 0) > 0
+          ),
         });
       } catch (e) {
         log(`survival tick install failed: ${e.message}`);
@@ -2674,7 +2687,7 @@ const ACTIONS = {
       if (qEntry.source === 'chat' || qEntry.source == null) {
         const b = ensureBot();
         b.chat(message);
-        if (qEntry.status === 'pending') qEntry.status = 'completed';
+        if (qEntry.status === 'pending' || qEntry.status === 'stale') qEntry.status = 'completed';
         rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
         return { result: `Sent: ${message} (in_reply_to=${replyTo})` };
       }
@@ -3596,18 +3609,7 @@ const ACTIONS = {
     if (foundKey) {
       return await ACTIONS.go_mark({ name: foundKey });
     }
-    // Fallback: deathpoint (deathpoint() navigates when a death is recorded)
-    let dp;
-    try {
-      dp = await ACTIONS.deathpoint({});
-    } catch (err) {
-      return { result: `No home mark set — couldn't reach last deathpoint (${err.message || 'pathfinding failed'}). Use 'mc mark home' after you reach your base.` };
-    }
-    const noDeathRecorded = !dp?.result || /no deaths recorded/i.test(dp.result);
-    if (!noDeathRecorded) {
-      return { result: `No home mark set — heading to my last deathpoint. ${dp.result}` };
-    }
-    return { result: "No home mark and no deathpoint yet. Use 'mc mark home' after you reach your base to set it." };
+    return { result: "I don't have a home mark yet. Say 'mark home' when we're at your base and I'll remember it." };
   },
 
   async feed_player({ player }) {

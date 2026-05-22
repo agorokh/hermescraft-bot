@@ -58,7 +58,7 @@ import {
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
-import { actionOutcomeFailed } from './lib/action_outcome.js';
+import { actionOutcomeFailed, isSurvivalBlock } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
 // NLP.js router (council-led migration, 3 rounds of Gemini+Mistral review).
@@ -641,12 +641,39 @@ async function handleChat(username, message) {
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
             runIntentRoutedAction(route.action, actionBody).then((result) => {
-              if (intentRouterOutcomeFailed(route.action, result)) {
+              const survivalBlock = isSurvivalBlock(route.action, result);
+              if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
                 if (route.skill_id != null) {
                   try { markLastSkillFailed(bot, route.skill_id); } catch {}
                 }
-                const msg = result?.error || result?.result || 'action failed';
-                try { bot.chat(`hm, couldn't pull that off — ${String(msg).slice(0, 50)}`); } catch {}
+                const outcomeText = result?.error || result?.result || 'action failed';
+                if (survivalBlock) {
+                  // Escalate to brain: fast-path ACK already fired; now give the
+                  // brain the failure context so it can plan a fix in character
+                  // voice (craft missing items, chain skills, coordinate with
+                  // Steve). Brain responds + acts — not just a function echo.
+                  log(`[IntentRouter escalate] ${route.intent_name} blocked — "${String(outcomeText).slice(0,80)}" → queuing for brain`);
+                  const myName = getMyName();
+                  const escalation = {
+                    id: nextEnvelopeId(),
+                    time: Date.now(),
+                    from: username,
+                    command: `${username} asked me to ${route.intent_name.replace(/_/g, ' ')} ` +
+                             `but I hit a blocker: "${outcomeText}". ` +
+                             `Respond as ${myName} in character — tell ${username} what's missing, ` +
+                             `then actually try to fix it (craft missing item, find the resource, ` +
+                             `chain mc skills). Use mc tools. Don't just narrate.`,
+                    channel: routing.channel,
+                    source: 'survival_escalation',
+                    original_intent: route.intent_name,
+                    outcome_text: String(outcomeText),
+                    status: 'pending',
+                  };
+                  trimCommandQueue();
+                  commandQueue.push(escalation);
+                } else {
+                  try { bot.chat(`hm, couldn't pull that off — ${String(outcomeText).slice(0, 50)}`); } catch {}
+                }
                 return;
               }
               if (result && result.result && route.action !== 'chat') {
@@ -660,8 +687,8 @@ async function handleChat(username, message) {
               }
               try { bot.chat(`hm, couldn't pull that off — ${e.message.slice(0, 50)}`); } catch {}
             });
-            // Skip the queue: the kid is taken care of by the router. The
-            // LLM brain doesn't need to see this directive.
+            // Skip the queue for the initial directive: the ACK + ACTION
+            // already took care of it. Survival blocks escalate separately above.
             rememberSocialEvent({ actor: username, kind: 'heard',
                                   channel: routing.channel,
                                   command: true, intent_matched: route.intent_name,
@@ -712,12 +739,35 @@ async function handleChat(username, message) {
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               runIntentRoutedAction(route.action, actionBody).then((result) => {
-                if (intentRouterOutcomeFailed(route.action, result)) {
+                const survivalBlock = isSurvivalBlock(route.action, result);
+                if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
                   if (route.skill_id != null) {
                     try { markLastSkillFailed(bot, route.skill_id); } catch {}
                   }
-                  const msg = result?.error || result?.result || 'action failed';
-                  try { bot.chat(`hm, couldn't pull that off — ${String(msg).slice(0, 50)}`); } catch {}
+                  const outcomeText = result?.error || result?.result || 'action failed';
+                  if (survivalBlock) {
+                    log(`[IntentRouter escalate via mention] ${route.intent_name} blocked — "${String(outcomeText).slice(0,80)}" → queuing for brain`);
+                    const myName = getMyName();
+                    const escalation = {
+                      id: nextEnvelopeId(),
+                      time: Date.now(),
+                      from: username,
+                      command: `${username} asked me to ${route.intent_name.replace(/_/g, ' ')} ` +
+                               `but I hit a blocker: "${outcomeText}". ` +
+                               `Respond as ${myName} in character — tell ${username} what's missing, ` +
+                               `then actually try to fix it (craft missing item, find the resource, ` +
+                               `chain mc skills). Use mc tools. Don't just narrate.`,
+                      channel: 'public_mention',
+                      source: 'survival_escalation',
+                      original_intent: route.intent_name,
+                      outcome_text: String(outcomeText),
+                      status: 'pending',
+                    };
+                    trimCommandQueue();
+                    commandQueue.push(escalation);
+                  } else {
+                    try { bot.chat(`hm, couldn't pull that off — ${String(outcomeText).slice(0, 50)}`); } catch {}
+                  }
                   return;
                 }
                 if (result && result.result && route.action !== 'chat') {
@@ -735,7 +785,7 @@ async function handleChat(username, message) {
                                     channel: 'public_mention',
                                     command: true, intent_matched: route.intent_name,
                                     message: command });
-              return; // skip queue — handled by router
+              return; // skip queue — handled by router (survival blocks escalate above)
             }
           } catch (e) {
             log(`[IntentRouter via mention] error: ${e.message}`);

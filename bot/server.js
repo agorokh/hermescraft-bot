@@ -587,7 +587,6 @@ function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMen
   const tag = viaMention ? ' via mention' : '';
   log(`[IntentRouter escalate${tag}] ${route.intent_name} blocked — "${String(outcomeText).slice(0, 80)}" → queuing for brain`);
   const myName = getMyName();
-  trimCommandQueue();
   commandQueue.push({
     id: nextEnvelopeId(),
     time: Date.now(),
@@ -603,6 +602,7 @@ function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMen
     outcome_text: String(outcomeText),
     status: 'pending',
   });
+  trimCommandQueue();
 }
 
 function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {

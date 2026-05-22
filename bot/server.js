@@ -583,6 +583,48 @@ function intentRouterOutcomeFailed(actionName, result) {
   return actionOutcomeFailed(result, opts);
 }
 
+function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMention = false }) {
+  const tag = viaMention ? ' via mention' : '';
+  log(`[IntentRouter escalate${tag}] ${route.intent_name} blocked — "${String(outcomeText).slice(0, 80)}" → queuing for brain`);
+  const myName = getMyName();
+  trimCommandQueue();
+  commandQueue.push({
+    id: nextEnvelopeId(),
+    time: Date.now(),
+    from: username,
+    command: `${username} asked me to ${route.intent_name.replace(/_/g, ' ')} ` +
+             `but I hit a blocker: "${outcomeText}". ` +
+             `Respond as ${myName} in character — tell ${username} what's missing, ` +
+             `then actually try to fix it (craft missing item, find the resource, ` +
+             `chain mc skills). Use mc tools. Don't just narrate.`,
+    channel,
+    source: 'survival_escalation',
+    original_intent: route.intent_name,
+    outcome_text: String(outcomeText),
+    status: 'pending',
+  });
+}
+
+function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
+  const survivalBlock = isSurvivalBlock(route.action, result);
+  if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
+    if (route.skill_id != null) {
+      try { markLastSkillFailed(bot, route.skill_id); } catch {}
+    }
+    const outcomeText = result?.error || result?.result || 'action failed';
+    if (survivalBlock) {
+      queueSurvivalEscalation({ username, route, outcomeText, channel, viaMention });
+    } else {
+      try { bot.chat(`hm, couldn't pull that off — ${String(outcomeText).slice(0, 50)}`); } catch {}
+    }
+    return;
+  }
+  if (result && result.result && route.action !== 'chat') {
+    log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
+    try { bot.chat(String(result.result).slice(0, 80)); } catch {}
+  }
+}
+
 async function handleChat(username, message) {
   const knownNames = buildKnownNames(getMyName(), getNearbyPlayerNames());
   const routing = parseMessageRouting(message, { knownNames });
@@ -641,45 +683,9 @@ async function handleChat(username, message) {
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
             runIntentRoutedAction(route.action, actionBody).then((result) => {
-              const survivalBlock = isSurvivalBlock(route.action, result);
-              if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
-                if (route.skill_id != null) {
-                  try { markLastSkillFailed(bot, route.skill_id); } catch {}
-                }
-                const outcomeText = result?.error || result?.result || 'action failed';
-                if (survivalBlock) {
-                  // Escalate to brain: fast-path ACK already fired; now give the
-                  // brain the failure context so it can plan a fix in character
-                  // voice (craft missing items, chain skills, coordinate with
-                  // Steve). Brain responds + acts — not just a function echo.
-                  log(`[IntentRouter escalate] ${route.intent_name} blocked — "${String(outcomeText).slice(0,80)}" → queuing for brain`);
-                  const myName = getMyName();
-                  const escalation = {
-                    id: nextEnvelopeId(),
-                    time: Date.now(),
-                    from: username,
-                    command: `${username} asked me to ${route.intent_name.replace(/_/g, ' ')} ` +
-                             `but I hit a blocker: "${outcomeText}". ` +
-                             `Respond as ${myName} in character — tell ${username} what's missing, ` +
-                             `then actually try to fix it (craft missing item, find the resource, ` +
-                             `chain mc skills). Use mc tools. Don't just narrate.`,
-                    channel: routing.channel,
-                    source: 'survival_escalation',
-                    original_intent: route.intent_name,
-                    outcome_text: String(outcomeText),
-                    status: 'pending',
-                  };
-                  trimCommandQueue();
-                  commandQueue.push(escalation);
-                } else {
-                  try { bot.chat(`hm, couldn't pull that off — ${String(outcomeText).slice(0, 50)}`); } catch {}
-                }
-                return;
-              }
-              if (result && result.result && route.action !== 'chat') {
-                log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
-                try { bot.chat(String(result.result).slice(0, 80)); } catch {}
-              }
+              handleIntentRouterActionResult({
+                username, route, result, channel: routing.channel,
+              });
             }).catch((e) => {
               log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
               if (route.skill_id != null) {
@@ -739,41 +745,9 @@ async function handleChat(username, message) {
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               runIntentRoutedAction(route.action, actionBody).then((result) => {
-                const survivalBlock = isSurvivalBlock(route.action, result);
-                if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
-                  if (route.skill_id != null) {
-                    try { markLastSkillFailed(bot, route.skill_id); } catch {}
-                  }
-                  const outcomeText = result?.error || result?.result || 'action failed';
-                  if (survivalBlock) {
-                    log(`[IntentRouter escalate via mention] ${route.intent_name} blocked — "${String(outcomeText).slice(0,80)}" → queuing for brain`);
-                    const myName = getMyName();
-                    const escalation = {
-                      id: nextEnvelopeId(),
-                      time: Date.now(),
-                      from: username,
-                      command: `${username} asked me to ${route.intent_name.replace(/_/g, ' ')} ` +
-                               `but I hit a blocker: "${outcomeText}". ` +
-                               `Respond as ${myName} in character — tell ${username} what's missing, ` +
-                               `then actually try to fix it (craft missing item, find the resource, ` +
-                               `chain mc skills). Use mc tools. Don't just narrate.`,
-                      channel: 'public_mention',
-                      source: 'survival_escalation',
-                      original_intent: route.intent_name,
-                      outcome_text: String(outcomeText),
-                      status: 'pending',
-                    };
-                    trimCommandQueue();
-                    commandQueue.push(escalation);
-                  } else {
-                    try { bot.chat(`hm, couldn't pull that off — ${String(outcomeText).slice(0, 50)}`); } catch {}
-                  }
-                  return;
-                }
-                if (result && result.result && route.action !== 'chat') {
-                  log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
-                  try { bot.chat(String(result.result).slice(0, 80)); } catch {}
-                }
+                handleIntentRouterActionResult({
+                  username, route, result, channel: 'public_mention', viaMention: true,
+                });
               }).catch((e) => {
                 log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
               if (route.skill_id != null) {

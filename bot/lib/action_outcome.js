@@ -47,17 +47,8 @@ export function isSurvivalBlock(action, result) {
   const text = String(result?.result || '').toLowerCase();
   // Survival-specific blocked patterns not caught by the generic regex:
   return (
-    /don't have a fishing rod/.test(text) ||
-    /no water nearby/.test(text) ||
-    /no furnace nearby/.test(text) ||
-    /no raw food/.test(text) ||
-    /nothing to give/.test(text) ||
-    /food inventory is empty/.test(text) ||
-    /home mark yet/.test(text) ||
-    /no player specified/.test(text) ||
-    /blast furnaces? cannot/.test(text) ||
-    // farm_food with zero yield: "harvested 0 crops, … 0 plots" — nothing to show
-    /harvested 0 crops.*tilled\+planted 0/.test(text) ||
-    /harvested 0 crops.*replanted 0/.test(text)
+    /don't have a fishing rod|no water nearby|no furnace nearby|no raw food|nothing to give|food inventory is empty|home mark yet|no player specified|blast furnaces? cannot/.test(text) ||
+    // farm_food with zero yield only — till-only progress still fast-paths to the kid
+    /harvested 0 crops, replanted 0, tilled\+planted 0/.test(text)
   );
 }

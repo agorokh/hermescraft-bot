@@ -606,8 +606,6 @@ function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMen
 }
 
 function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
-  const outcomeText = result?.error || result?.result || '';
-  if (/\binterrupted\b/i.test(String(outcomeText))) return;
   const survivalBlock = isSurvivalBlock(route.action, result);
   if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
     if (route.skill_id != null) {

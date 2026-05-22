@@ -598,7 +598,7 @@ function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMen
              `then actually try to fix it (craft missing item, find the resource, ` +
              `chain mc skills). Use mc tools. Don't just narrate.`,
     channel,
-    source: 'survival_escalation',
+    source: 'chat',
     original_intent: route.intent_name,
     outcome_text: String(outcomeText),
     status: 'pending',
@@ -606,16 +606,18 @@ function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMen
 }
 
 function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
+  const outcomeText = result?.error || result?.result || '';
+  if (/\binterrupted\b/i.test(String(outcomeText))) return;
   const survivalBlock = isSurvivalBlock(route.action, result);
   if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
     if (route.skill_id != null) {
       try { markLastSkillFailed(bot, route.skill_id); } catch {}
     }
-    const outcomeText = result?.error || result?.result || 'action failed';
+    const failureText = result?.error || result?.result || 'action failed';
     if (survivalBlock) {
-      queueSurvivalEscalation({ username, route, outcomeText, channel, viaMention });
+      queueSurvivalEscalation({ username, route, outcomeText: failureText, channel, viaMention });
     } else {
-      try { bot.chat(`hm, couldn't pull that off — ${String(outcomeText).slice(0, 50)}`); } catch {}
+      try { bot.chat(`hm, couldn't pull that off — ${String(failureText).slice(0, 50)}`); } catch {}
     }
     return;
   }

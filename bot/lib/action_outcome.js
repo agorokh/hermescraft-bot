@@ -42,9 +42,11 @@ const SURVIVAL_ACTIONS = new Set([
 
 export function isSurvivalBlock(action, result) {
   if (!SURVIVAL_ACTIONS.has(action)) return false;
-  // Generic failure check first (covers: couldn't, could not, failed, interrupted…)
-  if (actionOutcomeFailed(result)) return true;
   const text = String(result?.result || '').toLowerCase();
+  // Superseded by a newer action — not a missing-resource block.
+  if (/\binterrupted\b/.test(text)) return false;
+  // Generic failure check (couldn't, failed, needs… — not interrupted)
+  if (actionOutcomeFailed(result)) return true;
   // Survival-specific blocked patterns not caught by the generic regex:
   return (
     /don't have a fishing rod|no water nearby|no furnace nearby|no raw food|nothing to give|food inventory is empty|home mark yet|no player specified|blast furnaces? cannot/.test(text) ||

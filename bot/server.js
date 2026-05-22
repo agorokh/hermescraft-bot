@@ -601,6 +601,7 @@ async function handleChat(username, message) {
           log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
           if (ACTIONS[route.action]) {
             const actionBody = actionBodyForRoute(route);
+            if (route.action !== 'stop') bot.interrupt_code = false;
             // Fire-and-forget — long-running actions don't block chat thread.
             ACTIONS[route.action](actionBody).then((result) => {
               if (actionOutcomeFailed(result)) {
@@ -672,6 +673,7 @@ async function handleChat(username, message) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }
               const actionBody = actionBodyForRoute(route);
+              if (route.action !== 'stop') bot.interrupt_code = false;
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               ACTIONS[route.action](actionBody).then((result) => {
                 if (actionOutcomeFailed(result)) {
@@ -807,6 +809,8 @@ async function createBot() {
         // depend on Sonnet remembering to ALSO emit a memory.add tool call
         // (emitting text-wrapped <tool_call>s alongside native Bash tool_use
         // is rare for Sonnet under load — primary failure mode of PR #54).
+        if (!ACTIONS._hc_automem_wrapped) {
+        ACTIONS._hc_automem_wrapped = true;
         const _origBuildSchematic = ACTIONS.build_schematic;
         if (_origBuildSchematic) {
           ACTIONS.build_schematic = async (body) => {
@@ -933,6 +937,7 @@ async function createBot() {
           };
         }
         log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2 + auto-memory wrappers on 8 marquee verbs (#68)');
+        } // ACTIONS._hc_automem_wrapped
       } catch (e) {
         log(`skill registration failed: ${e.message}`);
       }
@@ -2637,9 +2642,12 @@ const ACTIONS = {
         .filter(c => c.status === 'pending')
         .sort((a, b) => a.time - b.time)[0];
       if (oldest && oldest.source === 'voice'
-          && _pendingVoiceTurns.has(oldest.id)
-          && (now - oldest.time) <= VOICE_AUTOCORRELATE_MS) {
-        voiceTurn = _pendingVoiceTurns.get(oldest.id);
+          && _pendingVoiceTurns.has(oldest.id)) {
+        const turn = _pendingVoiceTurns.get(oldest.id);
+        const dispatchTs = turn?.dispatched_ts ?? oldest.time;
+        if ((now - dispatchTs) <= VOICE_AUTOCORRELATE_MS) {
+          voiceTurn = turn;
+        }
       }
       // Otherwise (oldest is a chat turn OR no pending OR voice not yet
       // dispatched OR voice age past window): fall through to bot.chat().
@@ -3545,6 +3553,9 @@ const ACTIONS = {
     const deadline = Date.now() + Math.min(count * 12000, 60000);
     let takeResult;
     while (Date.now() < deadline) {
+      if (b.interrupt_code) {
+        return { result: `Cooking ${rawFood} interrupted.` };
+      }
       await new Promise((r) => setTimeout(r, 1500));
       let check;
       try {

@@ -119,8 +119,9 @@ export function startSurvivalTick(bot, log, opts = {}) {
 
   const logSurv = (msg) => log(`[survival] ${msg}`);
 
-  function shouldDeferSurvivalFlee() {
+  function shouldDeferSurvivalActivity() {
     if (bot.interrupt_code) return true;
+    if (survivalFleeGoal != null) return true;
     if (typeof opts.isKidTaskActive === 'function' && opts.isKidTaskActive()) return true;
     const moving = typeof bot.pathfinder?.isMoving === 'function' && bot.pathfinder.isMoving();
     if (moving && bot.pathfinder?.goal && bot.pathfinder.goal !== survivalFleeGoal) return true;
@@ -148,7 +149,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
       // Health — flee if very low (don't hijack kid-directed pathfinder goals)
       if (opts.fleeEnabled !== false && bot.health !== undefined && bot.health <= HEALTH_FLEE_THRESHOLD) {
         const hostile = nearestHostile(bot);
-        if (hostile && !shouldDeferSurvivalFlee()) {
+        if (hostile && !shouldDeferSurvivalActivity()) {
           logSurv(`health ${bot.health} ≤ ${HEALTH_FLEE_THRESHOLD} + hostile near — fleeing`);
           try {
             // GoalInvert(GoalFollow) — Mindcraft creeper back-pedal pattern
@@ -176,7 +177,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
 
       // Creeper special case: ALWAYS flee, never fight
       const isCrpr = (hostile.entity.name || hostile.entity.mobType || '').toLowerCase().includes('creeper');
-      if (isCrpr && hostile.dist < HOSTILE_FLEE_RADIUS && !shouldDeferSurvivalFlee()) {
+      if (isCrpr && hostile.dist < HOSTILE_FLEE_RADIUS && !shouldDeferSurvivalActivity()) {
         logSurv(`creeper at ${hostile.dist.toFixed(1)}m — fleeing (never fight creepers)`);
         try {
           const awayGoal = new goals.GoalInvert(
@@ -198,6 +199,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
       await sleep(8000);
       if (!running || !bot.entity) continue;
       if (opts.torchEnabled === false) continue;
+      if (shouldDeferSurvivalActivity()) continue;
 
       const now = Date.now();
       if (now - lastTorchAt < TORCH_COOLDOWN_MS) continue;
@@ -245,7 +247,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
 
       if (stuckPos && pos.distanceTo(stuckPos) < 0.5) {
         stuckCount++;
-        if (stuckCount >= 3 && !shouldDeferSurvivalFlee()) {
+        if (stuckCount >= 3 && !shouldDeferSurvivalActivity()) {
           logSurv(`stuck (${stuckCount}x same pos ${formatStuckPos(pos)}) — jiggling`);
           try {
             // Try jumping + moving forward

@@ -32,6 +32,7 @@ const CASES = [
   { body: "it's getting dark", expect: 'build_shelter_for_night' },
   { body: 'build a safe house', expect: 'build_shelter_for_night' },
   { body: 'build me a safe house', expect: 'build_shelter_for_night' },
+  { body: 'build a safe home', expect: 'build_shelter_for_night' },
   { body: 'harvest the carrots', expect: 'farm_food' },
   { body: 'harvest the beetroots', expect: 'farm_food' },
 ];

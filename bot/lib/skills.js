@@ -154,11 +154,13 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
       // physical path. Cache flip not done here to avoid permanent
       // downgrade if it was transient.
     }
+    // Give the chunk update a moment to round-trip; verify before claiming success.
     await sleep(40);
     const placed = bot.blockAt(new Vec3(tx, ty, tz));
     if (placed && placed.name === itemName) {
       return { ok: true };
     }
+    // /setblock rejected or chunk not updated — fall through to physical place.
   }
 
   const targetPos = new Vec3(tx, ty, tz);

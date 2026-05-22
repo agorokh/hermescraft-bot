@@ -364,8 +364,12 @@ const INTENTS = [
       /\bsmelt (some )?(food|meat|fish)\b/i,
     ],
     async handler(bot, ctx) {
-      if (/\b(iron|gold|copper|coal|diamond|ore)\b/i.test(ctx.body)
-          && !/\b(food|meat|fish)\b/i.test(ctx.body)) return null;
+      const body = ctx.body.toLowerCase();
+      if (/\b(iron|gold|copper|coal|diamond|lapis|redstone|emerald|netherite)\b/.test(body)
+          && /\b(ore|ingot|nugget|raw)\b/.test(body)) return null;
+      if (/\bsmelt\b/.test(body) && !/\b(food|meat|fish|chicken|beef|pork|mutton|rabbit)\b/.test(body)) {
+        return null;
+      }
       return { action: 'cook_food', body: { count: 4 } };
     },
   },
@@ -427,7 +431,7 @@ const INTENTS = [
   {
     name: 'build_shelter_for_night',
     patterns: [
-      /\b(build|make|create|put up)(?:\s+me)?\s+(?:a |an |)?(shelter|hut|emergency\s+shelter|safe\s+(?:spot|place|house))\b/i,
+      /\b(build|make|create|put up)(?:\s+me)?\s+(?:a |an |)?(shelter|hut|emergency\s+shelter|safe\s+(?:spot|place|house|home))\b/i,
       /\bit'?s getting dark\b/i,
       /\bnight is coming\b/i,
       /\bwe need a place to (hide|sleep|stay)\b/i,

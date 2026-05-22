@@ -29,6 +29,15 @@ import { resolveSchematicName } from './schematic_resolve.js';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
+function extractKidName(body) {
+  const kidNameMatch = String(body).match(
+    /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
+  );
+  return kidNameMatch
+    ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
+    : null;
+}
+
 // ── Pattern table ───────────────────────────────────────────────────
 
 const INTENTS = [
@@ -209,20 +218,20 @@ const INTENTS = [
     async handler(bot, ctx) {
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
+      const body = ctx.body.toLowerCase();
+      if (/\bsafe\s+(?:house|home|spot|place)\b/i.test(body)) return null;
       const name = resolveSchematicName(ctx.body);
       if (name === 'list') return { action: 'list_schematics', body: {} };
       if (!name) return null;
-      // Origin = 2 blocks away from the anchor (kid pos if known, else
-      // bot's own pos), ground level.
-      return {
-        action: 'build_schematic',
-        body: {
-          name,
-          x: Math.floor(p.x) + 2,
-          y: Math.floor(p.y),
-          z: Math.floor(p.z),
-        },
+      const kidName = extractKidName(ctx.body);
+      const schemBody = {
+        name,
+        x: Math.floor(p.x) + 2,
+        y: Math.floor(p.y),
+        z: Math.floor(p.z),
       };
+      if (kidName) schemBody.kid_name = kidName;
+      return { action: 'build_schematic', body: schemBody };
     },
   },
   {
@@ -246,16 +255,16 @@ const INTENTS = [
       // prompt). Falls back to +2x if no clear spot found.
       const baseY = Math.floor(p.y);
       const [dx, dz] = pickTowerFootOffset(bot, p);
-      return {
-        action: 'build_tower',
-        body: {
-          x: Math.floor(p.x) + dx,
-          y: baseY,
-          z: Math.floor(p.z) + dz,
-          height,
-          material,
-        },
+      const kidName = extractKidName(ctx.body);
+      const towerBody = {
+        x: Math.floor(p.x) + dx,
+        y: baseY,
+        z: Math.floor(p.z) + dz,
+        height,
+        material,
       };
+      if (kidName) towerBody.kid_name = kidName;
+      return { action: 'build_tower', body: towerBody };
     },
   },
   {
@@ -342,6 +351,96 @@ const INTENTS = [
       return { action: 'collect', body: { block: ore, count: 3 } };
     },
   },
+
+  // ── Survival intents (issue #81 — closes #59 + #61) ──────────────────────
+  // cook_food before fish_for_food — bare "fish" must not steal "cook fish".
+
+  {
+    name: 'cook_food',
+    patterns: [
+      /\bcook\s+(some\s+)?(food|meat|fish|dinner|lunch|breakfast)\b/i,
+      /\b(roast|grill|fry|bake)\s+(some\s+)?(food|meat|fish)\b/i,
+      /\bput .*(in|into|on) the furnace\b.*\b(food|meat|fish)\b/i,
+      /\bsmelt (some )?(food|meat|fish)\b/i,
+    ],
+    async handler(bot, ctx) {
+      const body = ctx.body.toLowerCase();
+      if (/\b(iron|gold|copper|coal|diamond|lapis|redstone|emerald|netherite)\b/.test(body)
+          && /\b(ore|ingot|nugget|raw)\b/.test(body)) return null;
+      if (/\bsmelt\b/.test(body) && !/\b(food|meat|fish|chicken|beef|pork|mutton|rabbit)\b/.test(body)) {
+        return null;
+      }
+      return { action: 'cook_food', body: { count: 4 } };
+    },
+  },
+
+  {
+    name: 'fish_for_food',
+    patterns: [
+      /\bgo (catch|get) (some )?(fish|food)\b/i,
+      /\bcatch (some )?(fish|dinner|food)\b/i,
+      /\bfishing\b/i,
+      /\bcan you fish\b/i,
+      /\b(let'?s |please )?fish\b/i,
+    ],
+    async handler(bot, ctx) {
+      if (/\bcook\b/i.test(ctx.body)) return null;
+      return { action: 'fish_for_food', body: { duration: 45 } };
+    },
+  },
+
+  {
+    name: 'farm_food',
+    patterns: [
+      /\b(plant|grow|farm|harvest|till)\b.*(wheat|carrots?|potatoes?|beetroots?|food|crops?)\b/i,
+      /\b(wheat|carrots?|potatoes?|beetroots?)\s+(farm|field|garden)\b/i,
+      /\bplant (some |a )?(seeds?|crops?|food)\b/i,
+    ],
+    async handler(bot, ctx) {
+      return { action: 'farm_food', body: { radius: 4 } };
+    },
+  },
+
+  {
+    name: 'return_home',
+    patterns: [
+      /\b(go|come|head|get) (back |)home\b/i,
+      /\breturn (to )?(base|spawn|home)\b/i,
+      /\bback to (base|spawn|home|our place)\b/i,
+      /\blets? go home\b/i,
+    ],
+    async handler(bot, ctx) {
+      return { action: 'return_home', body: {} };
+    },
+  },
+
+  {
+    name: 'feed_player',
+    patterns: [
+      /\b(i'?m|i am|so) (hungry|starving)\b/i,
+      /\bgive me (some )?(food|something to eat)\b/i,
+      /\bfeed (me|us)\b/i,
+      /\bi need food\b/i,
+      /\bbi?ring me (some )?(food|something to eat)\b/i,
+    ],
+    async handler(bot, ctx) {
+      return { action: 'feed_player', body: { player: ctx.sender } };
+    },
+  },
+
+  {
+    name: 'build_shelter_for_night',
+    patterns: [
+      /\b(build|make|create|put up)(?:\s+me)?\s+(?:a |an |)?(shelter|hut|emergency\s+shelter|safe\s+(?:spot|place|house|home))\b/i,
+      /\bit'?s getting dark\b/i,
+      /\bnight is coming\b/i,
+      /\bwe need a place to (sleep|stay)\b/i,
+      /\bquick.*\b(shelter|hut)\b/i,
+    ],
+    async handler(bot, ctx) {
+      return { action: 'build_shelter_for_night', body: {} };
+    },
+  },
 ];
 
 // ── Public router ──────────────────────────────────────────────────
@@ -391,13 +490,19 @@ export async function tryRoute(bot, body, sender, opts = {}) {
 // Acknowledgment chat lines per intent — fired immediately so the kid
 // SEES a response in <50ms, while the action runs in background.
 const ACKS = {
-  torch_near_me: ['on it', 'placing one', 'gotcha', 'torch coming'],
-  flower_give:   ['here you go', 'one flower', 'have this one', 'for you!'],
-  build_tower:   ['building it', 'putting it up', 'on it', 'tower time'],
-  come_here:     ['omw', 'coming!', 'be right there'],
-  follow_me:     ['behind you', 'with you', 'leading the way'],
-  race_to_coords:['GO!!', 'racing!', 'on it'],
-  mine_iron:     ['on it', 'mining now', 'brb gathering'],
+  torch_near_me:            ['on it', 'placing one', 'gotcha', 'torch coming'],
+  flower_give:              ['here you go', 'one flower', 'have this one', 'for you!'],
+  build_tower:              ['building it', 'putting it up', 'on it', 'tower time'],
+  come_here:                ['omw', 'coming!', 'be right there'],
+  follow_me:                ['behind you', 'with you', 'leading the way'],
+  race_to_coords:           ['GO!!', 'racing!', 'on it'],
+  mine_iron:                ['on it', 'mining now', 'brb gathering'],
+  fish_for_food:            ['casting!', 'fishing now', 'rod out', 'finding water'],
+  farm_food:                ['on it', 'farming!', 'checking the crops'],
+  cook_food:                ['on it', 'firing the furnace', 'cooking now'],
+  return_home:              ['heading home', 'omw back', 'on my way'],
+  feed_player:              ['on it', 'getting food', 'checking my stash'],
+  build_shelter_for_night:  ['on it!', 'building quick', 'digging a spot'],
 };
 
 export function ackFor(intent_name) {

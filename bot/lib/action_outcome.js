@@ -1,11 +1,12 @@
 /** Shared heuristic: did a skill/ACTION return a failed or partial outcome? */
-export function actionOutcomeFailed(result) {
+export function actionOutcomeFailed(result, opts = {}) {
   if (!result || result.error) return true;
   const text = String(result.result || '');
   const lower = text.toLowerCase();
   if (/\b(couldn't|could not|can't see|unable|failed|interrupted|needs |no .* in my inventory)\b/.test(lower)) {
     return true;
   }
+  if (opts.allowPartialPlacement) return false;
   const ratio = text.match(/\b(\d+)\s*\/\s*(\d+)\b/);
   if (ratio) {
     const num = parseInt(ratio[1], 10);

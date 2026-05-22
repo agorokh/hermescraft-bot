@@ -463,15 +463,11 @@ const DISPATCHERS = {
     return { action: 'give_to_player', body: { player: ctx.sender, item: found.name, count: Math.min(found.count, 4) } };
   },
 
-  // build_shelter_for_night: emergency safe spot — reuse small_house schematic.
-  build_shelter_for_night: (bot, ctx) => {
-    const p = resolveAnchorPos(bot, ctx);
-    if (!p) return null;
-    return {
-      action: 'build_schematic',
-      body: { name: 'small_house', x: Math.floor(p.x) + 2, y: Math.floor(p.y), z: Math.floor(p.z) },
-    };
-  },
+  // build_shelter_for_night: emergency dirt_shelter (matches regex/CLI path).
+  build_shelter_for_night: () => ({
+    action: 'build_shelter_for_night',
+    body: {},
+  }),
 
   // explore_cave: scout toward the nearest stone-y opening. For now, just
   // walk a short distance in the bot's facing direction; brain narrates.

@@ -89,6 +89,10 @@ require_int() {
     is_int "$1" || die "expected integer, got: $1"
 }
 
+json_str() {
+    python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$1"
+}
+
 api_get() {
     local path="$1"
     local resp
@@ -1109,6 +1113,50 @@ EOF
 
     list_schematics|schematics|schems)
         pretty "$(api_post '/action/list_schematics' '{}')"
+        ;;
+
+    # ── Survival skills (issue #81 — body PR hermescraft-bot#3) ──
+    # All return English result strings (Mindcraft pattern; feed back to next LLM turn).
+
+    fish_for_food|fish)
+        DURATION="${1:-45}"
+        FISH_JSON=$(python3 -c "import json,sys; print(json.dumps({'duration':int(sys.argv[1])}))" "$DURATION")
+        pretty "$(api_post '/action/fish_for_food' "$FISH_JSON")"
+        ;;
+
+    farm_food|farm)
+        RADIUS="${1:-4}"
+        FARM_JSON=$(python3 -c "import json,sys; print(json.dumps({'radius':int(sys.argv[1])}))" "$RADIUS")
+        pretty "$(api_post '/action/farm_food' "$FARM_JSON")"
+        ;;
+
+    cook_food|cook)
+        if [ -n "${1:-}" ]; then
+            INPUT="$1"; FUEL="${2:-coal}"; COUNT="${3:-4}"
+            COOK_JSON=$(python3 -c "import json,sys; print(json.dumps({'input':sys.argv[1],'fuel':sys.argv[2],'count':int(sys.argv[3])}))" "$INPUT" "$FUEL" "$COUNT")
+            pretty "$(api_post '/action/cook_food' "$COOK_JSON")"
+        else
+            pretty "$(api_post '/action/cook_food' '{}')"
+        fi
+        ;;
+
+    return_home|home)
+        pretty "$(api_post '/action/return_home' '{}')"
+        ;;
+
+    feed_player|feed)
+        PLAYER="${1:?Usage: mc feed_player PLAYER}"
+        PLAYER_ESC=$(json_str "$PLAYER")
+        pretty "$(api_post '/action/feed_player' "{\"player\":$PLAYER_ESC}")"
+        ;;
+
+    build_shelter_for_night|shelter)
+        if [ -n "${1:-}" ] && [ -n "${2:-}" ] && [ -n "${3:-}" ]; then
+            SHELTER_JSON=$(python3 -c "import json,sys; print(json.dumps({'x':int(sys.argv[1]),'y':int(sys.argv[2]),'z':int(sys.argv[3])}))" "$1" "$2" "$3")
+            pretty "$(api_post '/action/build_shelter_for_night' "$SHELTER_JSON")"
+        else
+            pretty "$(api_post '/action/build_shelter_for_night' '{}')"
+        fi
         ;;
 
     *)

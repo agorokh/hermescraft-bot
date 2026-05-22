@@ -113,6 +113,13 @@
         "snow_block": 49,
         "torch": 1
       }
+    },
+    "dirt_shelter": {
+      "file": "dirt_shelter.json",
+      "footprint": [3, 3],
+      "height": 3,
+      "summary": "3x3 emergency dirt shelter — panic button for nightfall (23 dirt blocks, door gap at front)",
+      "materials": {"dirt": 23}
     }
   }
 }

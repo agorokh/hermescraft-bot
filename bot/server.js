@@ -83,6 +83,12 @@ const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '0'
   ? false
   : (process.env.HERMES_SHADOW_NLP_ROUTER === '1' || NLP_PRIMARY);
 
+// Cycle-M survival verbs: regex patterns are authoritative when NLP defers
+// (clarify/oov/no_dispatcher) but the corpus already lists these intents.
+const SURVIVAL_REGEX_FALLBACK = new Set([
+  'fish_for_food', 'farm_food', 'cook_food', 'return_home', 'feed_player', 'build_shelter_for_night',
+]);
+
 async function tryRoute(bot, body, sender) {
   if (!NLP_PRIMARY) return tryRouteRegex(bot, body, sender);
   // Safety primitive: stop/cancel must never depend on NLP classification.
@@ -93,6 +99,13 @@ async function tryRoute(bot, body, sender) {
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
   if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
+    const regex = await tryRouteRegex(bot, body, sender);
+    if (regex.matched && SURVIVAL_REGEX_FALLBACK.has(regex.intent_name)) {
+      regex._fallback_from_nlp_zone = nlp.nlp_zone;
+      regex._fallback_from_nlp_score = nlp.nlp_score;
+      regex.skill_id = recordLastSkill(bot, regex.intent_name, regex.action, regex.body, body);
+      return regex;
+    }
     return nlp;
   }
   const regex = await tryRouteRegex(bot, body, sender);
@@ -154,9 +167,11 @@ async function shadowRoute(bot, body, sender, primaryResult) {
   }
 }
 import { installQuestEngine } from './lib/quests.js';
+import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
 let _quest_tear_down = null;
+let _survival_tear_down = null;
 let _quest_install_gen = 0;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
@@ -218,6 +233,18 @@ let reconnectAttempts = 0;
 const MAX_LOG = 100;
 const MAX_QUEUE = 20;
 
+// ── Stale-intent timeout (issue #68 Patch 2) ──────────────────────
+// Kids walk away mid-request. Without this sweep, a pending commandQueue
+// entry would sit forever, polluting `mc commands` and (worse) letting the
+// brain blindly act on a 10-min-old request after the kid logged off. The
+// sweep marks entries `status === 'stale'` after STALE_INTENT_TIMEOUT_MS
+// with no in-flight progress, writes a durable "<player> asked for X then
+// walked away — paused" memory entry, and surfaces them on `/commands` so
+// the brain can acknowledge ("oh you came back — want me to finish?") on
+// the kid's next turn.
+const STALE_INTENT_TIMEOUT_MS = parseInt(process.env.STALE_INTENT_TIMEOUT_MS || '120000', 10);
+const STALE_SWEEP_INTERVAL_MS = parseInt(process.env.STALE_SWEEP_INTERVAL_MS || '30000', 10);
+
 // Rolling buffer of recent action outcomes for loop detection
 let actionHistory = []; // { action, status, time }
 const MAX_ACTION_HISTORY = 10;
@@ -247,6 +274,182 @@ function trimCommandQueue() {
     }
   }
 }
+
+// ── Auto-memory side-effect (issue #68 Patch 2) ──────────────────
+// Minimal MEMORY.md append helper for server-side stale-intent notices
+// (and future side-effect writes when the brain is unreliable under load).
+// Companion home is set by start_companion_phase3.sh via
+// HERMES_COMPANION_HOME; fall back to ~/.hermes-companion-<lowercase username>.
+// Content-dedup window prevents spam when the brain is mid-restart.
+const AUTOMEM_DEDUP_WINDOW_MS = 5 * 60_000;
+let _autoMemoryRecent = []; // [{ ts, content }]
+function _companionMemoryFile() {
+  const home = process.env.HERMES_COMPANION_HOME
+    || (process.env.HOME && path.join(process.env.HOME, `.hermes-companion-${(config?.mc?.username || 'rosie').toLowerCase()}`));
+  if (!home) return null;
+  return path.join(home, 'memories', 'MEMORY.md');
+}
+// ── readMemoryAnchorsNear — issue #68 Phase C (memory anchors in perceive) ──
+// Reads MEMORY.md, extracts named-build / named-place entries with explicit
+// coordinates, filters to entries within `radius` blocks of `pos`, returns the
+// `limit` nearest ones as { label, x, y, z, distance } objects.
+//
+// Recognized line shapes (matches autoRememberFact + brain-side memory.add
+// formats):
+//   "Built <NAME> ... at X,Y,Z (..."             — auto-memory build wrapper
+//   "Built <name> (<schem>) for kid at X,Y,Z"    — kid_name + schematic
+//   "Built <thing> at X,Y,Z"                     — generic build
+//   "Found <ore> vein at X,Y,Z"                  — discovery
+//   "<freeform name>: X,Y,Z"                     — brain memory.add convention
+//   "the fairy treehouse: 1691,73,1712"          — kid-given names
+//
+// Defensive: caps at LIMIT entries, ignores malformed lines, fail-silent.
+const MEMORY_ANCHOR_LINE_LIMIT = 500; // scan at most N lines for cost control
+function readMemoryAnchorsNear(pos, radius = 200, limit = 6) {
+  const memFile = _companionMemoryFile();
+  if (!memFile) return [];
+  let raw;
+  try { raw = fs.readFileSync(memFile, 'utf8'); } catch { return []; }
+  const px = Math.floor(pos?.x ?? 0);
+  const py = Math.floor(pos?.y ?? 0);
+  const pz = Math.floor(pos?.z ?? 0);
+  const lines = raw.split('\n').slice(-MEMORY_ANCHOR_LINE_LIMIT);
+  const out = [];
+  // Two extractor patterns — first match wins per line, prefer the
+  // "Built/Found/Mined ... at X,Y,Z" shape because it has a verb-anchored
+  // name; fallback to "<name>: X,Y,Z".
+  const verbRe = /\b(?:Built|Placed|Found|Mined|Lit|Gave)\s+(.+?)\s+(?:at|near|around)\s+(-?\d{1,5})\s*,\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})/i;
+  const colonRe = /^([A-Za-z][^:\n]{2,60}):\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})/;
+  for (const line of lines) {
+    if (!line || line.trim().length === 0) continue;
+    let m = line.match(verbRe);
+    let label, x, y, z;
+    if (m) {
+      label = m[1].replace(/\s+for\s+kid$|\s+for\s+\w+$|\s*\(\d+\/\d+\s+blocks\).*$/i, '').trim();
+      x = +m[2]; y = +m[3]; z = +m[4];
+    } else {
+      m = line.match(colonRe);
+      if (!m) continue;
+      label = m[1].trim();
+      x = +m[2]; y = +m[3]; z = +m[4];
+    }
+    // Strip leading date prefix ("2026-05-20: Built ...")
+    label = label.replace(/^\d{4}-\d{2}-\d{2}:\s*/, '').trim();
+    if (!label || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const dx = x - px, dz = z - pz;
+    const distance = Math.round(Math.sqrt(dx * dx + dz * dz));
+    if (distance > radius) continue;
+    // Cap label length for prompt budget
+    out.push({ label: label.slice(0, 60), x, y, z, distance });
+  }
+  // Sort nearest first; dedup by label+coords (latest entry wins so the most
+  // recent fact about a named place is shown, not the earliest)
+  const seen = new Map();
+  for (const a of out) {
+    const key = `${a.label.toLowerCase()}|${a.x},${a.y},${a.z}`;
+    seen.set(key, a);
+  }
+  return Array.from(seen.values()).sort((a, b) => a.distance - b.distance).slice(0, limit);
+}
+
+function autoRememberFact(line) {
+  if (!line || typeof line !== 'string') return false;
+  const memFile = _companionMemoryFile();
+  if (!memFile) return false;
+  try {
+    const now = Date.now();
+    // Drop dedup entries outside the window
+    while (_autoMemoryRecent.length && now - _autoMemoryRecent[0].ts > AUTOMEM_DEDUP_WINDOW_MS) {
+      _autoMemoryRecent.shift();
+    }
+    if (_autoMemoryRecent.some((e) => e.content === line)) return false;
+    fs.mkdirSync(path.dirname(memFile), { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 10);
+    fs.appendFileSync(memFile, `\n§\n${stamp}: ${line}\n`);
+    _autoMemoryRecent.push({ ts: now, content: line });
+    log(`[automem] wrote "${line.slice(0, 100)}" to ${memFile}`);
+    return true;
+  } catch (e) {
+    log(`[automem] write failed: ${e.message}`);
+    return false;
+  }
+}
+
+// ── Stale-intent sweep (issue #68 Patch 2) ───────────────────────
+// Marks commandQueue entries `status='stale'` after STALE_INTENT_TIMEOUT_MS
+// with no progress, writes a one-line memory fact, and records the
+// player+command so the brain can acknowledge later. Surfaced via /commands.
+//
+// Gemini council #72: a queue-only mark is too passive — if the kid said
+// "dig a massive hole" and walked away, Steve will keep digging while the
+// stale flag sits idle in the queue. Physical interrupt: if `currentTask`
+// was started in service of a now-stale intent (best-effort heuristic:
+// same player, task started after the queue entry was created), stop it.
+function sweepStaleIntents() {
+  if (!commandQueue || commandQueue.length === 0) return;
+  const now = Date.now();
+  for (const entry of commandQueue) {
+    if (entry.status !== 'pending') continue;
+    const age = now - (entry.time || now);
+    if (age < STALE_INTENT_TIMEOUT_MS) continue;
+    entry.status = 'stale';
+    entry.stale_at = now;
+    const player = entry.from || 'someone';
+    // Compact the command — strip long quotes, keep first 80 chars.
+    const cmd = (entry.command || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const fact = `${player} asked "${cmd}" at ${new Date(entry.time).toLocaleTimeString()} then walked away — paused. (stale after ${Math.round(age/1000)}s no follow-up)`;
+    autoRememberFact(fact);
+    log(`[stale] ${player}: "${cmd}" stale after ${Math.round(age/1000)}s`);
+
+    // Physical interrupt: if currentTask is plausibly serving this entry
+    // (started after entry.time, kid not online to chat anew), stop the
+    // bot's in-flight action so it doesn't keep digging/walking forever.
+    // Conservative: only interrupt SLOW_TASK / movement-typed tasks. The
+    // brain on its next turn sees the stale entry on /commands AND the
+    // cancelled task → emits an acknowledgement chat ("oh you walked off,
+    // pausing — let me know when you're back").
+    try {
+      const otherPlayersPending = commandQueue.some(
+        (c) => c.status === 'pending' && c.from && c.from !== player,
+      );
+      const samePlayerOpen = commandQueue.filter(
+        (c) => (c.status === 'pending' || c.status === 'stale') && c.from === player,
+      );
+      const taskLikelyForEntry = currentTask && currentTask.status === 'running'
+          && currentTask.started && currentTask.started >= entry.time
+          && !otherPlayersPending
+          && samePlayerOpen.length === 1;
+      if (taskLikelyForEntry) {
+        const STALE_INTERRUPTIBLE = new Set([
+          'collect', 'bg_collect', 'goto', 'goto_near', 'follow',
+          'fight', 'sprint_attack', 'pickup', 'flee',
+          'fish_for_food', 'farm_food', 'cook_food', 'build_shelter_for_night',
+        ]);
+        if (STALE_INTERRUPTIBLE.has(currentTask.action)) {
+          log(`[stale] interrupting currentTask=${currentTask.action} for stale intent of ${player}`);
+          try {
+            if (bot) {
+              bot._stopGeneration = (bot._stopGeneration || 0) + 1;
+              bot._actionEpoch = (bot._actionEpoch || 0) + 1;
+              bot.interrupt_code = true;
+            }
+          } catch {}
+          try { if (bot?.pathfinder) bot.pathfinder.setGoal(null); } catch {}
+          try { if (bot) bot.stopDigging?.(); } catch {}
+          try { if (bot) bot.clearControlStates?.(); } catch {}
+          if (bot) {
+            bot.interrupt_code = true;
+            bot._stopGeneration = (bot._stopGeneration || 0) + 1;
+          }
+          currentTask.status = 'cancelled';
+          currentTask.error = `Cancelled — ${player}'s intent stale (${Math.round(age/1000)}s no follow-up)`;
+          entry.physical_interrupt = true;
+        }
+      }
+    } catch (e) { log(`[stale] interrupt error: ${e.message}`); }
+  }
+}
+
 // Pending voice turns waiting for the brain's reply. Map<id, {resolve, timer, kid, ts}>
 // where `resolve` is the HTTP response resolver and `timer` is the fail-closed
 // timeout handle. When ACTIONS.chat fires while a voice turn is in flight,
@@ -353,6 +556,33 @@ function getMemoryHints(limit = 4) {
 }
 
 // Handle incoming chat message with routing
+function armIntentRoutedAction(actionName) {
+  if (!bot) return;
+  bot._actionEpoch = (bot._actionEpoch || 0) + 1;
+  if (actionName === 'stop') {
+    bot.interrupt_code = true;
+    return;
+  }
+  bot.interrupt_code = false;
+}
+
+function isActionEpochCurrent(epoch) {
+  return !bot?.interrupt_code && bot._actionEpoch === epoch;
+}
+
+function runIntentRoutedAction(actionName, actionBody) {
+  armIntentRoutedAction(actionName);
+  bot._hc_intent_action_depth = (bot._hc_intent_action_depth || 0) + 1;
+  return ACTIONS[actionName](actionBody).finally(() => {
+    bot._hc_intent_action_depth = Math.max(0, (bot._hc_intent_action_depth || 1) - 1);
+  });
+}
+
+function intentRouterOutcomeFailed(actionName, result) {
+  const opts = actionName === 'build_shelter_for_night' ? { allowPartialPlacement: true } : {};
+  return actionOutcomeFailed(result, opts);
+}
+
 async function handleChat(username, message) {
   const knownNames = buildKnownNames(getMyName(), getNearbyPlayerNames());
   const routing = parseMessageRouting(message, { knownNames });
@@ -410,8 +640,8 @@ async function handleChat(username, message) {
           if (ACTIONS[route.action]) {
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
-            ACTIONS[route.action](actionBody).then((result) => {
-              if (actionOutcomeFailed(result)) {
+            runIntentRoutedAction(route.action, actionBody).then((result) => {
+              if (intentRouterOutcomeFailed(route.action, result)) {
                 if (route.skill_id != null) {
                   try { markLastSkillFailed(bot, route.skill_id); } catch {}
                 }
@@ -481,8 +711,8 @@ async function handleChat(username, message) {
               if (ack) { try { bot.chat(ack); } catch {} }
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
-              ACTIONS[route.action](actionBody).then((result) => {
-                if (actionOutcomeFailed(result)) {
+              runIntentRoutedAction(route.action, actionBody).then((result) => {
+                if (intentRouterOutcomeFailed(route.action, result)) {
                   if (route.skill_id != null) {
                     try { markLastSkillFailed(bot, route.skill_id); } catch {}
                   }
@@ -608,7 +838,153 @@ async function createBot() {
       // doesn't burn anything.
       try {
         registerHighLevelSkills(ACTIONS, ensureBot);
-        log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2');
+        // ── Auto-memory wrappers on marquee skills (issue #68 / cherry-picked
+        // from f557003 after PR #69 bumped vendor to the wrong commit). The
+        // brain reliably calls these high-level verbs; auto-write the
+        // completion fact to MEMORY.md so cross-session continuity doesn't
+        // depend on Sonnet remembering to ALSO emit a memory.add tool call
+        // (emitting text-wrapped <tool_call>s alongside native Bash tool_use
+        // is rare for Sonnet under load — primary failure mode of PR #54).
+        const _origBuildSchematic = ACTIONS.build_schematic;
+        if (_origBuildSchematic && !_origBuildSchematic._hc_automem_wrapped) {
+          const _wrapBuildSchematic = async (body) => {
+            const result = await _origBuildSchematic(body);
+            try {
+              const r = result?.result || '';
+              const m = r.match(/Built (?:schematic )?"?([\w_-]+)"? at ([-\d]+),([-\d]+),([-\d]+) — (\d+)\/(\d+)/);
+              if (m) {
+                const [, schemName, x, y, z, placed, total] = m;
+                if (Number(placed) > 0) {
+                  // If body carries `kid_name` (kid said "name it X"), record
+                  // it FIRST so the object-permanence gate (issue #68) can
+                  // recover the kid-facing name next session. body.name is the
+                  // schematic id; not the kid's name.
+                  const kidName = body && typeof body.kid_name === 'string' && body.kid_name.trim()
+                    ? body.kid_name.trim()
+                    : null;
+                  const label = kidName ? `${kidName} (${schemName})` : schemName;
+                  autoRememberFact(`Built ${label} for kid at ${x},${y},${z} (${placed}/${total} blocks). Schematic build.`);
+                }
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+          _wrapBuildSchematic._hc_automem_wrapped = true;
+          ACTIONS.build_schematic = _wrapBuildSchematic;
+        }
+        const _origBuildTower = ACTIONS.build_tower;
+        if (_origBuildTower && !_origBuildTower._hc_automem_wrapped) {
+          const _wrapBuildTower = async (body) => {
+            const result = await _origBuildTower(body);
+            try {
+              const x = body.x, y = body.y, z = body.z, mat = body.material;
+              const r = result?.result || '';
+              const m = r.match(/(\d+)\/(\d+)/);
+              if (m && Number(m[1]) > 0) {
+                const kidName = body && typeof body.kid_name === 'string' && body.kid_name.trim()
+                  ? body.kid_name.trim()
+                  : null;
+                const label = kidName ? `${kidName} (${mat || 'block'} tower)` : `${mat || 'block'} tower`;
+                autoRememberFact(`Built ${label} at ${x},${y},${z} (${m[1]}/${m[2]} blocks). Kid build.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+          _wrapBuildTower._hc_automem_wrapped = true;
+          ACTIONS.build_tower = _wrapBuildTower;
+        }
+        const _origGiveToPlayer = ACTIONS.give_to_player;
+        if (_origGiveToPlayer && !_origGiveToPlayer._hc_automem_wrapped) {
+          const _wrapGiveToPlayer = async (body) => {
+            const result = await _origGiveToPlayer(body);
+            try {
+              const r = result?.result || '';
+              if (/gave|tossed|delivered/i.test(r) || /^\s*Sent /i.test(r)) {
+                autoRememberFact(`Gave ${body.count || ''} ${body.item} to ${body.player}.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+          _wrapGiveToPlayer._hc_automem_wrapped = true;
+          ACTIONS.give_to_player = _wrapGiveToPlayer;
+        }
+        const _origFindBlocks = ACTIONS.find_blocks;
+        if (_origFindBlocks && !_origFindBlocks._hc_automem_wrapped) {
+          const _wrapFindBlocks = async (body) => {
+            const result = await _origFindBlocks(body);
+            try {
+              // find_blocks returns `{ result: "Found 5 iron_ore", locations: [{x,y,z}, ...] }`
+              // — coords are in `locations`, NOT the result string.
+              const locs = Array.isArray(result?.locations) ? result.locations : [];
+              if (locs.length > 0) {
+                const nearest = locs[0];
+                if (typeof nearest.x === 'number' && typeof nearest.y === 'number' && typeof nearest.z === 'number') {
+                  const blockName = body.block || body.type || 'block';
+                  autoRememberFact(`Found ${blockName} vein at ${nearest.x},${nearest.y},${nearest.z} (${locs.length} block${locs.length === 1 ? '' : 's'} visible).`);
+                }
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+          _wrapFindBlocks._hc_automem_wrapped = true;
+          ACTIONS.find_blocks = _wrapFindBlocks;
+        }
+        const _origLightArea = ACTIONS.light_area;
+        if (_origLightArea && !_origLightArea._hc_automem_wrapped) {
+          const _wrapLightArea = async (body) => {
+            const result = await _origLightArea(body);
+            try {
+              // Use structured `placed` count from skills.light_area, not regex —
+              // the result string starts with the center coords, so /(\d+)/
+              // would match cx (e.g. 1627) instead of the torch count.
+              const placed = Number(result?.placed);
+              if (Number.isFinite(placed) && placed > 0) {
+                autoRememberFact(`Lit area around ${body.cx},${body.cy},${body.cz} with ${placed} torch${placed === 1 ? '' : 'es'}.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+          _wrapLightArea._hc_automem_wrapped = true;
+          ACTIONS.light_area = _wrapLightArea;
+        }
+        const _origPlaceNearPlayer = ACTIONS.place_near_player;
+        if (_origPlaceNearPlayer && !_origPlaceNearPlayer._hc_automem_wrapped) {
+          const _wrapPlaceNearPlayer = async (body) => {
+            const result = await _origPlaceNearPlayer(body);
+            try {
+              const r = result?.result || '';
+              if (/placed|put|set/i.test(r) && !/cannot|couldn't/i.test(r)) {
+                autoRememberFact(`Placed ${body.item} near ${body.player}.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+          _wrapPlaceNearPlayer._hc_automem_wrapped = true;
+          ACTIONS.place_near_player = _wrapPlaceNearPlayer;
+        }
+        for (const collectVerb of ['collect', 'bg_collect']) {
+          const orig = ACTIONS[collectVerb];
+          if (!orig || orig._hc_automem_wrapped) continue;
+          const wrapped = async (body) => {
+            const result = await orig(body);
+            try {
+              const r = result?.result || '';
+              const m = r.match(/(?:Collected|collected|gathered|mined)\s+(\d+)(?:\/\d+)?\s+([\w_-]+)/);
+              if (m) {
+                const [, count, item] = m;
+                if (Number(count) > 0) {
+                  const pos = bot?.entity?.position;
+                  const where = pos ? ` at ~${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}` : '';
+                  autoRememberFact(`Mined ${count} ${item}${where}.`);
+                }
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+          wrapped._hc_automem_wrapped = true;
+          ACTIONS[collectVerb] = wrapped;
+        }
+        log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2 + auto-memory wrappers on 8 marquee verbs (#68)');
       } catch (e) {
         log(`skill registration failed: ${e.message}`);
       }
@@ -636,6 +1012,23 @@ async function createBot() {
         }).catch((e) => log(`quest engine install failed: ${e.message}`));
       } catch (e) {
         log(`quest engine sync failure: ${e.message}`);
+      }
+
+      // Survival tick — rule-based background loops (hunger/health/torch/
+      // unstuck). Zero LLM calls. Enables survival_easy mode by keeping the
+      // bot alive between kid-directed turns. SURVIVAL_TICK_ENABLED=0 to
+      // disable in peaceful-mode deployments.
+      try {
+        if (_survival_tear_down) _survival_tear_down();
+        _survival_tear_down = startSurvivalTick(bot, log, {
+          isKidTaskActive: () => !!(
+            bot.interrupt_code
+            || currentTask?.status === 'running'
+            || (bot._hc_intent_action_depth || 0) > 0
+          ),
+        });
+      } catch (e) {
+        log(`survival tick install failed: ${e.message}`);
       }
 
       // ── Reactive Events ──────────────────────────────
@@ -733,6 +1126,7 @@ async function createBot() {
         botReady = false;
         positionHistory = []; // clear stuck detection history
         if (bot?._soundCheckInterval) { clearInterval(bot._soundCheckInterval); bot._soundCheckInterval = null; }
+        if (_survival_tear_down) { _survival_tear_down(); _survival_tear_down = null; }
         try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch (e) {}
         _quest_install_gen++;
         try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch (e) {}
@@ -1632,6 +2026,27 @@ const ACTIONS = {
     if (data.pending_commands && data.pending_commands > 0) {
       lines.push(`## pending kid requests: ${data.pending_commands} (run mc commands to drain)`);
     }
+    // ── Memory anchors (issue #68 Phase C fix; gemini council 2026-05-20) ──
+    // Inject nearby named-build entries from MEMORY.md as live sensory data.
+    // The brain skips pure-recall replies because §1.0d ("world must change
+    // THIS turn") makes chat-only turns feel like no-ops. But if the perceive
+    // output INCLUDES the named build as a "you can see" anchor, referencing
+    // it becomes a grounded act — same as referencing a nearby block or entity.
+    // Bot reads its own MEMORY.md (HERMES_COMPANION_HOME injected by launcher),
+    // extracts "Built X (or similar) at A,B,C" entries within 200 blocks, and
+    // surfaces them alongside nearby blocks. Cheap on-disk read (<5ms), no API.
+    try {
+      const anchors = readMemoryAnchorsNear(pos, 200, 6);
+      if (anchors.length > 0) {
+        lines.push('## remembered nearby builds (from your memory.md):');
+        for (const a of anchors) {
+          lines.push(`  - ${a.label} at ${a.x},${a.y},${a.z} (${a.distance}m away)`);
+        }
+      }
+    } catch (e) {
+      // never fail perceive due to memory read; log + continue
+      log(`[memory-anchors] perceive read failed: ${e.message}`);
+    }
     return { result: lines.join('\n') };
   },
 
@@ -1689,9 +2104,15 @@ const ACTIONS = {
   async stop() {
     const b = ensureBot();
     b._stopGeneration = (b._stopGeneration || 0) + 1;
+    b._actionEpoch = (b._actionEpoch || 0) + 1;
+    b.interrupt_code = true;
     b.pathfinder.setGoal(null);
     try { b.stopDigging(); } catch {}
     if (b.pvp) try { b.pvp.stop(); } catch {}
+    if (currentTask && currentTask.status === 'running') {
+      currentTask.status = 'cancelled';
+      currentTask.error = 'Cancelled via /action/stop';
+    }
     return { result: 'Stopped all actions.' };
   },
 
@@ -1881,11 +2302,15 @@ const ACTIONS = {
   // ── Command queue management ────────────────────
   async complete_command({ index = 0 }) {
     if (commandQueue.length === 0) return { result: 'No commands in queue.' };
-    const pending = commandQueue.filter(c => c.status === 'pending');
-    if (index >= pending.length) return { result: 'No pending command at that index.' };
-    pending[index].status = 'completed';
-    rememberSocialEvent({ actor: pending[index].from, kind: 'completed_command', channel: pending[index].channel || 'direct', message: pending[index].command });
-    return { result: `Marked command as completed: "${pending[index].command}"` };
+    // Accept both pending and stale entries (issue #68 Patch 2). Stale
+    // entries surface on /commands so the brain can acknowledge them;
+    // marking them done is the same FIFO motion.
+    const surfaced = commandQueue.filter(c => c.status === 'pending' || c.status === 'stale');
+    if (index >= surfaced.length) return { result: 'No pending command at that index.' };
+    const wasStale = surfaced[index].status === 'stale';
+    surfaced[index].status = 'completed';
+    rememberSocialEvent({ actor: surfaced[index].from, kind: 'completed_command', channel: surfaced[index].channel || 'direct', message: surfaced[index].command });
+    return { result: `Marked command as completed${wasStale ? ' (was stale)' : ''}: "${surfaced[index].command}"` };
   },
 
   // ── Crafting ─────────────────────────────────────
@@ -2269,10 +2694,12 @@ const ACTIONS = {
         .filter(c => c.status === 'pending')
         .sort((a, b) => a.time - b.time)[0];
       if (oldest && oldest.source === 'voice'
-          && _pendingVoiceTurns.has(oldest.id)
-          && _pendingVoiceTurns.get(oldest.id).dispatched_ts
-          && (now - _pendingVoiceTurns.get(oldest.id).dispatched_ts) <= VOICE_AUTOCORRELATE_MS) {
-        voiceTurn = _pendingVoiceTurns.get(oldest.id);
+          && _pendingVoiceTurns.has(oldest.id)) {
+        const turn = _pendingVoiceTurns.get(oldest.id);
+        const dispatchTs = turn?.dispatched_ts ?? oldest.time;
+        if ((now - dispatchTs) <= VOICE_AUTOCORRELATE_MS) {
+          voiceTurn = turn;
+        }
       }
       // Otherwise (oldest is a chat turn OR no pending OR voice not yet
       // dispatched OR voice age past window): fall through to bot.chat().
@@ -2299,7 +2726,7 @@ const ACTIONS = {
       if (qEntry.source === 'chat' || qEntry.source == null) {
         const b = ensureBot();
         b.chat(message);
-        if (qEntry.status === 'pending') qEntry.status = 'completed';
+        if (qEntry.status === 'pending' || qEntry.status === 'stale') qEntry.status = 'completed';
         rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
         return { result: `Sent: ${message} (in_reply_to=${replyTo})` };
       }
@@ -2805,12 +3232,19 @@ const ACTIONS = {
   // Fire-and-Forget Smelting
   // ═══════════════════════════════════════════════════════════════
 
-  async smelt_start({ input, fuel, count = 1 }) {
+  async smelt_start({ input, fuel, count = 1, x, y, z }) {
     const b = ensureBot();
-    const furnaceBlock = b.findBlock({
-      matching: block => block.name === 'furnace' || block.name === 'lit_furnace' || block.name === 'blast_furnace' || block.name === 'smoker',
-      maxDistance: 4,
-    });
+    const isFurnaceBlock = (block) =>
+      block.name === 'furnace' || block.name === 'lit_furnace' || block.name === 'blast_furnace' || block.name === 'smoker';
+    let furnaceBlock;
+    if (x != null && y != null && z != null) {
+      furnaceBlock = b.blockAt(new Vec3(Math.floor(x), Math.floor(y), Math.floor(z)));
+      if (!furnaceBlock || !isFurnaceBlock(furnaceBlock)) {
+        throw new Error(`No furnace at ${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}.`);
+      }
+    } else {
+      furnaceBlock = b.findBlock({ matching: isFurnaceBlock, maxDistance: 4 });
+    }
     if (!furnaceBlock) throw new Error('No furnace within 4 blocks. Place one first.');
 
     const furnace = await b.openFurnace(furnaceBlock);
@@ -2980,6 +3414,309 @@ const ACTIONS = {
     fairPlayMode = !!enabled;
     return { result: `Fair play mode: ${fairPlayMode ? 'ON (LOS, sound, reaction delay)' : 'OFF (god-mode perception)'}` };
   },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Survival skills (issue #81 — closes #59 + #61)
+  // fish_for_food, farm_food, cook_food, return_home, feed_player,
+  // build_shelter_for_night
+  // ═══════════════════════════════════════════════════════════════
+
+  async fish_for_food({ duration = 45 }) {
+    const b = ensureBot();
+    // 1. Find fishing rod in inventory
+    const rod = b.inventory.items().find((i) => i.name === 'fishing_rod');
+    if (!rod) return { result: "I don't have a fishing rod. Need one to fish!" };
+
+    // 2. Find water within 16 blocks
+    const waterBlock = b.findBlock({ matching: (blk) => blk.name === 'water', maxDistance: 16 });
+    if (!waterBlock) return { result: "No water nearby to fish — let's find a lake or river first." };
+
+    // 3. Pathfind close to water
+    await b.pathfinder.goto(new goals.GoalNear(
+      waterBlock.position.x, waterBlock.position.y, waterBlock.position.z, 2
+    )).catch(() => {});
+
+    // 4. Equip rod and cast
+    await b.equip(rod, 'hand');
+    await b.lookAt(waterBlock.position.offset(0.5, 0, 0.5));
+    await new Promise((r) => setTimeout(r, 400));
+
+    const fishNames = ['cod', 'salmon'];
+    const countFish = () => b.inventory.items()
+      .filter((i) => fishNames.includes(i.name))
+      .reduce((sum, i) => sum + i.count, 0);
+    const fishBefore = countFish();
+    const stopAt = Date.now() + duration * 1000;
+    const epoch = b._actionEpoch;
+
+    // 5. Fish loop — stop when edible fish appear in inventory
+    let consecutiveFails = 0;
+    while (Date.now() < stopAt && isActionEpochCurrent(epoch)) {
+      try {
+        await b.fish();
+        consecutiveFails = 0;
+      } catch {
+        consecutiveFails++;
+        await new Promise((r) => setTimeout(r, 800));
+        if (consecutiveFails >= 5) break;
+        continue;
+      }
+      if (countFish() > fishBefore) break;
+    }
+
+    const fishCaught = countFish() - fishBefore;
+    const result = fishCaught > 0
+      ? `Caught ${fishCaught} fish! Fresh food ready.`
+      : `Fished for ${duration}s but no bites — might need a better spot or enchanted rod.`;
+    autoRememberFact(`Fished near ${waterBlock.position.floored()} — caught ${fishCaught}.`);
+    return { result };
+  },
+
+  async farm_food({ radius = 4 }) {
+    const b = ensureBot();
+    const epoch = b._actionEpoch;
+    let harvested = 0;
+    let tilled = 0;
+
+    const blockIds = (names) => names
+      .map((n) => b.registry.blocksByName[n]?.id)
+      .filter((id) => id != null);
+    const cropMaxAge = (name) => (name === 'beetroots' ? 3 : 7);
+
+    // 1. Harvest mature crops within radius
+    const cropBlocks = b.findBlocks({
+      matching: blockIds(['wheat', 'carrots', 'potatoes', 'beetroots']),
+      maxDistance: radius,
+      count: 20,
+    });
+    for (const pos of cropBlocks) {
+      if (!isActionEpochCurrent(epoch)) break;
+      const blk = b.blockAt(pos);
+      if (!blk) continue;
+      const age = blk.getProperties()?.age;
+      if (age !== undefined && parseInt(age) < cropMaxAge(blk.name)) continue;
+      try {
+        await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+        await b.dig(blk);
+        harvested++;
+      } catch { /* can't reach */ }
+    }
+
+    // 2. Replant harvested farmland and till nearby dirt if we have seeds
+    const hoe = b.inventory.items().find((i) => i.name.includes('hoe'));
+    const seedNames = ['wheat_seeds', 'carrot', 'potato', 'beetroot_seeds'];
+    const seeds = b.inventory.items().find((i) => seedNames.includes(i.name));
+    let planted = 0;
+    if (seeds) {
+      const farmlandBlocks = b.findBlocks({
+        matching: blockIds(['farmland']),
+        maxDistance: radius,
+        count: 20,
+      });
+      for (const pos of farmlandBlocks) {
+        if (!isActionEpochCurrent(epoch) || planted >= 20) break;
+        const above = b.blockAt(pos.offset(0, 1, 0));
+        if (!above || above.name !== 'air') continue;
+        try {
+          await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+          const currentSeeds = b.inventory.items().find((i) => seedNames.includes(i.name));
+          if (!currentSeeds) break;
+          const farmland = b.blockAt(pos);
+          if (farmland && farmland.name === 'farmland') {
+            await b.equip(currentSeeds, 'hand');
+            await b.placeBlock(farmland, new Vec3(0, 1, 0));
+            planted++;
+          }
+        } catch { /* can't reach or can't plant */ }
+      }
+    }
+    if (hoe && seeds) {
+      const dirtBlocks = b.findBlocks({
+        matching: blockIds(['dirt', 'grass_block', 'rooted_dirt']),
+        maxDistance: 3,
+        count: 9,
+      });
+      for (const pos of dirtBlocks) {
+        if (!isActionEpochCurrent(epoch) || tilled >= 9) break;
+        const blk = b.blockAt(pos);
+        if (!blk) continue;
+        const above = b.blockAt(pos.offset(0, 1, 0));
+        if (!above || above.name !== 'air') continue;
+        try {
+          await b.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)).catch(() => {});
+          await b.equip(hoe, 'hand');
+          await b.activateBlock(blk);
+          tilled++;
+          await new Promise((r) => setTimeout(r, 200));
+          const currentSeeds = b.inventory.items().find((i) => seedNames.includes(i.name));
+          if (currentSeeds) {
+            const farmland = b.blockAt(pos);
+            if (farmland && farmland.name === 'farmland') {
+              await b.equip(currentSeeds, 'hand');
+              await b.placeBlock(farmland, new Vec3(0, 1, 0)).catch(() => {});
+            }
+          }
+        } catch { /* can't reach or can't till */ }
+      }
+    }
+
+    const result = `Farmed: harvested ${harvested} crop${harvested === 1 ? '' : 's'}, replanted ${planted}, tilled+planted ${tilled} plot${tilled === 1 ? '' : 's'}.`;
+    if (harvested + planted + tilled > 0) autoRememberFact(`Farmed at ${b.entity.position.floored()} — ${harvested} harvested, ${planted + tilled} planted.`);
+    return { result };
+  },
+
+  async cook_food({ input, fuel, count = 4 }) {
+    const b = ensureBot();
+    // Blast furnaces smelt ores only — not food. Smoker/regular furnace for cook_food.
+    const isFurnace = (blk) => ['furnace', 'lit_furnace', 'smoker'].includes(blk.name);
+
+    let furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 16 });
+    if (!furnaceBlock) {
+      return { result: "No furnace nearby. Place one first or I can craft one if you have cobblestone." };
+    }
+    await b.pathfinder.goto(new goals.GoalNear(
+      furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 2
+    )).catch(() => {});
+    furnaceBlock = b.findBlock({ matching: isFurnace, maxDistance: 4 });
+    if (!furnaceBlock) {
+      return { result: "Found a furnace but couldn't get within range. Move closer and try again." };
+    }
+    if (furnaceBlock.name === 'blast_furnace') {
+      return { result: 'Blast furnaces cannot cook food — need a regular furnace or smoker nearby.' };
+    }
+
+    const rawFood = input || (() => {
+      const raw = ['beef', 'porkchop', 'mutton', 'chicken', 'cod', 'salmon', 'rabbit', 'potato'];
+      const item = b.inventory.items().find((i) => raw.includes(i.name));
+      return item?.name;
+    })();
+    if (!rawFood) return { result: "No raw food to cook — I'd need beef, chicken, fish, or similar." };
+
+    const fp = furnaceBlock.position;
+    try {
+      await ACTIONS.smelt_start({
+        input: rawFood, fuel, count,
+        x: fp.x, y: fp.y, z: fp.z,
+      });
+    } catch (err) {
+      return { result: err.message || 'Could not start smelting.' };
+    }
+    const fx = furnaceBlock.position.x;
+    const fy = furnaceBlock.position.y;
+    const fz = furnaceBlock.position.z;
+    const deadline = Date.now() + Math.min(count * 12000, 60000);
+    const epoch = b._actionEpoch;
+    let takeResult;
+    while (Date.now() < deadline) {
+      if (!isActionEpochCurrent(epoch)) {
+        return { result: `Cooking ${rawFood} interrupted.` };
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+      let check;
+      try {
+        check = await ACTIONS.furnace_check({ x: fx, y: fy, z: fz });
+      } catch {
+        continue;
+      }
+      if (check.ready) {
+        try {
+          takeResult = await ACTIONS.furnace_take({ x: fx, y: fy, z: fz });
+        } catch (err) {
+          return { result: `Couldn't cook ${rawFood}: ${err.message || 'lost access to furnace.'}` };
+        }
+        break;
+      }
+    }
+    if (!takeResult) {
+      try {
+        takeResult = await ACTIONS.furnace_take({ x: fx, y: fy, z: fz });
+      } catch (err) {
+        return { result: `Couldn't cook ${rawFood}: ${err.message || 'lost access to furnace.'}` };
+      }
+    }
+    const cooked = takeResult?.result || '';
+    if (!cooked || /no output|could not|couldn't/i.test(cooked)) {
+      return { result: `Couldn't cook ${rawFood}: ${cooked || 'furnace produced nothing.'}` };
+    }
+    autoRememberFact(`Cooked ${rawFood} x${count} in furnace at ${furnaceBlock.position.floored()}.`);
+    return { result: `Cooked ${rawFood}: ${cooked}` };
+  },
+
+  async return_home({}) {
+    ensureBot();
+    const HOME_NAMES = ['home', 'base', 'our_base', 'spawn'];
+    const locs = loadLocations();
+    const locKeys = Object.keys(locs);
+    const foundKey = HOME_NAMES.map((n) => locKeys.find((k) => k.toLowerCase() === n)).find(Boolean);
+    if (foundKey) {
+      return await ACTIONS.go_mark({ name: foundKey });
+    }
+    return { result: "I don't have a home mark yet. Say 'mark home' when we're at your base and I'll remember it." };
+  },
+
+  async feed_player({ player }) {
+    const b = ensureBot();
+    if (!player) return { result: 'No player specified — tell me who to feed.' };
+    const target = player;
+    // 1. Check for cooked food in inventory
+    const COOKED = ['cooked_beef', 'cooked_porkchop', 'cooked_mutton', 'cooked_chicken',
+      'cooked_cod', 'cooked_salmon', 'bread', 'baked_potato', 'apple'];
+    const cookedItem = b.inventory.items().find((i) => COOKED.includes(i.name));
+    if (cookedItem) {
+      return await ACTIONS.give_to_player({ player: target, item: cookedItem.name, count: 2 });
+    }
+    // 2. Try to cook something first
+    let cookResult;
+    try {
+      cookResult = await ACTIONS.cook_food({ count: 2 });
+    } catch (err) {
+      cookResult = { result: err.message || '' };
+    }
+    const cookFailed = !cookResult?.result
+      || /^(no |could not|couldn't|found a furnace)/i.test(cookResult.result);
+    if (!cookFailed) {
+      const freshCooked = b.inventory.items().find((i) => COOKED.includes(i.name));
+      if (freshCooked) {
+        return await ACTIONS.give_to_player({ player: target, item: freshCooked.name, count: 2 });
+      }
+    }
+    // 3. Fallback: give raw food
+    const RAW = ['beef', 'porkchop', 'chicken', 'cod', 'salmon', 'potato', 'carrot', 'apple'];
+    const rawItem = b.inventory.items().find((i) => RAW.includes(i.name));
+    if (rawItem) {
+      return await ACTIONS.give_to_player({ player: target, item: rawItem.name, count: 2 });
+    }
+    return { result: `Nothing to give — my food inventory is empty. We should fish or farm first!` };
+  },
+
+  async build_shelter_for_night({ x, y, z }) {
+    const b = ensureBot();
+    // Use the bot's current position if no coords given
+    const bx = (x !== undefined ? Math.round(x) : Math.round(b.entity.position.x) + 2);
+    const by = (y !== undefined ? Math.round(y) : Math.round(b.entity.position.y));
+    const bz = (z !== undefined ? Math.round(z) : Math.round(b.entity.position.z));
+    // Build dirt_shelter schematic
+    const shelterResult = await ACTIONS.build_schematic({ name: 'dirt_shelter', x: bx, y: by, z: bz });
+    const placed = shelterResult?.result || '';
+    const placedFrac = placed.match(/(\d+)\/(\d+)/);
+    const placedCount = placedFrac ? parseInt(placedFrac[1], 10) : 0;
+    const totalCount = placedFrac ? parseInt(placedFrac[2], 10) : 0;
+    const minPlaced = totalCount > 0 ? Math.ceil(totalCount * 0.75) : 1;
+    const buildFailed = !placedFrac
+      ? /interrupted|couldn't|could not|is empty|needs /i.test(placed)
+      : placedCount < minPlaced;
+    if (buildFailed) {
+      return { result: `Couldn't build shelter at ${bx},${by},${bz}: ${placed || 'build failed.'}` };
+    }
+    // Light the inside
+    await ACTIONS.light_area({ cx: bx + 1, cy: by + 1, cz: bz + 1, radius: 1 }).catch(() => {});
+    const partial = placedFrac && placedCount < totalCount;
+    autoRememberFact(`Built emergency shelter at ${bx},${by},${bz}. 3x3 dirt hut.`);
+    if (partial) {
+      return { result: `Shelter mostly built at ${bx},${by},${bz}. Get inside — torched what I could.` };
+    }
+    return { result: `Shelter built at ${bx},${by},${bz}! Get inside — torched it up.` };
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3090,13 +3827,34 @@ const httpServer = http.createServer(async (req, res) => {
       }
 
       if (path === '/commands') {
-        // Read-only queue peek. Voice dispatch timestamps are set when the
-        // brain claims work via POST /action/* (or ?claim=1 for explicit drain).
-        const pending = commandQueue.filter(c => c.status === 'pending');
+        const surfaced = commandQueue.filter(c => c.status === 'pending' || c.status === 'stale');
+        const now = Date.now();
+        for (const entry of surfaced) {
+          if (entry.source === 'voice' && _pendingVoiceTurns.has(entry.id)) {
+            const turn = _pendingVoiceTurns.get(entry.id);
+            if (!turn.dispatched_ts) turn.dispatched_ts = now;
+          }
+        }
         if (url.searchParams.get('claim') === '1') {
           markOldestVoiceDispatchedIfPending();
         }
-        return respond(res, 200, { ok: true, data: { commands: pending } });
+        try {
+          const recallRe = /\b(?:where|what|when|do you remember|recall|hang out|our spot|fairy|spire|treehouse|beacon|lighthouse|build(?: did| we| last| together)|last build)\b/i;
+          for (const entry of surfaced) {
+            if (!entry || entry.memory_context) continue;
+            const body = entry.command || entry.originalMessage || '';
+            if (!recallRe.test(body)) continue;
+            const pos = bot && bot.entity ? bot.entity.position : { x: 0, y: 64, z: 0 };
+            const anchors = readMemoryAnchorsNear(pos, 300, 6);
+            if (anchors.length > 0) {
+              entry.memory_context = {
+                hint: "the kid asked something recall-shaped; here's what's near you from your MEMORY.md — reply with the name + coords + a personal aside in YOUR voice. This IS the world-change.",
+                nearby_remembered_builds: anchors,
+              };
+            }
+          }
+        } catch (e) { log(`[memory-injection] /commands enrichment failed: ${e.message}`); }
+        return respond(res, 200, { ok: true, data: { commands: surfaced } });
       }
 
       if (path === '/sounds') {
@@ -3179,7 +3937,7 @@ const httpServer = http.createServer(async (req, res) => {
           log(`[voice✗] (id=${id}) brain_timeout after ${VOICE_TURN_TIMEOUT_MS}ms`);
           resolveOnce({ ok: false, error: 'brain_timeout', id });
         }, VOICE_TURN_TIMEOUT_MS);
-        _pendingVoiceTurns.set(id, { id, kid, ts, dispatched_ts: null, timer, resolve: resolveOnce });
+        _pendingVoiceTurns.set(id, { id, kid, ts, dispatched_ts: ts, timer, resolve: resolveOnce });
         // Client may give up before us (live_loop.py timeout is 90s); detect
         // and clean up so the resolver doesn't fire on a dead socket AND so
         // an orphaned turn cannot get auto-correlated to a later brain reply
@@ -3205,6 +3963,8 @@ const httpServer = http.createServer(async (req, res) => {
       if (path === '/task/cancel') {
         const b = ensureBot();
         b._stopGeneration = (b._stopGeneration || 0) + 1;
+        b._actionEpoch = (b._actionEpoch || 0) + 1;
+        b.interrupt_code = true;
         b.pathfinder.setGoal(null);
         try { b.stopDigging(); } catch {}
         if (currentTask && currentTask.status === 'running') {
@@ -3226,6 +3986,10 @@ const httpServer = http.createServer(async (req, res) => {
           return respond(res, 409, { ok: false, error: `Task "${currentTask.action}" is already running (${Math.round((Date.now() - currentTask.started) / 1000)}s). POST /task/cancel first.`, state: briefState() });
         }
         const taskId = `${actionName}_${Date.now()}`;
+        if (actionName !== 'stop' && bot) {
+          bot._actionEpoch = (bot._actionEpoch || 0) + 1;
+          bot.interrupt_code = false;
+        }
         currentTask = {
           id: taskId,
           action: actionName,
@@ -3275,6 +4039,12 @@ const httpServer = http.createServer(async (req, res) => {
         return respond(res, 400, { ok: false, error: `Unknown action "${actionName}". Available: ${available}` });
       }
 
+      markOldestVoiceDispatchedIfPending();
+      if (actionName === 'stop') {
+        armIntentRoutedAction('stop');
+      } else if (bot) {
+        armIntentRoutedAction(actionName);
+      }
       const result = await actionFn(body);
       actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
       if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();
@@ -3375,6 +4145,17 @@ setInterval(() => {
   }
 }, 5000);
 
+// ── Stale-intent sweep loop (issue #68 Patch 2) ───────────────────
+// Independent of the 5s stuck-detection interval — STALE_SWEEP_INTERVAL_MS
+// defaults to 30s so we don't burn CPU walking the queue when nothing
+// can possibly be stale (entries only become stale after 120s by default).
+const _staleSweepTimer = setInterval(() => {
+  try { sweepStaleIntents(); } catch (e) { log(`[stale] sweep error: ${e.message}`); }
+}, STALE_SWEEP_INTERVAL_MS);
+// Keep `_staleSweepTimer` referenced so node doesn't warn about an
+// unused identifier; the timer is implicitly cleared on process exit.
+void _staleSweepTimer;
+
 // ═══════════════════════════════════════════════════════════════════
 // Startup
 // ═══════════════════════════════════════════════════════════════════
@@ -3399,7 +4180,7 @@ function _clearPendingVoiceTurns(reason) {
   for (const [id, turn] of _pendingVoiceTurns) {
     clearTimeout(turn.timer);
     try {
-      turn.resolve({ ok: false, error: reason, id });
+      turn.resolve({ ok: false, error: reason, in_reply_to: id, id });
     } catch (e) { /* client already gone */ }
     _pendingVoiceTurns.delete(id);
   }

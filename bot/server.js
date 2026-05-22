@@ -427,6 +427,13 @@ function sweepStaleIntents() {
         ]);
         if (STALE_INTERRUPTIBLE.has(currentTask.action)) {
           log(`[stale] interrupting currentTask=${currentTask.action} for stale intent of ${player}`);
+          try {
+            if (bot) {
+              bot._stopGeneration = (bot._stopGeneration || 0) + 1;
+              bot._actionEpoch = (bot._actionEpoch || 0) + 1;
+              bot.interrupt_code = true;
+            }
+          } catch {}
           try { if (bot?.pathfinder) bot.pathfinder.setGoal(null); } catch {}
           try { if (bot) bot.stopDigging?.(); } catch {}
           try { if (bot) bot.clearControlStates?.(); } catch {}
@@ -549,7 +556,22 @@ function getMemoryHints(limit = 4) {
 }
 
 // Handle incoming chat message with routing
+function armIntentRoutedAction(actionName) {
+  if (!bot) return;
+  bot._actionEpoch = (bot._actionEpoch || 0) + 1;
+  if (actionName === 'stop') {
+    bot.interrupt_code = true;
+    return;
+  }
+  bot.interrupt_code = false;
+}
+
+function isActionEpochCurrent(epoch) {
+  return !bot?.interrupt_code && bot._actionEpoch === epoch;
+}
+
 function runIntentRoutedAction(actionName, actionBody) {
+  armIntentRoutedAction(actionName);
   bot._hc_intent_action_depth = (bot._hc_intent_action_depth || 0) + 1;
   return ACTIONS[actionName](actionBody).finally(() => {
     bot._hc_intent_action_depth = Math.max(0, (bot._hc_intent_action_depth || 1) - 1);
@@ -617,8 +639,6 @@ async function handleChat(username, message) {
           log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
           if (ACTIONS[route.action]) {
             const actionBody = actionBodyForRoute(route);
-            if (route.action === 'stop') bot.interrupt_code = true;
-            else bot.interrupt_code = false;
             // Fire-and-forget — long-running actions don't block chat thread.
             runIntentRoutedAction(route.action, actionBody).then((result) => {
               if (intentRouterOutcomeFailed(route.action, result)) {
@@ -690,8 +710,6 @@ async function handleChat(username, message) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }
               const actionBody = actionBodyForRoute(route);
-              if (route.action === 'stop') bot.interrupt_code = true;
-              else bot.interrupt_code = false;
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               runIntentRoutedAction(route.action, actionBody).then((result) => {
                 if (intentRouterOutcomeFailed(route.action, result)) {
@@ -2086,6 +2104,7 @@ const ACTIONS = {
   async stop() {
     const b = ensureBot();
     b._stopGeneration = (b._stopGeneration || 0) + 1;
+    b._actionEpoch = (b._actionEpoch || 0) + 1;
     b.interrupt_code = true;
     b.pathfinder.setGoal(null);
     try { b.stopDigging(); } catch {}
@@ -3428,10 +3447,11 @@ const ACTIONS = {
       .reduce((sum, i) => sum + i.count, 0);
     const fishBefore = countFish();
     const stopAt = Date.now() + duration * 1000;
+    const epoch = b._actionEpoch;
 
     // 5. Fish loop — stop when edible fish appear in inventory
     let consecutiveFails = 0;
-    while (Date.now() < stopAt && !b.interrupt_code) {
+    while (Date.now() < stopAt && isActionEpochCurrent(epoch)) {
       try {
         await b.fish();
         consecutiveFails = 0;
@@ -3454,6 +3474,7 @@ const ACTIONS = {
 
   async farm_food({ radius = 4 }) {
     const b = ensureBot();
+    const epoch = b._actionEpoch;
     let harvested = 0;
     let tilled = 0;
 
@@ -3469,7 +3490,7 @@ const ACTIONS = {
       count: 20,
     });
     for (const pos of cropBlocks) {
-      if (b.interrupt_code) break;
+      if (!isActionEpochCurrent(epoch)) break;
       const blk = b.blockAt(pos);
       if (!blk) continue;
       const age = blk.getProperties()?.age;
@@ -3493,7 +3514,7 @@ const ACTIONS = {
         count: 20,
       });
       for (const pos of farmlandBlocks) {
-        if (b.interrupt_code || planted >= 20) break;
+        if (!isActionEpochCurrent(epoch) || planted >= 20) break;
         const above = b.blockAt(pos.offset(0, 1, 0));
         if (!above || above.name !== 'air') continue;
         try {
@@ -3516,7 +3537,7 @@ const ACTIONS = {
         count: 9,
       });
       for (const pos of dirtBlocks) {
-        if (b.interrupt_code || tilled >= 9) break;
+        if (!isActionEpochCurrent(epoch) || tilled >= 9) break;
         const blk = b.blockAt(pos);
         if (!blk) continue;
         const above = b.blockAt(pos.offset(0, 1, 0));
@@ -3584,9 +3605,10 @@ const ACTIONS = {
     const fy = furnaceBlock.position.y;
     const fz = furnaceBlock.position.z;
     const deadline = Date.now() + Math.min(count * 12000, 60000);
+    const epoch = b._actionEpoch;
     let takeResult;
     while (Date.now() < deadline) {
-      if (b.interrupt_code) {
+      if (!isActionEpochCurrent(epoch)) {
         return { result: `Cooking ${rawFood} interrupted.` };
       }
       await new Promise((r) => setTimeout(r, 1500));
@@ -3963,6 +3985,10 @@ const httpServer = http.createServer(async (req, res) => {
           return respond(res, 409, { ok: false, error: `Task "${currentTask.action}" is already running (${Math.round((Date.now() - currentTask.started) / 1000)}s). POST /task/cancel first.`, state: briefState() });
         }
         const taskId = `${actionName}_${Date.now()}`;
+        if (actionName !== 'stop' && bot) {
+          bot._actionEpoch = (bot._actionEpoch || 0) + 1;
+          bot.interrupt_code = false;
+        }
         currentTask = {
           id: taskId,
           action: actionName,

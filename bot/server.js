@@ -423,6 +423,7 @@ function sweepStaleIntents() {
         const STALE_INTERRUPTIBLE = new Set([
           'collect', 'bg_collect', 'goto', 'goto_near', 'follow',
           'fight', 'sprint_attack', 'pickup', 'flee',
+          'fish_for_food', 'farm_food', 'cook_food', 'build_shelter_for_night',
         ]);
         if (STALE_INTERRUPTIBLE.has(currentTask.action)) {
           log(`[stale] interrupting currentTask=${currentTask.action} for stale intent of ${player}`);
@@ -2047,9 +2048,14 @@ const ACTIONS = {
   async stop() {
     const b = ensureBot();
     b._stopGeneration = (b._stopGeneration || 0) + 1;
+    b.interrupt_code = true;
     b.pathfinder.setGoal(null);
     try { b.stopDigging(); } catch {}
     if (b.pvp) try { b.pvp.stop(); } catch {}
+    if (currentTask && currentTask.status === 'running') {
+      currentTask.status = 'cancelled';
+      currentTask.error = 'Cancelled via /action/stop';
+    }
     return { result: 'Stopped all actions.' };
   },
 
@@ -3902,6 +3908,7 @@ const httpServer = http.createServer(async (req, res) => {
       if (path === '/task/cancel') {
         const b = ensureBot();
         b._stopGeneration = (b._stopGeneration || 0) + 1;
+        b.interrupt_code = true;
         b.pathfinder.setGoal(null);
         try { b.stopDigging(); } catch {}
         if (currentTask && currentTask.status === 'running') {
@@ -3973,6 +3980,7 @@ const httpServer = http.createServer(async (req, res) => {
       }
 
       markOldestVoiceDispatchedIfPending();
+      if (actionName !== 'stop' && bot) bot.interrupt_code = false;
       const result = await actionFn(body);
       actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
       if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();

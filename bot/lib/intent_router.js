@@ -397,7 +397,7 @@ const INTENTS = [
       /\bplant (some |a )?(seeds?|crops?|food)\b/i,
     ],
     async handler(bot, ctx) {
-      return { action: 'farm_food', body: { radius: 5 } };
+      return { action: 'farm_food', body: { radius: 4 } };
     },
   },
 

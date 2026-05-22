@@ -245,7 +245,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
 
       if (stuckPos && pos.distanceTo(stuckPos) < 0.5) {
         stuckCount++;
-        if (stuckCount >= 3) {
+        if (stuckCount >= 3 && !shouldDeferSurvivalFlee()) {
           logSurv(`stuck (${stuckCount}x same pos ${formatStuckPos(pos)}) — jiggling`);
           try {
             // Try jumping + moving forward

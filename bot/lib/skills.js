@@ -114,9 +114,14 @@ const REPLACEABLE_BLOCKS = new Set([
 // turning every aerial-cell block into an instant /setblock chat command
 // instead of a physical pathfind+placeBlock that crashes on no-adjacent.
 async function _cachedSetblockAuth(bot) {
-  if (bot._hc_setblock_auth !== undefined) return bot._hc_setblock_auth;
-  bot._hc_setblock_auth = await detectSetblockAuth(bot, 0, 0, 0);
-  return bot._hc_setblock_auth;
+  if (bot._hc_setblock_auth === true || _setblockAuthByBot.get(bot) === true) {
+    bot._hc_setblock_auth = true;
+    return true;
+  }
+  if (!bot.entity) return false; // chunks/body not ready — retry on next placeOne
+  const ok = await detectSetblockAuth(bot);
+  if (ok) bot._hc_setblock_auth = true;
+  return ok;
 }
 
 // Core place primitive. Returns true on success.

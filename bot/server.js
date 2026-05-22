@@ -83,6 +83,12 @@ const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '0'
   ? false
   : (process.env.HERMES_SHADOW_NLP_ROUTER === '1' || NLP_PRIMARY);
 
+// Cycle-M survival verbs: regex patterns are authoritative when NLP defers
+// (clarify/oov/no_dispatcher) but the corpus already lists these intents.
+const SURVIVAL_REGEX_FALLBACK = new Set([
+  'fish_for_food', 'farm_food', 'cook_food', 'return_home', 'feed_player', 'build_shelter_for_night',
+]);
+
 async function tryRoute(bot, body, sender) {
   if (!NLP_PRIMARY) return tryRouteRegex(bot, body, sender);
   // Safety primitive: stop/cancel must never depend on NLP classification.
@@ -93,6 +99,13 @@ async function tryRoute(bot, body, sender) {
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
   if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
+    const regex = await tryRouteRegex(bot, body, sender);
+    if (regex.matched && SURVIVAL_REGEX_FALLBACK.has(regex.intent_name)) {
+      regex._fallback_from_nlp_zone = nlp.nlp_zone;
+      regex._fallback_from_nlp_score = nlp.nlp_score;
+      regex.skill_id = recordLastSkill(bot, regex.intent_name, regex.action, regex.body, body);
+      return regex;
+    }
     return nlp;
   }
   const regex = await tryRouteRegex(bot, body, sender);
@@ -396,8 +409,17 @@ function sweepStaleIntents() {
     // cancelled task → emits an acknowledgement chat ("oh you walked off,
     // pausing — let me know when you're back").
     try {
-      if (currentTask && currentTask.status === 'running'
-          && currentTask.started && currentTask.started > entry.time - 5000) {
+      const otherPlayersPending = commandQueue.some(
+        (c) => c.status === 'pending' && c.from && c.from !== player,
+      );
+      const samePlayerOpen = commandQueue.filter(
+        (c) => (c.status === 'pending' || c.status === 'stale') && c.from === player,
+      );
+      const taskLikelyForEntry = currentTask && currentTask.status === 'running'
+          && currentTask.started && currentTask.started >= entry.time
+          && !otherPlayersPending
+          && samePlayerOpen.length === 1;
+      if (taskLikelyForEntry) {
         const STALE_INTERRUPTIBLE = new Set([
           'collect', 'bg_collect', 'goto', 'goto_near', 'follow',
           'fight', 'sprint_attack', 'pickup', 'flee',
@@ -3511,15 +3533,34 @@ const ACTIONS = {
     } catch (err) {
       return { result: err.message || 'Could not start smelting.' };
     }
-    // Wait for smelting
-    await new Promise((r) => setTimeout(r, Math.min(count * 10000, 40000)));
+    const fx = furnaceBlock.position.x;
+    const fy = furnaceBlock.position.y;
+    const fz = furnaceBlock.position.z;
+    const deadline = Date.now() + Math.min(count * 12000, 60000);
     let takeResult;
-    try {
-      takeResult = await ACTIONS.furnace_take({
-        x: furnaceBlock.position.x, y: furnaceBlock.position.y, z: furnaceBlock.position.z,
-      });
-    } catch (err) {
-      return { result: `Couldn't cook ${rawFood}: ${err.message || 'lost access to furnace.'}` };
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      let check;
+      try {
+        check = await ACTIONS.furnace_check({ x: fx, y: fy, z: fz });
+      } catch {
+        continue;
+      }
+      if (check.ready) {
+        try {
+          takeResult = await ACTIONS.furnace_take({ x: fx, y: fy, z: fz });
+        } catch (err) {
+          return { result: `Couldn't cook ${rawFood}: ${err.message || 'lost access to furnace.'}` };
+        }
+        break;
+      }
+    }
+    if (!takeResult) {
+      try {
+        takeResult = await ACTIONS.furnace_take({ x: fx, y: fy, z: fz });
+      } catch (err) {
+        return { result: `Couldn't cook ${rawFood}: ${err.message || 'lost access to furnace.'}` };
+      }
     }
     const cooked = takeResult?.result || '';
     if (!cooked || /no output|could not|couldn't/i.test(cooked)) {

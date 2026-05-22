@@ -13,6 +13,8 @@ One agent can feel like a companion.
 Many agents can make a world feel alive.
 ```
 
+> Built for my kids to play Minecraft with AI companions on our LAN world — then expanded into a small-civilization sandbox once the architecture held up. The hackathon framing is real, the family use case is the reason it exists.
+
 HermesCraft lets you play Minecraft with Hermes agents as actual in-world players.
 
 A Hermes agent can join your world, chat with you in Minecraft, follow you, gather resources, build, fight, remember what happened, and adapt over time. The same architecture also scales to multi-agent worlds, where many Hermes agents share the same server, privately message each other, and gradually become characters in the world.
@@ -46,6 +48,8 @@ That same stack powers:
 - one companion in your personal world
 - a small cast of world characters
 - larger multi-agent simulations
+
+See [`docs/architecture.md`](docs/architecture.md) for a deeper walkthrough of how a Hermes brain drives a Mineflayer body through the `mc` CLI, including perception fairness and the multi-agent routing layer.
 
 ## Why this matters
 

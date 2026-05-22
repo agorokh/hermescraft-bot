@@ -17,7 +17,7 @@
       ]
     },
     {
-      "trigger": { "kind": "player_chat", "regex": "\\b(found it|i see it|fire|smoke|here it is)\\b" },
+      "trigger": { "kind": "player_pos_in_box", "player": "@last_chatter", "box": "quest_anchor", "radius": 6 },
       "actions": [
         { "kind": "chat", "text": "you got it!! here's your prize 🍎" },
         { "kind": "give_to_player", "player": "@last_chatter", "item": "golden_apple", "count": 1 }

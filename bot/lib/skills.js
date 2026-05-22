@@ -8,8 +8,9 @@
 //   2. Skills loop INTERNALLY until done or interrupted. The LLM emits ONE
 //      tool call ("build_tower"); we emit N Mineflayer calls. This is the
 //      bandwidth fix for the chat-promise-without-tool-call failure mode.
-//   3. Cancel is via `bot.interrupt_code` boolean polled at 500ms intervals
-//      (Mindcraft pattern). Set it from /action/stop.
+//   3. Cancel is via `bot._stopGeneration` bumped from /action/stop (and
+//      /task/cancel). Each long skill captures the generation at start and
+//      polls — a new stop request does not get cleared by a later skill.
 //   4. Failures don't retry indefinitely — return a descriptive English
 //      sentence so the LLM can replan. "Couldn't reach -180 65 70 — pathfinder
 //      blocked. Try a closer coord." beats { ok: false, code: "ETIMEDOUT" }.
@@ -24,30 +25,27 @@
 import pathfinderPkg from 'mineflayer-pathfinder';
 const { goals } = pathfinderPkg;
 import { Vec3 } from 'vec3';
+import { readFile } from 'fs/promises';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
+
+// Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
+const SETBLOCK_CHAT_INTERVAL_MS = 150;
+
+function captureStopGen(bot) {
+  return bot._stopGeneration || 0;
+}
+
+function skillWasStopped(bot, stopGen) {
+  return (bot._stopGeneration || 0) !== stopGen;
+}
 
 // ── helpers ──────────────────────────────────────────────────────────
-
-function findPlayerEntity(bot, name) {
-  // Mindcraft pattern: bot.players is the server roster (populated on
-  // playerJoined); bot.players[name].entity is the live entity if the
-  // player is loaded in our view. Case-insensitive name match per
-  // Floodgate's leading-dot Bedrock-prefix convention.
-  if (!name) return null;
-  const lname = name.toLowerCase();
-  for (const [n, p] of Object.entries(bot.players || {})) {
-    if (n === bot.username) continue;
-    if (n.toLowerCase() === lname || n.toLowerCase().replace(/^\./, '') === lname) {
-      if (p.entity) return p.entity;
-    }
-  }
-  // Fallback: scan bot.entities for visible player entities.
-  return Object.values(bot.entities || {}).find((e) => {
-    if (e === bot.entity) return false;
-    if (e.type !== 'player') return false;
-    const en = (e.username || '').toLowerCase();
-    return en === lname || en.replace(/^\./, '') === lname;
-  }) || null;
-}
 
 function findInventoryItem(bot, itemName) {
   const ln = itemName.toLowerCase();
@@ -56,6 +54,24 @@ function findInventoryItem(bot, itemName) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function normalizeBlockName(name) {
+  if (!name) return '';
+  return String(name).toLowerCase().replace(/^minecraft:/, '');
+}
+
+function collectItemMatches(tossedItem, collectedEntity) {
+  const want = normalizeBlockName(tossedItem);
+  const got = normalizeBlockName(itemNameFromCollectEntity(collectedEntity));
+  if (!want || !got) return false;
+  return got === want || got.endsWith(`/${want}`) || want.endsWith(`/${got}`);
+}
+
+function blockAtMatches(bot, x, y, z, expected) {
+  const readback = bot.blockAt(new Vec3(x, y, z));
+  if (!readback) return false;
+  return normalizeBlockName(readback.name) === normalizeBlockName(expected);
 }
 
 // Pick an adjacent solid block we can place against. Mindcraft's 6-face scan.
@@ -81,6 +97,7 @@ function findBuildOffBlock(bot, x, y, z) {
 // Blocks that vanilla placement replaces silently — same set Minecraft uses.
 // If we try to place at a coord occupied by one of these, the place call
 // just works (the existing block becomes the drop).
+const LIQUID_BLOCKS = new Set(['water', 'lava']);
 const REPLACEABLE_BLOCKS = new Set([
   'air', 'cave_air', 'void_air', 'water', 'lava',
   'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
@@ -137,9 +154,11 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
       // physical path. Cache flip not done here to avoid permanent
       // downgrade if it was transient.
     }
-    // Give the chunk update a moment to round-trip before the next call.
     await sleep(40);
-    return { ok: true };
+    const placed = bot.blockAt(new Vec3(tx, ty, tz));
+    if (placed && placed.name === itemName) {
+      return { ok: true };
+    }
   }
 
   const targetPos = new Vec3(tx, ty, tz);
@@ -154,7 +173,8 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
   // If a replaceable plant is in the way, break it first so the place call
   // doesn't no-op or fail (placeBlock on tall_grass works in vanilla, but
   // Mineflayer is inconsistent across versions; explicit dig is safest).
-  if (existing && REPLACEABLE_BLOCKS.has(existing.name) && existing.name !== 'air' && existing.name !== 'cave_air' && existing.name !== 'void_air') {
+  if (existing && REPLACEABLE_BLOCKS.has(existing.name) && !LIQUID_BLOCKS.has(existing.name)
+      && existing.name !== 'air' && existing.name !== 'cave_air' && existing.name !== 'void_air') {
     try { await bot.dig(existing); } catch (e) { /* swallow */ }
     await sleep(120);
   }
@@ -201,6 +221,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
 // position via entity state, pick an adjacent open cell, and place.
 
 async function place_near_player(bot, { player, item, direction = 'side' }) {
+  const stopGen = captureStopGen(bot);
   if (!player || !item) {
     return { result: `place_near_player needs player + item` };
   }
@@ -237,7 +258,7 @@ async function place_near_player(bot, { player, item, direction = 'side' }) {
   }
 
   for (const [dx, dy, dz] of candidates) {
-    if (bot.interrupt_code) return { result: `place_near_player interrupted` };
+    if (skillWasStopped(bot, stopGen)) return { result: `place_near_player interrupted` };
     const tx = px + dx, ty = py + dy, tz = pz + dz;
     const r = await placeOne(bot, item, tx, ty, tz);
     if (r.ok) {
@@ -253,6 +274,7 @@ async function place_near_player(bot, { player, item, direction = 'side' }) {
 // confirm pickup. Returns English description.
 
 async function give_to_player(bot, { player, item, count = 1 }) {
+  const stopGen = captureStopGen(bot);
   if (!player || !item) return { result: `give_to_player needs player + item` };
   const entity = findPlayerEntity(bot, player);
   if (!entity) return { result: `Can't see ${player} nearby.` };
@@ -268,26 +290,29 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   } catch (e) {
     // Continue — toss anyway.
   }
-  if (bot.interrupt_code) return { result: `give_to_player interrupted` };
+  if (skillWasStopped(bot, stopGen)) return { result: `give_to_player interrupted` };
 
   await bot.lookAt(p);
-  try {
-    await bot.toss(stack.type, null, Math.min(count, stack.count));
-  } catch (e) {
-    return { result: `Couldn't toss ${item}: ${e.message}` };
-  }
-
-  // 3s wait for collect event (Mindcraft pattern).
+  // Register before toss so fast LAN pickups cannot fire before we listen.
   let received = false;
-  const onCollect = (collector, _collected) => {
-    if (collector && (collector.username || collector.name || '').toLowerCase() === player.toLowerCase()) {
+  const onCollect = (collector, collected) => {
+    const who = (collector?.username || collector?.name || '').toLowerCase();
+    if (who === player.toLowerCase() && collectItemMatches(item, collected)) {
       received = true;
     }
   };
   bot.on('playerCollect', onCollect);
+  try {
+    await bot.toss(stack.type, null, Math.min(count, stack.count));
+  } catch (e) {
+    bot.removeListener('playerCollect', onCollect);
+    return { result: `Couldn't toss ${item}: ${e.message}` };
+  }
+
+  // 3s wait for collect event (Mindcraft pattern).
   const start = Date.now();
   while (Date.now() - start < 3000 && !received) {
-    if (bot.interrupt_code) break;
+    if (skillWasStopped(bot, stopGen)) break;
     await sleep(200);
   }
   bot.removeListener('playerCollect', onCollect);
@@ -321,6 +346,7 @@ async function give_to_player(bot, { player, item, count = 1 }) {
 // placeBlock when the ref is exactly below feet.
 
 async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }) {
+  const stopGen = captureStopGen(bot);
   if (x == null || y == null || z == null) return { result: `build_tower needs x, y, z` };
   height = Math.max(1, Math.min(20, Math.floor(height)));
 
@@ -334,7 +360,7 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
     const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000));
     await Promise.race([bot.pathfinder.goto(goal), timeout]);
   } catch (e) { /* continue — close-enough is fine */ }
-  if (bot.interrupt_code) return { result: `build_tower interrupted` };
+  if (skillWasStopped(bot, stopGen)) return { result: `build_tower interrupted` };
 
   // Verify we have material.
   const matItem = findInventoryItem(bot, material);
@@ -345,12 +371,12 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
 
   let placed = 0;
   for (let i = 0; i < height; i++) {
-    if (bot.interrupt_code) break;
+    if (skillWasStopped(bot, stopGen)) break;
 
     // Find the block directly below feet — that's our reference for
     // placing the new block at feet level.
     const feetY = Math.floor(bot.entity.position.y);
-    const refPos = new Vec3(Math.floor(bot.entity.position.x), feetY - 1, Math.floor(bot.entity.position.z));
+    const refPos = new Vec3(baseX, feetY - 1, baseZ);
     const refBlock = bot.blockAt(refPos);
     if (!refBlock || refBlock.boundingBox !== 'block') {
       // We're floating — can't place. Bail.
@@ -402,6 +428,7 @@ async function build_tower(bot, { x, y, z, height = 5, material = 'oak_planks' }
 // is 6 blocks (vanilla torch effective light-suppression range is ~7).
 
 async function light_area(bot, { cx, cy, cz, radius = 6 }) {
+  const stopGen = captureStopGen(bot);
   if (cx == null || cy == null || cz == null) return { result: `light_area needs cx, cy, cz` };
   radius = Math.max(2, Math.min(16, Math.floor(radius)));
   const stride = 6;
@@ -412,11 +439,19 @@ async function light_area(bot, { cx, cy, cz, radius = 6 }) {
   let placed = 0;
   for (let tx = startX; tx <= endX; tx += stride) {
     for (let tz = startZ; tz <= endZ; tz += stride) {
-      if (bot.interrupt_code) break;
-      const r = await placeOne(bot, 'torch', tx, Math.floor(cy), tz);
+      if (skillWasStopped(bot, stopGen)) break;
+      let ty = Math.floor(cy);
+      for (let y = Math.min(319, ty + 4); y >= Math.max(-64, ty - 4); y--) {
+        const n = bot.blockAt(new Vec3(tx, y, tz))?.name || 'air';
+        if (n !== 'air' && n !== 'cave_air' && n !== 'void_air') {
+          ty = y + 1;
+          break;
+        }
+      }
+      const r = await placeOne(bot, 'torch', tx, ty, tz);
       if (r.ok) placed++;
     }
-    if (bot.interrupt_code) break;
+    if (skillWasStopped(bot, stopGen)) break;
   }
   return {
     result: placed > 0
@@ -449,14 +484,6 @@ async function follow_player_v2(bot, { player, distance = 3 }) {
 // we curate community schematics (mineflayer-schem is installed and ready
 // for that swap).
 
-import { readFile } from 'fs/promises';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
-
 let _schem_index_cache = null;
 async function loadSchematicIndex() {
   if (_schem_index_cache) return _schem_index_cache;
@@ -476,6 +503,9 @@ async function loadSchematic(name) {
   return { entry, data: JSON.parse(raw) };
 }
 
+// Per-bot cache: probe once per connection, not on every schematic build.
+const _setblockAuthByBot = new WeakMap();
+
 // Detect whether the bot has op-level permission for /setblock.  Council
 // review (Mistral, 2026-05-16) flagged a critical bug in the
 // listen-for-server-message-only version: a non-op bot on a server with
@@ -488,7 +518,8 @@ async function loadSchematic(name) {
 // the block matches the sentinel, /setblock works; otherwise fall back
 // to physical placement.  Clamps Y to <= 319 (vanilla 1.21 build limit)
 // to avoid the probe firing above world height.
-async function detectSetblockAuth(bot, _x, _y, _z) {
+async function detectSetblockAuth(bot) {
+  if (_setblockAuthByBot.get(bot) === true) return true;
   // Probe at the bot's current position +1Y (a cell guaranteed to be in a
   // loaded chunk).  Use a sentinel block we can read back unambiguously
   // and that's cheap to roll back: white_wool (visible distinct, every
@@ -498,31 +529,45 @@ async function detectSetblockAuth(bot, _x, _y, _z) {
   if (!myPos) return false; // no bot body, no point trying /setblock
   const px = Math.floor(myPos.x);
   const pz = Math.floor(myPos.z);
-  let py = Math.floor(myPos.y) + 3; // overhead so we don't suffocate
-  if (py > 319) py = 319; // vanilla 1.21 build limit
-  if (py < -64) py = -64; // floor for completeness
+  // Probe only in air so restore never wipes block state / block entities.
+  const airNames = new Set(['air', 'cave_air', 'void_air']);
+  let probeX = px, py = null, probeZ = pz;
+  const baseY = Math.floor(myPos.y);
+  const offsets = [];
+  for (let dx = -2; dx <= 2; dx++) {
+    for (let dz = -2; dz <= 2; dz++) offsets.push([dx, dz]);
+  }
+  outer:
+  for (let y = Math.min(319, baseY + 12); y >= Math.max(-64, baseY - 2); y--) {
+    for (const [dx, dz] of offsets) {
+      const n = bot.blockAt(new Vec3(px + dx, y, pz + dz))?.name || 'air';
+      if (airNames.has(n)) {
+        probeX = px + dx;
+        py = y;
+        probeZ = pz + dz;
+        break outer;
+      }
+    }
+  }
+  if (py == null) return false;
 
-  // Capture what's currently there so we restore it after probing.
-  const before = bot.blockAt(new Vec3(px, py, pz));
-  const beforeName = before?.name || 'air';
-
-  try { bot.chat(`/setblock ${px} ${py} ${pz} ${sentinel}`); } catch (e) {}
+  try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
   await sleep(250); // wait for the chunk update to round-trip
 
-  const after = bot.blockAt(new Vec3(px, py, pz));
+  const after = bot.blockAt(new Vec3(probeX, py, probeZ));
   const afterName = after?.name || 'air';
   const ok = afterName === sentinel;
 
-  // Restore the previous block so the probe is invisible to the player.
-  // Best-effort — if op was lost between probe and restore, we leave the
-  // sentinel and report `false` honestly.
+  // Restore air — probe cell was empty before we touched it.
   if (ok) {
-    try { bot.chat(`/setblock ${px} ${py} ${pz} ${beforeName}`); } catch (e) {}
+    try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} air`); } catch (e) {}
+    _setblockAuthByBot.set(bot, true);
   }
   return ok;
 }
 
 async function build_schematic(bot, { name, x, y, z }) {
+  const stopGen = captureStopGen(bot);
   if (!name) return { result: `build_schematic needs a schematic name` };
   if (x == null || y == null || z == null) return { result: `build_schematic needs x, y, z origin` };
 
@@ -550,37 +595,35 @@ async function build_schematic(bot, { name, x, y, z }) {
   // "Cannot read properties of undefined (reading 'type')" unhandled rejection.
   // Detect once, then route every cell through chat commands until proven
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
-  const useChatCommand = await detectSetblockAuth(bot, baseX, baseY + 200, baseZ);
-
+  const useChatCommand = await detectSetblockAuth(bot);
+  bot._schematicBuildActive = true;
+  let placed = 0;
+  let failed = 0;
+  let unverified = 0;
+  const missing = new Set();
+  try {
   // Pathfind near the origin (footprint center) only when we'll actually
   // need to be near it. /setblock works at arbitrary range from the bot.
   if (!useChatCommand) {
     try {
       const goal = new goals.GoalNear(centerX, baseY, centerZ, 3);
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000));
-      // Tail .catch(): mineflayer-pathfinder's `goto` spawns subtasks whose
-      // rejections survive Promise.race's outer await, producing the
-      // observed `Unhandled rejection: TypeError: Cannot read properties of
-      // undefined (reading 'type')` log spam during aerial / unloaded-chunk
-      // attempts. Consuming the rejection explicitly silences it.
       await Promise.race([bot.pathfinder.goto(goal), timeout]).catch(() => {});
     } catch (e) { /* continue */ }
   }
-  if (bot.interrupt_code) return { result: `build_schematic interrupted` };
+  if (skillWasStopped(bot, stopGen)) return { result: `build_schematic interrupted` };
 
-  // Place each block in the manifest. Order matters for physical placement
-  // stability (foundation-up so each placement has an adjacent block to
-  // hold against); harmless but free for /setblock.
   const sorted = [...blocks].sort((a, b) => {
     if (a[1] !== b[1]) return a[1] - b[1];
-    return (a[0] + a[2]) - (b[0] + b[2]);
+    if (a[0] !== b[0]) return a[0] - b[0];
+    return a[2] - b[2];
   });
+  const solidBlocks = blocks.filter(([, , , block]) =>
+    block && block !== 'air' && block !== 'cave_air' && block !== 'void_air'
+  );
 
-  let placed = 0;
-  let failed = 0;
-  const missing = new Set();
   for (const [dx, dy, dz, block] of sorted) {
-    if (bot.interrupt_code) break;
+    if (skillWasStopped(bot, stopGen)) break;
     // Skip explicit air cells — schematic authors sometimes encode them as
     // "negative space" placeholders.  /setblock to air is a no-op crash
     // hazard; physical placeBlock just no-ops.
@@ -593,12 +636,15 @@ async function build_schematic(bot, { name, x, y, z }) {
       // the chat queue from tripping Paper's flood-protection.
       try {
         bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
-        placed++;
+        // Wait for server + world sync, then verify before counting success.
+        await sleep(SETBLOCK_CHAT_INTERVAL_MS);
+        const readback = bot.blockAt(new Vec3(tx, ty, tz));
+        if (!readback) unverified++;
+        else if (blockAtMatches(bot, tx, ty, tz, block)) placed++;
+        else failed++;
       } catch (e) {
         failed++;
       }
-      // 30ms between commands → ~60 blocks/2s, well under flood limits.
-      await sleep(30);
     } else {
       // Survival / non-op fallback. Requires the bot to have the block in
       // inventory AND an adjacent solid block to place against. Aerial
@@ -623,22 +669,30 @@ async function build_schematic(bot, { name, x, y, z }) {
   }
 
   const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
+  const unverifiedStr = unverified > 0 ? ` ${unverified} cells unverified (chunk unloaded).` : '';
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
-  if (placed === blocks.length) {
-    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${blocks.length} blocks placed${mode}.` };
+  const total = solidBlocks.length;
+  if (placed === total && total > 0) {
+    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${total} blocks placed${mode}.${unverifiedStr}` };
   }
   return {
-    result: `Built ${placed}/${blocks.length} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}`,
+    result: `Built ${placed}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}${unverifiedStr}`,
   };
+  } finally {
+    bot._schematicBuildActive = false;
+  }
 }
 
 // List schematics — useful for the LLM and for `mc schematics` cmd.
 async function list_schematics(bot, _body) {
   try {
     const idx = await loadSchematicIndex();
-    const names = Object.entries(idx.schematics || {}).map(
-      ([name, entry]) => `${name} (${entry.footprint?.join('x')}x${entry.height}: ${entry.summary})`
-    );
+    const names = Object.entries(idx.schematics || {}).map(([name, entry]) => {
+      const fw = entry.footprint?.[0] ?? '?';
+      const fl = entry.footprint?.[1] ?? '?';
+      const h = entry.height ?? '?';
+      return `${name} (${fw}x${fl}x${h}: ${entry.summary || ''})`;
+    });
     return { result: names.length > 0 ? names.join('; ') : 'No schematics available.' };
   } catch (e) {
     return { result: `Couldn't load schematic index: ${e.message}` };

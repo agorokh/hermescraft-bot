@@ -35,6 +35,12 @@ server/*/session.lock
 data/locations-*.json
 !data/locations.json
 
+# NLP.js trained model (generated locally by bot)
+bot/model.nlp
+
+# Cursor / editor local state
+.cursor/
+
 # Editor / screenshots
 *.swp
 *.swo

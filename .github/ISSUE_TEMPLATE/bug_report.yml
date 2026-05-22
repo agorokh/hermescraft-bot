@@ -1,0 +1,68 @@
+name: Bug report
+description: Something in HermesCraft is broken or behaves unexpectedly
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of what went wrong and what you expected instead.
+      placeholder: |
+        Steve refused to follow me after a server restart. Expected: he resumes following on `hermes follow me`.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      description: Which HermesCraft mode were you running?
+      options:
+        - Companion (single agent)
+        - Civilization (crash-survivor cast)
+        - Landfolk (5-character LAN cast)
+        - Direct per-agent launch
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Commands or sequence of in-game actions that reliably trigger the bug.
+      placeholder: |
+        1. ./start-steve.sh on LAN port 25565
+        2. In Minecraft: `hermes follow me`
+        3. Disconnect Steve via /kick
+        4. Reconnect Steve, send `hermes follow me` — no response
+    validations:
+      required: true
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft version
+      placeholder: "1.21.1 Java Edition"
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: "20.11.0"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Output from the bot server, the Hermes session, or Minecraft client. Redact paths or tokens.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I ran `npm test` in `bot/` and the suite passes
+          required: false
+        - label: I checked existing issues for duplicates
+          required: true

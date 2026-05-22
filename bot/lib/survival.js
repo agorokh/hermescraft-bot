@@ -117,6 +117,11 @@ export function startSurvivalTick(bot, log, opts = {}) {
   let stuckCount = 0;
 
   const logSurv = (msg) => log(`[survival] ${msg}`);
+  const pathfinderReserved = () => {
+    if (bot.interrupt_code) return true;
+    if (typeof opts.isReserved === 'function' && opts.isReserved()) return true;
+    return false;
+  };
 
   // ── Hunger + health loop (~1.5s) ──────────────────────────────────────────
   async function hungerHealthLoop() {
@@ -139,7 +144,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
       // Health — flee if very low
       if (opts.fleeEnabled !== false && bot.health !== undefined && bot.health <= HEALTH_FLEE_THRESHOLD) {
         const hostile = nearestHostile(bot);
-        if (hostile) {
+        if (hostile && !pathfinderReserved()) {
           logSurv(`health ${bot.health} ≤ ${HEALTH_FLEE_THRESHOLD} + hostile near — fleeing`);
           try {
             // GoalInvert(GoalFollow) — Mindcraft creeper back-pedal pattern
@@ -165,7 +170,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
 
       // Creeper special case: ALWAYS flee, never fight
       const isCrpr = (hostile.entity.name || hostile.entity.mobType || '').toLowerCase().includes('creeper');
-      if (isCrpr && hostile.dist < HOSTILE_FLEE_RADIUS) {
+      if (isCrpr && hostile.dist < HOSTILE_FLEE_RADIUS && !pathfinderReserved()) {
         logSurv(`creeper at ${hostile.dist.toFixed(1)}m — fleeing (never fight creepers)`);
         try {
           const awayGoal = new goals.GoalInvert(

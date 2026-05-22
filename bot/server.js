@@ -58,14 +58,108 @@ import {
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
+import { actionOutcomeFailed } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
-import { tryRoute, ackFor } from './lib/intent_router.js';
+import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
+// NLP.js router (council-led migration, 3 rounds of Gemini+Mistral review).
+// Promoted to PRIMARY 2026-05-18 after the 92-utterance correctness
+// benchmark showed NLP 100% vs regex 69.6%, with all council-flagged risks
+// (narrative poisoning, panic bleed, clarification deadzone, anaphora)
+// addressed and 106/106 tests passing.
+//
+// Architecture:
+//   - HERMES_NLP_PRIMARY=1 (default): NLP is primary; regex is shadow + fallback
+//   - HERMES_SHADOW_NLP_ROUTER=1: also log AGREE/DIFFER for audit
+//   - Regex `stop` keeps its safety hot-path inside intent_router.js
+//
+// Fallback policy: if NLP throws (corpus malformed / training fails),
+// the call returns matched=false with error set. To avoid silent drops,
+// we also try regex as a last-resort fallback when NLP returns
+// matched=false. This is belt-and-suspenders for the kids-tonight rollout.
+import { tryRoute as tryRouteNlp, markLastSkillFailed, recordLastSkill } from './lib/intent_router_nlp.js';
+const NLP_PRIMARY = process.env.HERMES_NLP_PRIMARY !== '0';  // default ON
+// When NLP is primary, shadow the regex router by default for AGREE/DIFFER telemetry.
+const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '0'
+  ? false
+  : (process.env.HERMES_SHADOW_NLP_ROUTER === '1' || NLP_PRIMARY);
+
+async function tryRoute(bot, body, sender) {
+  if (!NLP_PRIMARY) return tryRouteRegex(bot, body, sender);
+  // Safety primitive: stop/cancel must never depend on NLP classification.
+  const stop = await tryStopRoute(bot, body, sender);
+  if (stop.matched) return stop;
+  // Primary path: NLP. Regex fallback applies only when NLP defers for
+  // dispatcher_null / process_error — not for clarify/oov/no_dispatcher.
+  const nlp = await tryRouteNlp(bot, body, sender);
+  if (nlp.matched) return nlp;
+  if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
+    return nlp;
+  }
+  const regex = await tryRouteRegex(bot, body, sender);
+  if (regex.matched) {
+    // Annotate so the log line shows it was a fallback decision
+    regex._fallback_from_nlp_zone = nlp.nlp_zone;
+    regex._fallback_from_nlp_score = nlp.nlp_score;
+    // Keep anaphora/repeat buffer in sync when regex handles the utterance.
+    regex.skill_id = recordLastSkill(bot, regex.intent_name, regex.action, regex.body, body);
+    return regex;
+  }
+  return nlp;  // propagate the NLP-side metadata
+}
+
+// Forward NLP classification hints when the router defers to the brain.
+function nlpHintsForQueue(route) {
+  if (!route?.nlp_intent || route.matched) return {};
+  if (!['no_dispatcher', 'clarify', 'dispatcher_null'].includes(route.nlp_zone)) return {};
+  return {
+    nlp_intent: route.nlp_intent,
+    nlp_score: route.nlp_score,
+    nlp_zone: route.nlp_zone,
+  };
+}
+
+// Intent routers emit chat as { text }; ACTIONS.chat expects { message }.
+function actionBodyForRoute(route) {
+  const body = route.body || {};
+  if (route.action !== 'chat') return body;
+  const message = body.message ?? body.text;
+  if (message == null) return body;
+  // Router replies are always in-game chat — never auto-steal into voice.
+  return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true };
+}
+
+async function shadowRoute(bot, body, sender, primaryResult) {
+  if (!SHADOW_NLP) return;
+  try {
+    // When NLP is primary, log the OTHER router (regex) as shadow.
+    // When regex is primary, log NLP as shadow. Either way: AGREE/DIFFER
+    // captures "would both routers have picked the same skill?".
+    const other = NLP_PRIMARY
+      ? await tryRouteRegex(bot, body, sender, { dryRun: true })
+      : await tryRouteNlp(bot, body, sender, { dryRun: true });
+    const p_act = primaryResult?.matched ? primaryResult.action : 'none';
+    const o_act = other?.matched ? other.action : 'none';
+    const score = other?.nlp_score != null ? other.nlp_score.toFixed(2)
+      : primaryResult?.nlp_score != null ? primaryResult.nlp_score.toFixed(2) : '-';
+    const agree = p_act === o_act ? 'AGREE' : 'DIFFER';
+    const primaryLabel = NLP_PRIMARY ? 'nlp' : 'regex';
+    const shadowLabel = NLP_PRIMARY ? 'regex' : 'nlp';
+    log(`[NLPshadow] ${agree} ${primaryLabel}=${p_act} ${shadowLabel}=${o_act} intent=${primaryResult?.intent_name || other?.nlp_intent || '-'} score=${score} body=${JSON.stringify(body.slice(0, 60))}`);
+    // Mistral's audit-log ask: separate stream for clarify-zone events.
+    if (primaryResult?.nlp_zone === 'clarify') {
+      log(`[NLPaudit] CLARIFY score=${score} intent=${primaryResult.nlp_intent || '-'} body=${JSON.stringify(body.slice(0, 80))}`);
+    }
+  } catch (e) {
+    log(`[NLPshadow] error: ${e.message}`);
+  }
+}
 import { installQuestEngine } from './lib/quests.js';
 import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
 let _quest_tear_down = null;
 let _survival_tear_down = null;
+let _quest_install_gen = 0;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
 const DATA_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'data');
@@ -167,6 +261,7 @@ function trimCommandQueue() {
     }
   }
 }
+
 // ── Auto-memory side-effect (issue #68 Patch 2) ──────────────────
 // Minimal MEMORY.md append helper for server-side stale-intent notices
 // (and future side-effect writes when the brain is unreliable under load).
@@ -332,6 +427,17 @@ const VOICE_TURN_TIMEOUT_MS = 75000;
 // to the oldest voice turn dispatched within this window.
 const VOICE_AUTOCORRELATE_MS = 60000;
 
+/** Start the voice auto-correlate window for the oldest pending voice turn. */
+function markOldestVoiceDispatchedIfPending() {
+  const oldest = commandQueue
+    .filter((c) => c.status === 'pending')
+    .sort((a, b) => a.time - b.time)[0];
+  if (oldest?.source === 'voice' && _pendingVoiceTurns.has(oldest.id)) {
+    const turn = _pendingVoiceTurns.get(oldest.id);
+    if (turn && !turn.dispatched_ts) turn.dispatched_ts = Date.now();
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Fair Play Mode — perception constraints for realistic gameplay
 // ═══════════════════════════════════════════════════════════════════
@@ -460,8 +566,10 @@ async function handleChat(username, message) {
       // place_near_player, give_to_player, etc.) and fire the matching
       // primitive WITHOUT waiting for the LLM brain. <500ms response.
       // Safe-by-design: only reversible/non-destructive actions route.
+      let route = { matched: false };
       try {
-        const route = await tryRoute(bot, routing.body, username);
+        route = await tryRoute(bot, routing.body, username);
+        shadowRoute(bot, routing.body, username, route);  // fire-and-forget; doesn't block
         if (route.matched) {
           const ack = ackFor(route.intent_name);
           if (ack) {
@@ -469,14 +577,26 @@ async function handleChat(username, message) {
           }
           log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
           if (ACTIONS[route.action]) {
+            const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
-            ACTIONS[route.action](route.body).then((result) => {
-              if (result && result.result) {
+            ACTIONS[route.action](actionBody).then((result) => {
+              if (actionOutcomeFailed(result)) {
+                if (route.skill_id != null) {
+                  try { markLastSkillFailed(bot, route.skill_id); } catch {}
+                }
+                const msg = result?.error || result?.result || 'action failed';
+                try { bot.chat(`hm, couldn't pull that off — ${String(msg).slice(0, 50)}`); } catch {}
+                return;
+              }
+              if (result && result.result && route.action !== 'chat') {
                 log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                 try { bot.chat(String(result.result).slice(0, 80)); } catch {}
               }
             }).catch((e) => {
               log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
+              if (route.skill_id != null) {
+                try { markLastSkillFailed(bot, route.skill_id); } catch {}
+              }
               try { bot.chat(`hm, couldn't pull that off — ${e.message.slice(0, 50)}`); } catch {}
             });
             // Skip the queue: the kid is taken care of by the router. The
@@ -493,7 +613,7 @@ async function handleChat(username, message) {
         // Fall through to normal queue path.
       }
 
-      commandQueue.push({
+      const queueEntry = {
         id: nextEnvelopeId(),
         time: Date.now(),
         from: username,
@@ -502,7 +622,12 @@ async function handleChat(username, message) {
         source: 'chat',
         originalMessage: message,
         status: 'pending',
-      });
+        ...nlpHintsForQueue(route),
+      };
+      commandQueue.push(queueEntry);
+      if (queueEntry.nlp_intent) {
+        log(`[Queued+NLP] ${username}: zone=${queueEntry.nlp_zone} intent=${queueEntry.nlp_intent} score=${queueEntry.nlp_score?.toFixed?.(2) ?? queueEntry.nlp_score}`);
+      }
       rememberSocialEvent({ actor: username, kind: 'heard', channel: routing.channel, command: true, message: routing.body });
       trimCommandQueue();
       log(`[Queued] ${username}: ${routing.body}`);
@@ -516,19 +641,33 @@ async function handleChat(username, message) {
           // kids almost always address with "Rosie do X" which hits this
           // branch, NOT the direct-name-colon branch. <500ms response with
           // no LLM round-trip when a keyword pattern matches.
+          let route = { matched: false };
           try {
-            const route = await tryRoute(bot, command, username);
+            route = await tryRoute(bot, command, username);
+            shadowRoute(bot, command, username, route);  // fire-and-forget
             if (route.matched && ACTIONS[route.action]) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }
-              log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
-              ACTIONS[route.action](route.body).then((result) => {
-                if (result && result.result) {
+              const actionBody = actionBodyForRoute(route);
+              log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
+              ACTIONS[route.action](actionBody).then((result) => {
+                if (actionOutcomeFailed(result)) {
+                  if (route.skill_id != null) {
+                    try { markLastSkillFailed(bot, route.skill_id); } catch {}
+                  }
+                  const msg = result?.error || result?.result || 'action failed';
+                  try { bot.chat(`hm, couldn't pull that off — ${String(msg).slice(0, 50)}`); } catch {}
+                  return;
+                }
+                if (result && result.result && route.action !== 'chat') {
                   log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
                   try { bot.chat(String(result.result).slice(0, 80)); } catch {}
                 }
               }).catch((e) => {
                 log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
+              if (route.skill_id != null) {
+                try { markLastSkillFailed(bot, route.skill_id); } catch {}
+              }
                 try { bot.chat(`hm, couldn't pull that off`); } catch {}
               });
               rememberSocialEvent({ actor: username, kind: 'heard',
@@ -541,7 +680,7 @@ async function handleChat(username, message) {
             log(`[IntentRouter via mention] error: ${e.message}`);
           }
 
-          commandQueue.push({
+          const queueEntry = {
             id: nextEnvelopeId(),
             time: Date.now(),
             from: username,
@@ -550,7 +689,12 @@ async function handleChat(username, message) {
             source: 'chat',
             originalMessage: message,
             status: 'pending',
-          });
+            ...nlpHintsForQueue(route),
+          };
+          commandQueue.push(queueEntry);
+          if (queueEntry.nlp_intent) {
+            log(`[Queued+NLP via mention] ${username}: zone=${queueEntry.nlp_zone} intent=${queueEntry.nlp_intent}`);
+          }
           rememberSocialEvent({ actor: username, kind: 'heard', channel: 'public_mention', command: true, message: command });
           trimCommandQueue();
           log(`[Queued via mention] ${username}: ${command}`);
@@ -576,6 +720,9 @@ function log(msg) {
 
 async function createBot() {
   if (bot) {
+    _quest_install_gen++;
+    try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch {}
+    try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch {}
     try { bot.quit(); } catch {}
     bot = null;
     botReady = false;
@@ -613,6 +760,7 @@ async function createBot() {
       moves.canDig = true;
       moves.allowParkour = true;
       bot.pathfinder.setMovements(moves);
+      bot._stopGeneration = 0;
 
       // Configure auto-eat
       bot.autoEat.options = {
@@ -777,8 +925,14 @@ async function createBot() {
       // Loads vendor/hermescraft/bot/quests/*.json and watches for player
       // chat, position, item-collect, timer triggers.
       try {
+        _quest_install_gen++;
+        const installGen = _quest_install_gen;
         if (_quest_tear_down) _quest_tear_down();
         installQuestEngine(bot, ACTIONS, log).then((teardown) => {
+          if (installGen !== _quest_install_gen) {
+            try { teardown(); } catch {}
+            return;
+          }
           _quest_tear_down = teardown;
         }).catch((e) => log(`quest engine install failed: ${e.message}`));
       } catch (e) {
@@ -791,7 +945,9 @@ async function createBot() {
       // disable in peaceful-mode deployments.
       try {
         if (_survival_tear_down) _survival_tear_down();
-        _survival_tear_down = startSurvivalTick(bot, log);
+        _survival_tear_down = startSurvivalTick(bot, log, {
+          isReserved: () => !!(bot.interrupt_code || (currentTask && currentTask.status === 'running')),
+        });
       } catch (e) {
         log(`survival tick install failed: ${e.message}`);
       }
@@ -892,6 +1048,9 @@ async function createBot() {
         positionHistory = []; // clear stuck detection history
         if (bot?._soundCheckInterval) { clearInterval(bot._soundCheckInterval); bot._soundCheckInterval = null; }
         if (_survival_tear_down) { _survival_tear_down(); _survival_tear_down = null; }
+        try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch (e) {}
+        _quest_install_gen++;
+        try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch (e) {}
         
         // In hardcore mode, death = permanent. Don't reconnect.
         if (hardcoreDead) {
@@ -1749,7 +1908,8 @@ const ACTIONS = {
     const data = state.data || state;
     const pos = data.position || {};
     const lines = [];
-    lines.push(`## you are at ${fmt(pos.x)},${fmt(pos.y)},${fmt(pos.z)} in ${data.biome || 'unknown'}; time=${data.time || '?'} (${data.timePhase || '?'}); hp=${data.health || '?'}/20 food=${data.food || '?'}/20; weather=${data.weather || 'clear'}`);
+    const weather = data.isRaining ? 'rain' : (data.weather || 'clear');
+    lines.push(`## you are at ${fmt(pos.x)},${fmt(pos.y)},${fmt(pos.z)} in ${data.biome || 'unknown'}; time=${data.time || '?'} (${data.timePhase || '?'}); hp=${data.health || '?'}/20 food=${data.food || '?'}/20; weather=${weather}`);
     // Inventory
     const inv = (data.inventory || []).slice(0, 12);
     if (inv.length === 0) {
@@ -1770,12 +1930,12 @@ const ACTIONS = {
       lines.push(`## nearby blocks (r=16): ${summary || 'none notable'}`);
     }
     // Nearby entities (players + mobs)
-    const ents = (data.entities || []).slice(0, 8);
+    const ents = (data.nearbyEntities || data.entities || []).slice(0, 8);
     if (ents.length > 0) {
       lines.push('## nearby entities: ' + ents.map(e => `${e.username || e.type}@${e.distance}m`).join(', '));
     }
     // Recent chat (last 5 lines for context)
-    const chat = data.chat_log || data.recentChat || [];
+    const chat = data.unreadChat || data.chat_log || data.recentChat || [];
     if (Array.isArray(chat) && chat.length > 0) {
       lines.push('## recent chat:');
       for (const m of chat.slice(-5)) {
@@ -1864,6 +2024,7 @@ const ACTIONS = {
 
   async stop() {
     const b = ensureBot();
+    b._stopGeneration = (b._stopGeneration || 0) + 1;
     b.pathfinder.setGoal(null);
     try { b.stopDigging(); } catch {}
     if (b.pvp) try { b.pvp.stop(); } catch {}
@@ -2282,6 +2443,22 @@ const ACTIONS = {
     const fillResult = await new Promise((resolve) => {
       const cmd = `/fill ${minX} ${minY} ${minZ} ${maxX} ${maxY} ${maxZ} ${blockName}${hollow ? ' hollow' : ''}`;
       let resolved = false;
+      const norm = (n) => String(n || '').toLowerCase().replace(/^minecraft:/, '');
+      const want = norm(blockName);
+      const probePoints = [
+        [minX, minY, minZ],
+        [maxX, maxY, maxZ],
+        [Math.floor((minX + maxX) / 2), Math.floor((minY + maxY) / 2), Math.floor((minZ + maxZ) / 2)],
+      ];
+      const probeNames = () => probePoints.map(([px, py, pz]) => {
+        const blk = b.blockAt(new Vec3(px, py, pz));
+        return blk ? norm(blk.name) : '';
+      });
+      const beforeFill = probeNames();
+      const fillChangedVolume = () => {
+        const after = probeNames();
+        return probePoints.some((_, i) => beforeFill[i] !== want && after[i] === want);
+      };
       const onMsg = (jsonMsg) => {
         if (resolved) return;
         let txt = '';
@@ -2289,6 +2466,7 @@ const ACTIONS = {
         if (!txt) return;
         const m = txt.match(/Successfully filled (\d+) block/);
         if (m) {
+          if (!fillChangedVolume()) return;
           resolved = true;
           b.removeListener('message', onMsg);
           resolve({ ok: true, placed: Number(m[1]), via: 'vanilla_fill' });
@@ -2303,11 +2481,17 @@ const ACTIONS = {
       };
       b.on('message', onMsg);
       try { b.chat(cmd); } catch (e) { /* fall through */ }
-      setTimeout(() => {
+      setTimeout(async () => {
         if (!resolved) {
           resolved = true;
           b.removeListener('message', onMsg);
-          resolve({ ok: false, reason: 'timeout', via: 'vanilla_fill' });
+          // Servers with command feedback disabled succeed silently — probe blocks.
+          await sleep(300);
+          if (fillChangedVolume()) {
+            resolve({ ok: true, placed: total, via: 'vanilla_fill_silent' });
+          } else {
+            resolve({ ok: false, reason: 'timeout', via: 'vanilla_fill' });
+          }
         }
       }, 4000);
     });
@@ -2379,7 +2563,7 @@ const ACTIONS = {
   },
 
   // ── Utility ──────────────────────────────────────
-  async chat({ message, in_reply_to }) {
+  async chat({ message, in_reply_to, skip_voice_autocorrelate }) {
     // Voice-source routing (issue #54): if this reply addresses a pending
     // voice turn — either explicitly via in_reply_to, or auto-correlated to
     // the oldest dispatched voice turn within VOICE_AUTOCORRELATE_MS — route
@@ -2399,11 +2583,15 @@ const ACTIONS = {
     //   (C) in_reply_to absent → genuinely ambiguous. Try auto-correlate; if
     //       no voice turn pending, fall through to b.chat() (this is a real
     //       in-game chat reply, not a misrouted voice reply).
-    const has_irt = in_reply_to != null;  // loose: catches both null + undefined
+    let replyTo = in_reply_to;
+    if (replyTo != null && typeof replyTo === 'string' && /^\d+$/.test(replyTo)) {
+      replyTo = Number(replyTo);
+    }
+    const has_irt = replyTo != null;  // loose: catches both null + undefined
     let voiceTurn = null;
-    if (has_irt && _pendingVoiceTurns.has(in_reply_to)) {
-      voiceTurn = _pendingVoiceTurns.get(in_reply_to);  // case A
-    } else if (!has_irt && !String(message).trimStart().startsWith('/')) {
+    if (has_irt && _pendingVoiceTurns.has(replyTo)) {
+      voiceTurn = _pendingVoiceTurns.get(replyTo);  // case A
+    } else if (!skip_voice_autocorrelate && !has_irt && !String(message).trimStart().startsWith('/')) {
       // case C: auto-correlate by GLOBAL FIFO across the whole commandQueue.
       // Slash-prefixed messages are in-game/Mineflayer commands (e.g.
       // apply_household_rules_live.sh gamerules) — never steal them into
@@ -2441,12 +2629,23 @@ const ACTIONS = {
       return { result: `Spoke to ${voiceTurn.kid} via voice (id=${voiceTurn.id})` };
     }
     if (has_irt) {
-      // case B: brain explicitly intended a voice turn but routing state is
-      // gone. Fail closed — do NOT broadcast to in-game chat. The brain can
-      // see the rejection and decide whether to retry (it shouldn't; the
-      // kid's window for that reply has passed).
-      log(`[voice✗] (id=${in_reply_to}) chat reply with stale in_reply_to — dropped fail-closed (no in-game chat fan-out)`);
-      const err = new Error(`Voice turn ${in_reply_to} no longer pending (timed out, client closed, or evicted); voice reply dropped fail-closed.`);
+      const qEntry = commandQueue.find((c) => c.id === replyTo || String(c.id) === String(replyTo));
+      if (!qEntry) {
+        log(`[voice✗] (id=${replyTo}) in_reply_to not in commandQueue (evicted or unknown) — dropped fail-closed`);
+        const err = new Error(`Command id ${replyTo} not found in queue; reply dropped fail-closed.`);
+        err.statusCode = 409;
+        throw err;
+      }
+      if (qEntry.source === 'chat' || qEntry.source == null) {
+        const b = ensureBot();
+        b.chat(message);
+        if (qEntry.status === 'pending') qEntry.status = 'completed';
+        rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
+        return { result: `Sent: ${message} (in_reply_to=${replyTo})` };
+      }
+      // case B: voice turn intended but routing state is gone — fail closed.
+      log(`[voice✗] (id=${replyTo}) chat reply with stale in_reply_to — dropped fail-closed (no in-game chat fan-out)`);
+      const err = new Error(`Voice turn ${replyTo} no longer pending (timed out, client closed, or evicted); voice reply dropped fail-closed.`);
       err.statusCode = 409;
       throw err;
     }
@@ -3527,15 +3726,7 @@ const httpServer = http.createServer(async (req, res) => {
       }
 
       if (path === '/commands') {
-        // Get pending + stale commands queued by in-game chat OR voice.
-        // Stale entries (issue #68 Patch 2) surface so the brain can
-        // acknowledge "you walked away — want me to finish?" on the kid's
-        // next turn. Brain marks them done via complete_command like any
-        // other entry once it has processed them.
         const surfaced = commandQueue.filter(c => c.status === 'pending' || c.status === 'stale');
-        // Mark any voice turns as dispatched the first time the brain reads
-        // them, so auto-correlate in ACTIONS.chat can match the next reply
-        // to the right pending voice turn.
         const now = Date.now();
         for (const entry of surfaced) {
           if (entry.source === 'voice' && _pendingVoiceTurns.has(entry.id)) {
@@ -3543,12 +3734,9 @@ const httpServer = http.createServer(async (req, res) => {
             if (!turn.dispatched_ts) turn.dispatched_ts = now;
           }
         }
-        // ── Pre-flight memory injection (issue #68 Phase C; gemini council
-        // 2026-05-20 "Passive Perception"): when a queue entry's command body
-        // matches a recall/spatial query pattern, attach memory anchors right
-        // there so the brain sees them WHEN it drains the queue. Doesn't
-        // require the brain to call `mc perceive` (Sonnet-discipline gap
-        // proven 3 cycles in a row). Anchors travel WITH the question.
+        if (url.searchParams.get('claim') === '1') {
+          markOldestVoiceDispatchedIfPending();
+        }
         try {
           const recallRe = /\b(?:where|what|when|do you remember|recall|hang out|our spot|fairy|spire|treehouse|beacon|lighthouse|build(?: did| we| last| together)|last build)\b/i;
           for (const entry of surfaced) {
@@ -3648,7 +3836,7 @@ const httpServer = http.createServer(async (req, res) => {
           log(`[voice✗] (id=${id}) brain_timeout after ${VOICE_TURN_TIMEOUT_MS}ms`);
           resolveOnce({ ok: false, error: 'brain_timeout', id });
         }, VOICE_TURN_TIMEOUT_MS);
-        _pendingVoiceTurns.set(id, { id, kid, ts, dispatched_ts: null, timer, resolve: resolveOnce });
+        _pendingVoiceTurns.set(id, { id, kid, ts, dispatched_ts: ts, timer, resolve: resolveOnce });
         // Client may give up before us (live_loop.py timeout is 90s); detect
         // and clean up so the resolver doesn't fire on a dead socket AND so
         // an orphaned turn cannot get auto-correlated to a later brain reply
@@ -3664,7 +3852,8 @@ const httpServer = http.createServer(async (req, res) => {
           if (qEntry && qEntry.status === 'pending') qEntry.status = 'client_closed';
           log(`[voice✗] (id=${id}) client closed before reply`);
         };
-        req.on('close', onClientGone);
+        // req 'close' fires after the body is consumed on successful requests;
+        // only res 'close' indicates the client socket went away early.
         res.on('close', onClientGone);
         return; // do not call respond() now; resolver writes the response
       }
@@ -3672,6 +3861,7 @@ const httpServer = http.createServer(async (req, res) => {
       // Cancel current task
       if (path === '/task/cancel') {
         const b = ensureBot();
+        b._stopGeneration = (b._stopGeneration || 0) + 1;
         b.pathfinder.setGoal(null);
         try { b.stopDigging(); } catch {}
         if (currentTask && currentTask.status === 'running') {
@@ -3693,7 +3883,18 @@ const httpServer = http.createServer(async (req, res) => {
           return respond(res, 409, { ok: false, error: `Task "${currentTask.action}" is already running (${Math.round((Date.now() - currentTask.started) / 1000)}s). POST /task/cancel first.`, state: briefState() });
         }
         const taskId = `${actionName}_${Date.now()}`;
-        currentTask = { id: taskId, action: actionName, status: 'running', started: Date.now(), result: null, error: null, params: body };
+        currentTask = {
+          id: taskId,
+          action: actionName,
+          status: 'running',
+          started: Date.now(),
+          result: null,
+          error: null,
+          params: body,
+          _invBaseline: (actionName === 'collect' || actionName === 'bg_collect') && bot
+            ? bot.inventory.items().reduce((s, i) => s + i.count, 0)
+            : undefined,
+        };
         // Fire and forget — runs in background
         actionFn(body).then(result => {
           if (currentTask && currentTask.id === taskId && currentTask.status === 'running') {
@@ -3731,6 +3932,7 @@ const httpServer = http.createServer(async (req, res) => {
         return respond(res, 400, { ok: false, error: `Unknown action "${actionName}". Available: ${available}` });
       }
 
+      markOldestVoiceDispatchedIfPending();
       const result = await actionFn(body);
       actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
       if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();
@@ -3740,7 +3942,7 @@ const httpServer = http.createServer(async (req, res) => {
     respond(res, 404, { ok: false, error: `Not found: ${req.method} ${path}` });
 
   } catch (err) {
-    const status = err.message.includes('not connected') ? 503 : 400;
+    const status = err.statusCode ?? (err.message.includes('not connected') ? 503 : 400);
     respond(res, status, { ok: false, error: err.message, state: briefState() });
   }
 });
@@ -3758,7 +3960,7 @@ const stuckTelemetry = { byAction: Object.create(null), repaths: 0, total: 0 };
 // Mining tasks block-mine in place — `collect`, `bg_collect` shouldn't trip
 // the 10s "no movement" check because actually mining IS the work. Bump the
 // threshold for these to 20s + grant ONE retry attempt before declaring stuck.
-const SLOW_TASK_STUCK_MS = 20000;
+const SLOW_TASK_STUCK_MS = 45000;
 const FAST_TASK_STUCK_MS = 10000;
 const SLOW_TASK_ACTIONS = new Set(['collect', 'bg_collect', 'pickup', 'fight', 'sprint_attack']);
 // In-memory map task_id → { repath_attempted: bool } — survives across the
@@ -3778,6 +3980,12 @@ setInterval(() => {
     if (old) {
       const dist = Math.sqrt((pos.x-old.x)**2+(pos.y-old.y)**2+(pos.z-old.z)**2);
       if (dist < 2) {
+        if (isSlow && (currentTask.action === 'collect' || currentTask.action === 'bg_collect')) {
+          if (bot.targetDigBlock) return;
+          const baseline = currentTask._invBaseline;
+          const invCount = bot.inventory.items().reduce((s, i) => s + i.count, 0);
+          if (baseline != null && invCount > baseline) return;
+        }
         // One repath attempt before declaring stuck. Many "STUCK detected"
         // events tonight were transient — a fresh GoalNear with radius+1
         // unblocks the pathfinder (1-block ledge, snow layer, etc.).
@@ -3860,7 +4068,7 @@ function _clearPendingVoiceTurns(reason) {
   for (const [id, turn] of _pendingVoiceTurns) {
     clearTimeout(turn.timer);
     try {
-      turn.resolve({ ok: false, error: reason, in_reply_to: id });
+      turn.resolve({ ok: false, error: reason, in_reply_to: id, id });
     } catch (e) { /* client already gone */ }
     _pendingVoiceTurns.delete(id);
   }

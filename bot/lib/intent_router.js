@@ -24,47 +24,19 @@
 //
 // ctx = { sender, senderEntity, message, body }
 
-// Resolve the position to build "near" — preferring the kid's player
-// entity, falling back to the bot's own position when the player roster
-// hasn't synced yet (right after /tp, view-distance edge, server lag).
-// Pre-2026-05-18, build_tower/build_schematic returned null when
-// senderEntity was null, which silently dropped tower/house/garden/
-// treehouse prompts to the brain — the live A/B run showed 4/5 build
-// intents falling through this exact path while torch (which doesn't
-// need senderEntity in the router) succeeded.
-function resolveAnchorPos(bot, ctx) {
-  if (ctx.senderEntity && ctx.senderEntity.position) return ctx.senderEntity.position;
-  const fresh = findPlayerEntity(bot, ctx.sender);
-  if (fresh && fresh.position) return fresh.position;
-  if (bot.entity && bot.entity.position) return bot.entity.position;
-  return null;
-}
+import { extractOreFromBody } from './intent_slot_extract.js';
+import { resolveSchematicName } from './schematic_resolve.js';
+import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
-function findPlayerEntity(bot, name) {
-  if (!name) return null;
-  const lname = name.toLowerCase();
-  // Prefer bot.players (server roster) over bot.entities (in-view) —
-  // works even when the player is at the edge of view distance.
-  for (const [n, p] of Object.entries(bot.players || {})) {
-    if (n === bot.username) continue;
-    if (n.toLowerCase() === lname || n.toLowerCase().replace(/^\./, '') === lname) {
-      if (p.entity) return p.entity;
-    }
-  }
-  return Object.values(bot.entities || {}).find((e) => {
-    if (e === bot.entity) return false;
-    if (e.type !== 'player') return false;
-    const en = (e.username || '').toLowerCase();
-    return en === lname || en.replace(/^\./, '') === lname;
-  }) || null;
+function extractKidName(body) {
+  const kidNameMatch = String(body).match(
+    /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
+  );
+  return kidNameMatch
+    ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
+    : null;
 }
-
-function intFromMatch(text, regex) {
-  const m = text.match(regex);
-  return m ? parseInt(m[1], 10) : null;
-}
-
-import { Vec3 } from 'vec3';
 
 // ── Pattern table ───────────────────────────────────────────────────
 
@@ -76,8 +48,29 @@ const INTENTS = [
     name: 'stop',
     patterns: [
       /^\s*(stop|wait|nevermind|never mind|cancel|halt)[\s!.,?]*$/i,
+      /^\s*stopp+\s*$/i,
       /\bstop (it|that|please|now)\b/i,
       /\bjust stop\b/i,
+      /\bstop\s+(build|building|mining|the|doing)\b/i,
+      /\bstop\s+stop\b/i,
+      /\b(stop[\s!.,?]+){2,}stop\b/i,
+      /\b(don'?t|do not)\s+(build|mine|place|move)\b/i,
+      /\bdont move\b/i,
+      /\bnevermind\s+on\b/i,
+      /\bcancel\s+the\b/i,
+      /\bwait\s+don'?t\s+place\b/i,
+      /\bi changed my mind\b/i,
+      /\bquit it\b/i,
+      /\bknock it off\b/i,
+      /\bstah+p+\b/i,
+      /\bstapp+p*\b/i,
+      /^\s*freeze(\s+rn)?[\s!.,?]*$/i,
+      /\babort\b/i,
+      /^\s*hold (on|up)[\s!.,?]*$/i,
+      /^\s*pause[\s!.,?]*$/i,
+      /\b(ugh\s+)?stop\s+pls\b/i,
+      /\bno\s+stop\b/i,
+      /\bro+sie\s+stop\b/i,
     ],
     async handler(bot, ctx) {
       return { action: 'stop', body: {} };
@@ -114,67 +107,45 @@ const INTENTS = [
   {
     name: 'emote_wave',
     patterns: [
-      /\bwave( at me)?\b/i,
-      /\bsay hi\b.*\bwith.*\b(wave|hand)\b/i,
+      /\b(wave at me|wave to me|wave hello|give me a wave)\b/i,
+      /\b(say hi|say hello).*\b(wave|hand)\b/i,
     ],
     async handler(bot, ctx) {
-      // Simple wave: swing arm 3 times
-      try { for (let i = 0; i < 3; i++) { bot.swingArm('right'); await new Promise(r=>setTimeout(r,300)); } } catch {}
+      await runEmoteWave(bot, ctx.dryRun);
       return { action: 'chat', body: { text: '👋' } };
     },
   },
   {
     name: 'emote_jump',
     patterns: [
-      /\bjump( around|for me|please|now)?\b/i,
+      /^\s*jump[\s!.,?]*$/i,
+      /\bjump (around|for me|please|now)\b/i,
       /\bdo a jump\b/i,
     ],
     async handler(bot, ctx) {
-      try {
-        for (let i = 0; i < 3; i++) {
-          bot.setControlState('jump', true);
-          await new Promise(r=>setTimeout(r,120));
-          bot.setControlState('jump', false);
-          await new Promise(r=>setTimeout(r,250));
-        }
-      } catch {}
+      await runEmoteJump(bot, ctx.dryRun);
       return { action: 'chat', body: { text: '🦘' } };
     },
   },
   {
     name: 'emote_dance',
     patterns: [
-      /\bdance( with me| for me| please| now)?\b/i,
+      /^\s*dance[\s!.,?]*$/i,
+      /\bdance (with me|for me|please|now)\b/i,
       /\bdo a dance\b/i,
     ],
     async handler(bot, ctx) {
-      // Dance = sneak+jump+spin loop for ~3s
-      try {
-        const start = Date.now();
-        let yaw = bot.entity.yaw;
-        while (Date.now() - start < 3000) {
-          yaw += Math.PI / 4;
-          try { await bot.look(yaw, 0); } catch {}
-          bot.setControlState('jump', true);
-          await new Promise(r=>setTimeout(r,180));
-          bot.setControlState('jump', false);
-          await new Promise(r=>setTimeout(r,180));
-        }
-      } catch {}
+      await runEmoteDance(bot, ctx.dryRun);
       return { action: 'chat', body: { text: '💃' } };
     },
   },
   {
     name: 'emote_sit',
     patterns: [
-      /\bsit( down| with me| next to me| here| please)?\b/i,
+      /\b(sit down|sit with me|sit next to me|sit here|please sit)\b/i,
     ],
     async handler(bot, ctx) {
-      try {
-        bot.setControlState('sneak', true);
-        // Sneak for 5s to look "sat down"
-        setTimeout(() => { try { bot.setControlState('sneak', false); } catch {} }, 5000);
-      } catch {}
+      await runEmoteSit(bot, ctx.dryRun);
       return { action: 'chat', body: { text: 'sitting :)' } };
     },
   },
@@ -194,7 +165,7 @@ const INTENTS = [
         cobblestone: 'cobblestone', sand: 'sand',
       };
       const block = blockMap[raw] || 'oak_log';
-      const countMatch = ctx.body.match(/\b(\d+)\s*(wood|logs?|dirt|stone|cobble|sand)/i);
+      const countMatch = ctx.body.match(/\b(\d+)\s*(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i);
       const count = countMatch ? parseInt(countMatch[1], 10) : 4;
       // ACTIONS.collect (synchronous via /action/collect endpoint).
       return { action: 'collect', body: { block, count: Math.min(count, 16) } };
@@ -205,7 +176,7 @@ const INTENTS = [
     patterns: [
       /\btorch\b.*\b(here|next to me|by me|right by|near me)\b/i,
       /\b(put|place|drop) a? torch\b/i,
-      /\blight (?:up )?(?:this )?(?:spot|area|here)\b/i,
+      /\blight (?:up )?(?:this )?(?:spot|here)\b/i,
     ],
     async handler(bot, ctx) {
       // Use place_near_player directly via skills module API (re-import
@@ -247,35 +218,12 @@ const INTENTS = [
     async handler(bot, ctx) {
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
-      // Map kid keywords → schematic names. Falls through if no match.
       const body = ctx.body.toLowerCase();
-      if (/\bsafe\s+house\b/i.test(body)) return null;
-      let name = null;
-      if (/\b(treehouse|tree house|tree fort|tree home)\b/.test(body)) name = 'treehouse';
-      else if (/\b(house|cottage|home|cabin)\b/.test(body)) name = 'small_house';
-      else if (/\b(well|fountain)\b/.test(body)) name = 'well';
-      else if (/\b(garden|flower bed|flower patch)\b/.test(body)) name = 'garden';
-      else if (/\b(tower|watchtower|outpost)\b/.test(body) && /\b(big|tall|fancy|battlement)\b/.test(body)) name = 'small_tower';
-      else if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(body)) name = 'campfire_spot';
-      else if (/\b(what can|show me|list)\b/.test(body)) {
-        return { action: 'list_schematics', body: {} };
-      }
+      if (/\bsafe\s+(?:house|home|spot|place)\b/i.test(body)) return null;
+      const name = resolveSchematicName(ctx.body);
+      if (name === 'list') return { action: 'list_schematics', body: {} };
       if (!name) return null;
-      // 2026-05-19 — Extract kid-given name when the prompt includes
-      // "name it X" / "call it X" / "called X" / "named the X". Auto-memory
-      // wrapper (server.js, body.kid_name) records it alongside coords so
-      // object-permanence recall finds the build by the kid's chosen label,
-      // not just the schematic id. Issue #68 Phase A failure mode (the
-      // "Aurora Spire" 20-min cycle showed the build ran but no kid_name
-      // reached MEMORY.md).
-      const kidNameMatch = ctx.body.match(
-        /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
-      );
-      const kidName = kidNameMatch
-        ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
-        : null;
-      // Origin = 2 blocks away from the anchor (kid pos if known, else
-      // bot's own pos), ground level.
+      const kidName = extractKidName(ctx.body);
       const schemBody = {
         name,
         x: Math.floor(p.x) + 2,
@@ -306,31 +254,12 @@ const INTENTS = [
       // above the surface is actually air (not torch/sapling from a prior
       // prompt). Falls back to +2x if no clear spot found.
       const baseY = Math.floor(p.y);
-      const offsets = [[2, 0], [-2, 0], [0, 2], [0, -2], [3, 0], [-3, 0]];
-      let chosen = offsets[0];
-      for (const [dx, dz] of offsets) {
-        const targetX = Math.floor(p.x) + dx;
-        const targetZ = Math.floor(p.z) + dz;
-        const at = bot.blockAt(new Vec3(targetX, baseY, targetZ));
-        if (!at || at.name === 'air' || at.name === 'short_grass' || at.name === 'tall_grass') {
-          chosen = [dx, dz];
-          break;
-        }
-      }
-      // 2026-05-19 — same kid_name extraction as build_schematic. The auto-
-      // memory wrapper (server.js) records `Built <kid_name> (<material> tower)
-      // at X,Y,Z` when kid_name is present, so object-permanence Phase C HARD
-      // recall can match by the kid's chosen label.
-      const kidNameMatch = ctx.body.match(
-        /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
-      );
-      const kidName = kidNameMatch
-        ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
-        : null;
+      const [dx, dz] = pickTowerFootOffset(bot, p);
+      const kidName = extractKidName(ctx.body);
       const towerBody = {
-        x: Math.floor(p.x) + chosen[0],
+        x: Math.floor(p.x) + dx,
         y: baseY,
-        z: Math.floor(p.z) + chosen[1],
+        z: Math.floor(p.z) + dz,
         height,
         material,
       };
@@ -342,7 +271,6 @@ const INTENTS = [
     name: 'come_here',
     patterns: [
       /\b(come|come over|come here|walk|run|head)\b.*\b(here|to me|over)\b/i,
-      /\bwhere are you\b/i,
       /\bcome to my (spot|position|place)\b/i,
     ],
     async handler(bot, ctx) {
@@ -391,11 +319,11 @@ const INTENTS = [
   {
     name: 'race_to_coords',
     patterns: [
-      /\brace\b.*\b(\-?\d+)\s+(\-?\d+)\s+(\-?\d+)\b/i,
-      /\bgo to\b.*\b(\-?\d+)\s+(\-?\d+)\s+(\-?\d+)\b/i,
+      /\brace\b.*?(-?\d+)\s+(-?\d+)\s+(-?\d+)/i,
+      /\bgo to\b.*?(-?\d+)\s+(-?\d+)\s+(-?\d+)/i,
     ],
     async handler(bot, ctx) {
-      const m = ctx.body.match(/\b(\-?\d+)\s+(\-?\d+)\s+(\-?\d+)\b/);
+      const m = ctx.body.match(/(-?\d+)\s+(-?\d+)\s+(-?\d+)/);
       if (!m) return null;
       // Stay with `goto` (15s sync timeout, foreground) — even if the
       // race target is far, the 15s of visible bot motion + the honest
@@ -411,13 +339,13 @@ const INTENTS = [
   {
     name: 'mine_iron',
     patterns: [
-      /\b(grab|get|find|mine)\b.*\b(iron|coal|diamond|copper|gold)\b/i,
-      /\b(iron|coal|diamond|copper|gold)\b.*\b(please|for me|some)\b/i,
+      /\b(grab|get|find|mine)\b.*\b(iron|coal|diamonds?|copper|gold)\b/i,
+      /\b(iron|coal|diamonds?|copper|gold)\b.*\b(please|for me|some)\b/i,
     ],
     async handler(bot, ctx) {
-      const oreMatch = ctx.body.match(/\b(iron|coal|diamond|copper|gold)\b/i);
-      if (!oreMatch) return null;
-      const ore = oreMatch[1].toLowerCase() + '_ore';
+      const oreStem = extractOreFromBody(ctx.body);
+      if (!oreStem) return null;
+      const ore = oreStem + '_ore';
       // ACTIONS.collect handles find + dig + pickup in one call.
       // (No 'bg_collect' key — that's a /task/-side endpoint name only.)
       return { action: 'collect', body: { block: ore, count: 3 } };
@@ -430,12 +358,14 @@ const INTENTS = [
   {
     name: 'cook_food',
     patterns: [
-      /\bcook\b/i,
-      /\b(roast|grill|fry|bake)\b/i,
-      /\bput .*(in|into|on) the furnace\b/i,
+      /\bcook\s+(some\s+)?(food|meat|fish|dinner|lunch|breakfast)\b/i,
+      /\b(roast|grill|fry|bake)\s+(some\s+)?(food|meat|fish)\b/i,
+      /\bput .*(in|into|on) the furnace\b.*\b(food|meat|fish)\b/i,
       /\bsmelt (some )?(food|meat|fish)\b/i,
     ],
     async handler(bot, ctx) {
+      if (/\b(iron|gold|copper|coal|diamond|ore)\b/i.test(ctx.body)
+          && !/\b(food|meat|fish)\b/i.test(ctx.body)) return null;
       return { action: 'cook_food', body: { count: 4 } };
     },
   },
@@ -511,14 +441,31 @@ const INTENTS = [
 
 // ── Public router ──────────────────────────────────────────────────
 
+// Deterministic stop/cancel hot path — must run before NLP classification.
+export async function tryStopRoute(bot, body, sender) {
+  if (!bot || !body) return { matched: false };
+  const stopIntent = INTENTS.find((i) => i.name === 'stop');
+  if (!stopIntent?.patterns.some((p) => p.test(body))) return { matched: false };
+  const senderEntity = findPlayerEntity(bot, sender);
+  const ctx = { sender, senderEntity, message: body, body };
+  const decision = await stopIntent.handler(bot, ctx);
+  if (!decision) return { matched: false };
+  return {
+    matched: true,
+    intent_name: 'stop',
+    action: decision.action,
+    body: decision.body,
+  };
+}
+
 // Returns { matched: bool, intent_name, action, body, target_chat }
 // Caller is responsible for executing ACTIONS[action](body) AND optionally
 // chatting target_chat back. If matched=false, caller falls through to the
 // normal LLM-driven command queue.
-export async function tryRoute(bot, body, sender) {
+export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
   const senderEntity = findPlayerEntity(bot, sender);
-  const ctx = { sender, senderEntity, message: body, body };
+  const ctx = { sender, senderEntity, message: body, body, dryRun: opts.dryRun };
 
   for (const intent of INTENTS) {
     if (intent.patterns.some((p) => p.test(body))) {

@@ -119,17 +119,12 @@ function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function distance(a, b) {
-  const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-
 function nearestPlayer(bot, maxRange) {
   let best = null, bestDist = maxRange + 1;
   for (const e of Object.values(bot.entities)) {
     if (e === bot.entity) continue;
     if (e.type !== 'player') continue;
-    const d = distance(bot.entity.position, e.position);
+    const d = bot.entity.position.distanceTo(e.position);
     if (d < bestDist) { best = e; bestDist = d; }
   }
   return best;
@@ -144,22 +139,29 @@ function nearestPlayer(bot, maxRange) {
 //
 // Returns a tearDown() function so callers can clean up on disconnect.
 
+function resolveBarkCharacter(name) {
+  const raw = String(name || 'rosie').trim();
+  const key = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  return BARKS[key] ? key : 'Rosie';
+}
+
 export function installBarksAndPresence(bot, opts = {}) {
-  const characterName = opts.characterName || bot._client?.username || 'Rosie';
-  const character = BARKS[characterName] ? characterName : 'Rosie';
+  const characterName = resolveBarkCharacter(opts.characterName || bot._client?.username);
+  const character = characterName;
   const table = BARKS[character];
 
-  let lastBarkAt = 0;
+  let nextIdleBarkAt = 0;
   let lastReactiveAt = 0;
   let lastGazeTarget = null;
+  let lastGazePos = null;
   let stopped = false;
 
   function shouldBark(category, cooldown) {
     if (stopped) return false;
     const now = Date.now();
     if (category === 'idle') {
-      if (now - lastBarkAt < IDLE_BARK_COOLDOWN_MS + Math.random() * IDLE_BARK_JITTER_MS) return false;
-      lastBarkAt = now;
+      if (now < nextIdleBarkAt) return false;
+      nextIdleBarkAt = now + IDLE_BARK_COOLDOWN_MS + Math.random() * IDLE_BARK_JITTER_MS;
       return true;
     } else {
       if (now - lastReactiveAt < cooldown) return false;
@@ -192,14 +194,14 @@ export function installBarksAndPresence(bot, opts = {}) {
   const gazeTimer = setInterval(() => {
     if (stopped || !bot || !bot.entity) return;
     const np = nearestPlayer(bot, PLAYER_GAZE_DISTANCE);
-    if (!np) { lastGazeTarget = null; return; }
-    // Only re-aim if target changed or we haven't looked recently
-    if (lastGazeTarget !== np.username) {
-      try {
-        // Look at player's eyes, not feet
-        bot.lookAt(np.position.offset(0, 1.6, 0));
+    if (!np) { lastGazeTarget = null; lastGazePos = null; return; }
+    const gazePos = np.position.offset(0, 1.6, 0);
+    const movedEnough = !lastGazePos || gazePos.distanceTo(lastGazePos) > 0.5;
+    if (lastGazeTarget !== np.username || movedEnough) {
+      void bot.lookAt(gazePos).then(() => {
         lastGazeTarget = np.username;
-      } catch (e) {}
+        lastGazePos = gazePos.clone();
+      }).catch(() => {});
     }
   }, 2_000);
 
@@ -212,8 +214,21 @@ export function installBarksAndPresence(bot, opts = {}) {
     if (player.username === bot.username) return;
     if (shouldBark('reactive', REACTIVE_COOLDOWN_MS)) sayBark('on_player_leave');
   };
+  const isAir = (name) => !name || /air/i.test(name);
+  const onBlockUpdate = (oldBlock, newBlock) => {
+    if (stopped || !bot?.entity) return;
+    if (!nearestPlayer(bot, PLAYER_PROXIMITY)) return;
+    const wasAir = isAir(oldBlock?.name);
+    const nowAir = isAir(newBlock?.name);
+    if (wasAir && !nowAir) {
+      if (shouldBark('reactive', REACTIVE_COOLDOWN_MS)) sayBark('on_player_block_placed');
+    } else if (!wasAir && nowAir) {
+      if (shouldBark('reactive', REACTIVE_COOLDOWN_MS)) sayBark('on_player_mined');
+    }
+  };
   bot.on('playerJoined', onPlayerJoined);
   bot.on('playerLeft', onPlayerLeft);
+  bot.on('blockUpdate', onBlockUpdate);
 
   return function tearDown() {
     stopped = true;
@@ -221,5 +236,6 @@ export function installBarksAndPresence(bot, opts = {}) {
     clearInterval(gazeTimer);
     try { bot.removeListener('playerJoined', onPlayerJoined); } catch {}
     try { bot.removeListener('playerLeft', onPlayerLeft); } catch {}
+    try { bot.removeListener('blockUpdate', onBlockUpdate); } catch {}
   };
 }

@@ -4,7 +4,13 @@
   "description": "Rosie greets a joining kid and offers to build a 3-structure village with them: a cottage, a well, a garden. Each step waits for a chat keyword so the kid can pace it.",
   "steps": [
     {
-      "trigger": { "kind": "player_chat", "regex": "lets? (start|build|do)\\s*(the\\s*)?(village|quest|story|tour)" },
+      "trigger": { "kind": "player_join" },
+      "actions": [
+        { "kind": "chat", "text": "hey!! welcome — want to build a village together? say 'lets start the village quest' when you're ready." }
+      ]
+    },
+    {
+      "trigger": { "kind": "player_chat", "regex": "let'?s? (start|build|do)\\s*(the\\s*)?(village|quest|story|tour)" },
       "actions": [
         { "kind": "chat", "text": "yes!! welcome to our little village. step 1: a cottage. stand where you want the door." },
         { "kind": "chat", "text": "(then say 'rosie cottage here' when ready)" }

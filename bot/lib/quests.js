@@ -20,9 +20,11 @@
 // X" — that's the contract. Branching narratives + LLM-authored quests
 // come in a later round.
 
-import { readFile, readdir } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { actionOutcomeFailed } from './action_outcome.js';
+import { itemNameFromCollectEntity } from './player_utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -41,14 +43,6 @@ async function loadQuestIndex() {
   }
 }
 
-async function loadQuest(name) {
-  const idx = await loadQuestIndex();
-  const entry = idx.quests?.[name];
-  if (!entry) return null;
-  const raw = await readFile(join(QUESTS_DIR, entry.file), 'utf8');
-  return { entry, ...JSON.parse(raw) };
-}
-
 async function loadAllQuests() {
   const idx = await loadQuestIndex();
   const quests = [];
@@ -61,6 +55,34 @@ async function loadAllQuests() {
   return quests;
 }
 
+function normalizeQuestItemName(item) {
+  if (item == null) return '';
+  return String(item).toLowerCase().replace(/^minecraft:/, '');
+}
+
+function questItemNamesMatch(triggerItem, eventItem) {
+  const want = normalizeQuestItemName(triggerItem);
+  const got = normalizeQuestItemName(eventItem);
+  if (!want || !got) return false;
+  return got === want || got.endsWith(`/${want}`) || want.endsWith(`/${got}`);
+}
+
+function resolvePosBox(trigger, qs) {
+  if (trigger.box === 'quest_anchor' && qs.anchor) {
+    const r = trigger.radius || 5;
+    const { x, y, z } = qs.anchor;
+    return [x - r, y - r, z - r, x + r, y + r, z + r];
+  }
+  if (!Array.isArray(trigger.box) || trigger.box.length < 6) return null;
+  return trigger.box;
+}
+
+function shouldBindQuestParticipant(trigger, event) {
+  if (!event?.player || event.kind !== 'player_chat') return false;
+  if (!trigger.player || trigger.player === '@last_chatter') return true;
+  return trigger.player === event.player;
+}
+
 function evalTrigger(trigger, ctx) {
   // ctx: { bot, event (optional), now, player_pos_cache }
   const { bot, event, now } = ctx;
@@ -71,7 +93,10 @@ function evalTrigger(trigger, ctx) {
 
     case 'player_chat': {
       if (!event || event.kind !== 'player_chat') return false;
-      if (trigger.player && event.player !== trigger.player) return false;
+      const targetPlayer = trigger.player === '@last_chatter'
+        ? ctx.last_chatter
+        : trigger.player;
+      if (targetPlayer && event.player !== targetPlayer) return false;
       try {
         const re = new RegExp(trigger.regex, trigger.flags || 'i');
         return re.test(event.message);
@@ -79,12 +104,15 @@ function evalTrigger(trigger, ctx) {
     }
 
     case 'player_pos_in_box': {
-      // Poll-driven. trigger.box = [x1, y1, z1, x2, y2, z2]
-      const targetName = trigger.player;
+      const targetName = trigger.player === '@last_chatter'
+        ? ctx.last_chatter
+        : trigger.player;
       if (!targetName) return false;
+      const box = resolvePosBox(trigger, ctx.qstate);
+      if (!box) return false;
       const p = bot.players?.[targetName]?.entity;
       if (!p) return false;
-      const [x1, y1, z1, x2, y2, z2] = trigger.box;
+      const [x1, y1, z1, x2, y2, z2] = box;
       const px = p.position.x, py = p.position.y, pz = p.position.z;
       return px >= Math.min(x1, x2) && px <= Math.max(x1, x2)
           && py >= Math.min(y1, y2) && py <= Math.max(y1, y2)
@@ -92,18 +120,15 @@ function evalTrigger(trigger, ctx) {
     }
 
     case 'player_has_item': {
-      // Best-effort: check the player roster's last-known inventory.
-      // Without a sync inventory snoop, this trigger fires when bot can
-      // see the item dropped/held by the player. For v0, fire on
-      // 'playerCollect' or 'itemDrop' events.
-      if (!event) return false;
-      if (event.kind === 'player_collected' && event.player === trigger.player
-          && event.item === trigger.item) return true;
-      return false;
+      if (!event || event.kind !== 'player_collected') return false;
+      const targetPlayer = trigger.player === '@last_chatter'
+        ? ctx.last_chatter
+        : trigger.player;
+      if (targetPlayer && event.player !== targetPlayer) return false;
+      return questItemNamesMatch(trigger.item, event.item);
     }
 
     case 'timer': {
-      // trigger.delay_ms after quest step entered.
       const qstate = ctx.qstate;
       if (!qstate || !qstate.step_entered_at) return false;
       return (now - qstate.step_entered_at) >= (trigger.delay_ms || 0);
@@ -139,7 +164,11 @@ async function executeAction(ACTIONS, bot, action, ctx) {
         }
       }
       if (!ACTIONS.build_schematic) return { error: 'no build_schematic action' };
-      return await ACTIONS.build_schematic({ name, x, y, z });
+      const result = await ACTIONS.build_schematic({ name, x, y, z });
+      if (x != null && y != null && z != null && !actionOutcomeFailed(result)) {
+        ctx.qstate.anchor = { x, y, z };
+      }
+      return result;
     }
     case 'give_to_player': {
       const player = lookupPlayer(action.player);
@@ -157,10 +186,12 @@ async function executeAction(ACTIONS, bot, action, ctx) {
           z = Math.floor(p.z) + (action.dz || 0);
         }
       }
+      if (!ACTIONS.build_tower) return { error: 'no build_tower action' };
       return await ACTIONS.build_tower({ x, y, z, height: action.height || 5, material: action.material || 'oak_planks' });
     }
     case 'place_near_player': {
       const player = lookupPlayer(action.player);
+      if (!ACTIONS.place_near_player) return { error: 'no place_near_player action' };
       return await ACTIONS.place_near_player({ player, item: action.item, direction: action.direction || 'side' });
     }
     case 'goto': {
@@ -174,11 +205,17 @@ async function executeAction(ACTIONS, bot, action, ctx) {
           z = Math.floor(p.z) + (action.dz || 0);
         }
       }
+      if (!ACTIONS.goto) return { error: 'no goto action' };
       return await ACTIONS.goto({ x, y, z });
     }
     default:
       return { error: `unknown action kind: ${kind}` };
   }
+}
+
+function questOwnerMatches(questOwner, botName) {
+  if (!questOwner || questOwner === 'both') return true;
+  return String(questOwner).toLowerCase() === String(botName).toLowerCase();
 }
 
 // ── Public installer ──────────────────────────────────────────────────
@@ -194,35 +231,66 @@ export async function installQuestEngine(bot, ACTIONS, log) {
     return () => {};
   }
 
-  // Filter quests this bot owns (by `owner` field; default = both bots).
-  const myQuests = quests.filter((q) => !q.owner || q.owner === botName);
+  const myQuests = quests.filter((q) => questOwnerMatches(q.owner, botName));
   for (const q of myQuests) {
     if (!botState.has(q.name)) {
-      botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now() });
+      botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now(), anchor: null });
+    } else if (botState.get(q.name).status === 'done') {
+      botState.set(q.name, { currentStep: 0, status: 'active', step_entered_at: Date.now(), anchor: null, last_chatter: null });
     }
   }
   log && log(`[quests] ${botName} watching ${myQuests.length} quests: ${myQuests.map((q) => q.name).join(', ')}`);
 
   async function advance(q, eventCtx) {
     const qs = botState.get(q.name);
-    if (!qs || qs.status !== 'active') return;
+    if (!qs || qs.status !== 'active' || qs._advancing) return;
     const step = q.steps[qs.currentStep];
     if (!step) {
       qs.status = 'done';
       log && log(`[quests] ${q.name} finished`);
       return;
     }
-    const ctx = { bot, event: eventCtx, now: Date.now(), qstate: qs, last_chatter: eventCtx?.player };
+    const ctx = {
+      bot,
+      event: eventCtx,
+      now: Date.now(),
+      qstate: qs,
+      last_chatter: qs.last_chatter,
+    };
     if (!evalTrigger(step.trigger, ctx)) return;
-    log && log(`[quests] ${q.name} step ${qs.currentStep} fired: ${step.trigger.kind}`);
-    for (const action of (step.actions || [])) {
-      try { await executeAction(ACTIONS, bot, action, ctx); } catch (e) { log && log(`[quests] action error: ${e.message}`); }
+
+    if (eventCtx && shouldBindQuestParticipant(step.trigger, eventCtx)) {
+      qs.last_chatter = eventCtx.player;
+      ctx.last_chatter = eventCtx.player;
     }
-    qs.currentStep++;
-    qs.step_entered_at = Date.now();
+
+    qs._advancing = true;
+    try {
+      log && log(`[quests] ${q.name} step ${qs.currentStep} fired: ${step.trigger.kind}`);
+      let stepOk = true;
+      for (const action of (step.actions || [])) {
+        try {
+          const result = await executeAction(ACTIONS, bot, action, ctx);
+          if (actionOutcomeFailed(result)) {
+            stepOk = false;
+            log && log(`[quests] action failed: ${result?.error || result?.result || 'unknown'}`);
+            break;
+          }
+        } catch (e) {
+          stepOk = false;
+          log && log(`[quests] action error: ${e.message}`);
+          break;
+        }
+      }
+      if (stepOk) {
+        qs.currentStep++;
+        qs.step_entered_at = Date.now();
+      }
+    } finally {
+      qs._advancing = false;
+    }
   }
 
-  // Wire events.
   const onJoin = async (player) => {
     if (player.username === bot.username) return;
     for (const q of myQuests) await advance(q, { kind: 'player_join', player: player.username });
@@ -233,15 +301,7 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   };
   const onCollect = async (collector, collected) => {
     if (!collector || collector.username === bot.username) return;
-    // Best-effort item-id extraction from sparse Mineflayer metadata. Each
-    // entry CAN be undefined (sparse arrays produced by some entity types),
-    // so guard `m && m.type === 7` rather than `m.type === 7`. The previous
-    // form threw on every player pickup of an entity whose metadata array
-    // had a hole — visible in bot/server.js as "Unhandled rejection:
-    // Cannot read properties of undefined (reading 'type')" during cycle C
-    // testing 2026-05-17. Quest still works because find() returns null
-    // when no marker entry matches.
-    const itemName = collected?.metadata?.find?.((m) => m && m.type === 7)?.value?.itemId;
+    const itemName = itemNameFromCollectEntity(collected);
     for (const q of myQuests) await advance(q, { kind: 'player_collected', player: collector.username, item: itemName });
   };
 
@@ -249,7 +309,6 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   bot.on('chat', onChat);
   bot.on('playerCollect', onCollect);
 
-  // Poll loop for position + timer triggers (every 1s).
   const interval = setInterval(async () => {
     for (const q of myQuests) await advance(q, null);
   }, 1000);

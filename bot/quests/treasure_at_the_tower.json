@@ -17,7 +17,7 @@
       ]
     },
     {
-      "trigger": { "kind": "player_chat", "regex": "\\b(at the top|on top|im here|made it|climbed|i did it)\\b" },
+      "trigger": { "kind": "player_pos_in_box", "player": "@last_chatter", "box": "quest_anchor", "radius": 4 },
       "actions": [
         { "kind": "chat", "text": "you found it!! here's your treasure 🍎" },
         { "kind": "give_to_player", "player": "@last_chatter", "item": "golden_apple", "count": 1 }

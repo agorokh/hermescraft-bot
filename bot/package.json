@@ -10,6 +10,8 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@nlpjs/basic": "^5.0.0-alpha.5",
+    "@nlpjs/lang-en-min": "^5.0.0-alpha.5",
     "minecraft-data": "^3.69.0",
     "mineflayer": "^4.23.0",
     "mineflayer-armor-manager": "^2.0.1",

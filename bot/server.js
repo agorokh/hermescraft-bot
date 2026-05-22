@@ -822,8 +822,8 @@ async function createBot() {
         // (emitting text-wrapped <tool_call>s alongside native Bash tool_use
         // is rare for Sonnet under load — primary failure mode of PR #54).
         const _origBuildSchematic = ACTIONS.build_schematic;
-        if (_origBuildSchematic) {
-          ACTIONS.build_schematic = async (body) => {
+        if (_origBuildSchematic && !_origBuildSchematic._hc_automem_wrapped) {
+          const _wrapBuildSchematic = async (body) => {
             const result = await _origBuildSchematic(body);
             try {
               const r = result?.result || '';
@@ -845,10 +845,12 @@ async function createBot() {
             } catch { /* swallow */ }
             return result;
           };
+          _wrapBuildSchematic._hc_automem_wrapped = true;
+          ACTIONS.build_schematic = _wrapBuildSchematic;
         }
         const _origBuildTower = ACTIONS.build_tower;
-        if (_origBuildTower) {
-          ACTIONS.build_tower = async (body) => {
+        if (_origBuildTower && !_origBuildTower._hc_automem_wrapped) {
+          const _wrapBuildTower = async (body) => {
             const result = await _origBuildTower(body);
             try {
               const x = body.x, y = body.y, z = body.z, mat = body.material;
@@ -864,10 +866,12 @@ async function createBot() {
             } catch { /* swallow */ }
             return result;
           };
+          _wrapBuildTower._hc_automem_wrapped = true;
+          ACTIONS.build_tower = _wrapBuildTower;
         }
         const _origGiveToPlayer = ACTIONS.give_to_player;
-        if (_origGiveToPlayer) {
-          ACTIONS.give_to_player = async (body) => {
+        if (_origGiveToPlayer && !_origGiveToPlayer._hc_automem_wrapped) {
+          const _wrapGiveToPlayer = async (body) => {
             const result = await _origGiveToPlayer(body);
             try {
               const r = result?.result || '';
@@ -877,10 +881,12 @@ async function createBot() {
             } catch { /* swallow */ }
             return result;
           };
+          _wrapGiveToPlayer._hc_automem_wrapped = true;
+          ACTIONS.give_to_player = _wrapGiveToPlayer;
         }
         const _origFindBlocks = ACTIONS.find_blocks;
-        if (_origFindBlocks) {
-          ACTIONS.find_blocks = async (body) => {
+        if (_origFindBlocks && !_origFindBlocks._hc_automem_wrapped) {
+          const _wrapFindBlocks = async (body) => {
             const result = await _origFindBlocks(body);
             try {
               // find_blocks returns `{ result: "Found 5 iron_ore", locations: [{x,y,z}, ...] }`
@@ -896,10 +902,12 @@ async function createBot() {
             } catch { /* swallow */ }
             return result;
           };
+          _wrapFindBlocks._hc_automem_wrapped = true;
+          ACTIONS.find_blocks = _wrapFindBlocks;
         }
         const _origLightArea = ACTIONS.light_area;
-        if (_origLightArea) {
-          ACTIONS.light_area = async (body) => {
+        if (_origLightArea && !_origLightArea._hc_automem_wrapped) {
+          const _wrapLightArea = async (body) => {
             const result = await _origLightArea(body);
             try {
               // Use structured `placed` count from skills.light_area, not regex —
@@ -912,10 +920,12 @@ async function createBot() {
             } catch { /* swallow */ }
             return result;
           };
+          _wrapLightArea._hc_automem_wrapped = true;
+          ACTIONS.light_area = _wrapLightArea;
         }
         const _origPlaceNearPlayer = ACTIONS.place_near_player;
-        if (_origPlaceNearPlayer) {
-          ACTIONS.place_near_player = async (body) => {
+        if (_origPlaceNearPlayer && !_origPlaceNearPlayer._hc_automem_wrapped) {
+          const _wrapPlaceNearPlayer = async (body) => {
             const result = await _origPlaceNearPlayer(body);
             try {
               const r = result?.result || '';
@@ -925,11 +935,13 @@ async function createBot() {
             } catch { /* swallow */ }
             return result;
           };
+          _wrapPlaceNearPlayer._hc_automem_wrapped = true;
+          ACTIONS.place_near_player = _wrapPlaceNearPlayer;
         }
         for (const collectVerb of ['collect', 'bg_collect']) {
           const orig = ACTIONS[collectVerb];
-          if (!orig) continue;
-          ACTIONS[collectVerb] = async (body) => {
+          if (!orig || orig._hc_automem_wrapped) continue;
+          const wrapped = async (body) => {
             const result = await orig(body);
             try {
               const r = result?.result || '';
@@ -945,6 +957,8 @@ async function createBot() {
             } catch { /* swallow */ }
             return result;
           };
+          wrapped._hc_automem_wrapped = true;
+          ACTIONS[collectVerb] = wrapped;
         }
         log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2 + auto-memory wrappers on 8 marquee verbs (#68)');
       } catch (e) {

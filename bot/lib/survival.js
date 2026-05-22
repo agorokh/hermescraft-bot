@@ -115,8 +115,17 @@ export function startSurvivalTick(bot, log, opts = {}) {
   let lastTorchAt = 0;
   let stuckPos = null;
   let stuckCount = 0;
+  let survivalFleeGoal = null;
 
   const logSurv = (msg) => log(`[survival] ${msg}`);
+
+  function shouldDeferSurvivalFlee() {
+    if (bot.interrupt_code) return true;
+    if (typeof opts.isKidTaskActive === 'function' && opts.isKidTaskActive()) return true;
+    const moving = typeof bot.pathfinder?.isMoving === 'function' && bot.pathfinder.isMoving();
+    if (moving && bot.pathfinder?.goal && bot.pathfinder.goal !== survivalFleeGoal) return true;
+    return false;
+  }
 
   // ── Hunger + health loop (~1.5s) ──────────────────────────────────────────
   async function hungerHealthLoop() {
@@ -136,18 +145,20 @@ export function startSurvivalTick(bot, log, opts = {}) {
         }
       }
 
-      // Health — flee if very low
+      // Health — flee if very low (don't hijack kid-directed pathfinder goals)
       if (opts.fleeEnabled !== false && bot.health !== undefined && bot.health <= HEALTH_FLEE_THRESHOLD) {
         const hostile = nearestHostile(bot);
-        if (hostile) {
+        if (hostile && !shouldDeferSurvivalFlee()) {
           logSurv(`health ${bot.health} ≤ ${HEALTH_FLEE_THRESHOLD} + hostile near — fleeing`);
           try {
             // GoalInvert(GoalFollow) — Mindcraft creeper back-pedal pattern
             const awayGoal = new goals.GoalInvert(new goals.GoalFollow(hostile.entity, 4));
+            survivalFleeGoal = awayGoal;
             bot.pathfinder.setGoal(awayGoal, true);
             await sleep(3000);
             clearGoalIfStill(bot, awayGoal);
-          } catch (e) { logSurv(`flee error: ${e.message}`); }
+            survivalFleeGoal = null;
+          } catch (e) { logSurv(`flee error: ${e.message}`); survivalFleeGoal = null; }
         }
       }
     }
@@ -165,16 +176,18 @@ export function startSurvivalTick(bot, log, opts = {}) {
 
       // Creeper special case: ALWAYS flee, never fight
       const isCrpr = (hostile.entity.name || hostile.entity.mobType || '').toLowerCase().includes('creeper');
-      if (isCrpr && hostile.dist < HOSTILE_FLEE_RADIUS) {
+      if (isCrpr && hostile.dist < HOSTILE_FLEE_RADIUS && !shouldDeferSurvivalFlee()) {
         logSurv(`creeper at ${hostile.dist.toFixed(1)}m — fleeing (never fight creepers)`);
         try {
           const awayGoal = new goals.GoalInvert(
             new goals.GoalFollow(hostile.entity, 2)
           );
+          survivalFleeGoal = awayGoal;
           bot.pathfinder.setGoal(awayGoal, true);
           await sleep(2500);
           clearGoalIfStill(bot, awayGoal);
-        } catch (e) { logSurv(`creeper flee error: ${e.message}`); }
+          survivalFleeGoal = null;
+        } catch (e) { logSurv(`creeper flee error: ${e.message}`); survivalFleeGoal = null; }
       }
     }
   }

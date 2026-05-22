@@ -250,6 +250,7 @@ const INTENTS = [
       // Map kid keywords → schematic names. Falls through if no match.
       const body = ctx.body.toLowerCase();
       if (/\bsafe\s+house\b/i.test(body)) return null;
+      if (/\bsafe\s+home\b/i.test(body) || /\bsafe\b.*\bhome\b/i.test(body)) return null;
       let name = null;
       if (/\b(treehouse|tree house|tree fort|tree home)\b/.test(body)) name = 'treehouse';
       else if (/\b(house|cottage|home|cabin)\b/.test(body)) name = 'small_house';
@@ -436,6 +437,13 @@ const INTENTS = [
       /\bsmelt (some )?(food|meat|fish)\b/i,
     ],
     async handler(bot, ctx) {
+      const body = ctx.body.toLowerCase();
+      // Ore smelting ("cook iron", "smelt coal") — not food cook_food.
+      if (/\b(iron|gold|copper|coal|diamond|lapis|redstone|emerald|netherite)\b/.test(body)
+          && /\b(ore|ingot|nugget|raw)\b/.test(body)) return null;
+      if (/\bsmelt\b/.test(body) && !/\b(food|meat|fish|chicken|beef|pork|mutton|rabbit)\b/.test(body)) {
+        return null;
+      }
       return { action: 'cook_food', body: { count: 4 } };
     },
   },
@@ -497,7 +505,7 @@ const INTENTS = [
   {
     name: 'build_shelter_for_night',
     patterns: [
-      /\b(build|make|create|put up)(?:\s+me)?\s+(?:a |an |)?(shelter|hut|emergency\s+shelter|safe\s+(?:spot|place|house))\b/i,
+      /\b(build|make|create|put up)(?:\s+me)?\s+(?:a |an |)?(shelter|hut|emergency\s+shelter|safe\s+(?:spot|place|house|home))\b/i,
       /\bit'?s getting dark\b/i,
       /\bnight is coming\b/i,
       /\bwe need a place to (hide|sleep|stay)\b/i,

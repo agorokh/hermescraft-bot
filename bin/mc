@@ -74,6 +74,11 @@ shift 2>/dev/null || true
 
 die() { echo "ERROR: $1" >&2; exit 1; }
 
+# JSON-escape a string for embedding in api_post bodies (matches mc chat).
+json_str() {
+    python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$1"
+}
+
 api_get() {
     local path="$1"
     local resp
@@ -1077,7 +1082,9 @@ EOF
     cook_food|cook)
         if [ -n "${1:-}" ]; then
             INPUT="$1"; FUEL="${2:-coal}"; COUNT="${3:-4}"
-            pretty "$(api_post '/action/cook_food' "{\"input\":\"$INPUT\",\"fuel\":\"$FUEL\",\"count\":$COUNT}")"
+            INPUT_ESC=$(json_str "$INPUT")
+            FUEL_ESC=$(json_str "$FUEL")
+            pretty "$(api_post '/action/cook_food' "{\"input\":$INPUT_ESC,\"fuel\":$FUEL_ESC,\"count\":$COUNT}")"
         else
             pretty "$(api_post '/action/cook_food' '{}')"
         fi
@@ -1089,7 +1096,8 @@ EOF
 
     feed_player|feed)
         PLAYER="${1:?Usage: mc feed_player PLAYER}"
-        pretty "$(api_post '/action/feed_player' "{\"player\":\"$PLAYER\"}")"
+        PLAYER_ESC=$(json_str "$PLAYER")
+        pretty "$(api_post '/action/feed_player' "{\"player\":$PLAYER_ESC}")"
         ;;
 
     build_shelter_for_night|shelter)

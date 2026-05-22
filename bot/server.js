@@ -791,7 +791,9 @@ async function createBot() {
       // disable in peaceful-mode deployments.
       try {
         if (_survival_tear_down) _survival_tear_down();
-        _survival_tear_down = startSurvivalTick(bot, log);
+        _survival_tear_down = startSurvivalTick(bot, log, {
+          isKidTaskActive: () => currentTask?.status === 'running',
+        });
       } catch (e) {
         log(`survival tick install failed: ${e.message}`);
       }
@@ -2422,8 +2424,7 @@ const ACTIONS = {
         .sort((a, b) => a.time - b.time)[0];
       if (oldest && oldest.source === 'voice'
           && _pendingVoiceTurns.has(oldest.id)
-          && _pendingVoiceTurns.get(oldest.id).dispatched_ts
-          && (now - _pendingVoiceTurns.get(oldest.id).dispatched_ts) <= VOICE_AUTOCORRELATE_MS) {
+          && (now - oldest.time) <= VOICE_AUTOCORRELATE_MS) {
         voiceTurn = _pendingVoiceTurns.get(oldest.id);
       }
       // Otherwise (oldest is a chat turn OR no pending OR voice not yet

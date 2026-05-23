@@ -29,7 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { extractGatherBlockFromBody, extractOreFromBody } from './intent_slot_extract.js';
-import { resolveSchematicName } from './schematic_resolve.js';
+import { isAdvancedSchematicName, resolveSchematicName } from './schematic_resolve.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
@@ -160,7 +160,7 @@ const ANAPHORA_RULES = [
   // appliesTo matches action or intent_name on the buffer entry.
   {
     pattern: /^(to the left|left more|further left)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'build_schematic_advanced', 'goto', 'light_area'],
     amend: (entry, bot, ctx) => {
       const { dx, dz } = _playerRelativeOffset(bot, ctx, 3, 'left');
       return _shiftAnchorBody(entry.body, dx, 0, dz);
@@ -169,7 +169,7 @@ const ANAPHORA_RULES = [
   },
   {
     pattern: /^(to the right|right more|further right)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'build_schematic_advanced', 'goto', 'light_area'],
     amend: (entry, bot, ctx) => {
       const { dx, dz } = _playerRelativeOffset(bot, ctx, 3, 'right');
       return _shiftAnchorBody(entry.body, dx, 0, dz);
@@ -178,7 +178,7 @@ const ANAPHORA_RULES = [
   },
   {
     pattern: /^(over there|over here|right here|here)$/i,
-    appliesTo: ['build_tower', 'build_schematic', 'goto', 'light_area'],
+    appliesTo: ['build_tower', 'build_schematic', 'build_schematic_advanced', 'goto', 'light_area'],
     amend: (entry, bot, ctx) => {
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
@@ -366,8 +366,9 @@ const DISPATCHERS = {
     const name = resolveSchematicName(ctx.body);
     if (name === 'list') return { action: 'list_schematics', body: {} };
     if (!name) return null;
+    const action = isAdvancedSchematicName(name) ? 'build_schematic_advanced' : 'build_schematic';
     return {
-      action: 'build_schematic',
+      action,
       body: { name, x: Math.floor(p.x) + 2, y: Math.floor(p.y), z: Math.floor(p.z) },
     };
   },

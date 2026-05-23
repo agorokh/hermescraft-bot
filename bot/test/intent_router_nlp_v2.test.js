@@ -209,6 +209,40 @@ test('hotel prompts route to advanced build schematic action', async () => {
   assert.equal(r.body.name, 'grand_hotel');
 });
 
+test('gallery prompts route to advanced build schematic action', async () => {
+  for (const [body, expected] of [
+    ['build a crystal observatory here', 'crystal_observatory'],
+    ['make me a wizard tower', 'wizard_tower'],
+    ['build a market square', 'market_square'],
+    ['build a sky bridge', 'sky_bridge'],
+    ['build a beacon plaza', 'beacon_plaza'],
+  ]) {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    assert.equal(r.matched, true, `expected gallery route for ${body}: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
+    assert.equal(r.action, 'build_schematic_advanced');
+    assert.equal(r.body.name, expected);
+  }
+});
+
+test('gallery discussion prompts do not dispatch advanced builds', async () => {
+  for (const body of [
+    'should we build a sky bridge someday?',
+    'i wish we could build a wizard tower later',
+    'can you tell me a story about building a beacon plaza',
+    'remember the crystal observatory we talked about',
+    'that market square idea sounds cool for another day',
+    'what did we build in the gallery plaza today?',
+    'do you remember the beacon plaza?',
+    'where is the sky bridge?',
+  ]) {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    assert.equal(r.matched, false, `NLP fired on discussion prompt: ${body} -> ${r.action}`);
+
+    const regex = await tryRouteRegex(stubBot(), body, 'Adalynn');
+    assert.equal(regex.matched, false, `regex fired on discussion prompt: ${body} -> ${regex.action}`);
+  }
+});
+
 test('ride_horse phrasing is no_dispatcher and not emote_jump regex', async () => {
   const bot = stubBot();
   const r = await tryRoute(bot, 'i want to jump on the horse', 'Adalynn');

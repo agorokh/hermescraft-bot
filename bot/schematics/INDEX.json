@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "comment": "Curated kid-friendly schematic library. Each entry is a JSON file under this dir, structured as { footprint: [w, l], height, materials: {block:count}, blocks: [[dx, dy, dz, block_name], ...] }. The bot loads the file and place_one's each entry at (origin + offset). Replaces real .schem/.litematic until we curate proper community schematics \u2014 but the contract is identical (origin + offset placements), so swap-in later is one wrapper.",
+  "comment": "Curated kid-friendly schematic library. Each entry is a JSON file under this dir, structured as { footprint: [w, l], height, materials: {block:count}, blocks: [[dx, dy, dz, block_name], ...] }. The bot loads the file and place_one's each entry at (origin + offset). Replaces real .schem/.litematic until we curate proper community schematics — but the contract is identical (origin + offset placements), so swap-in later is one wrapper.",
   "schematics": {
     "small_house": {
       "file": "small_house.json",
@@ -64,7 +64,7 @@
         5
       ],
       "height": 2,
-      "summary": "Outdoor sit-down spot \u2014 cobblestone fire ring + 4 oak-log seats",
+      "summary": "Outdoor sit-down spot — cobblestone fire ring + 4 oak-log seats",
       "materials": {
         "cobblestone": 8,
         "oak_log": 4,
@@ -92,7 +92,7 @@
         7
       ],
       "height": 7,
-      "summary": "7x7 ice castle \u2014 blue ice floor, packed ice walls, snow roof, glowstone-topped corner pillars",
+      "summary": "7x7 ice castle — blue ice floor, packed ice walls, snow roof, glowstone-topped corner pillars",
       "materials": {
         "blue_ice": 49,
         "packed_ice": 78,
@@ -108,7 +108,7 @@
         5
       ],
       "height": 4,
-      "summary": "5x5 snow igloo \u2014 small dome shelter for emergency night-safety",
+      "summary": "5x5 snow igloo — small dome shelter for emergency night-safety",
       "materials": {
         "snow_block": 49,
         "torch": 1
@@ -132,10 +132,105 @@
     },
     "dirt_shelter": {
       "file": "dirt_shelter.json",
-      "footprint": [3, 3],
+      "footprint": [
+        3,
+        3
+      ],
       "height": 3,
       "summary": "3x3 emergency dirt shelter — panic button for nightfall (23 dirt blocks, door gap at front)",
-      "materials": {"dirt": 23}
+      "materials": {
+        "dirt": 23
+      }
+    },
+    "crystal_observatory": {
+      "file": "crystal_observatory.json",
+      "footprint": [
+        11,
+        11
+      ],
+      "height": 12,
+      "summary": "11x11 crystal observatory with amethyst pylons, glass dome, glowstone telescope floor, and dark tile base",
+      "materials": {
+        "deepslate_tiles": 81,
+        "quartz_block": 36,
+        "amethyst_block": 53,
+        "glass_pane": 96,
+        "oak_fence": 13,
+        "glowstone": 13,
+        "glass": 115
+      }
+    },
+    "wizard_tower": {
+      "file": "wizard_tower.json",
+      "footprint": [
+        9,
+        9
+      ],
+      "height": 16,
+      "summary": "9x9 wizard tower with stone-brick shaft, windows, balcony, purple roof, and torch-lit battlements",
+      "materials": {
+        "stone_bricks": 253,
+        "glass_pane": 12,
+        "mossy_stone_bricks": 48,
+        "spruce_planks": 81,
+        "spruce_fence": 24,
+        "purple_wool": 74,
+        "torch": 4,
+        "glowstone": 5
+      }
+    },
+    "market_square": {
+      "file": "market_square.json",
+      "footprint": [
+        15,
+        15
+      ],
+      "height": 6,
+      "summary": "15x15 village market square with four colorful stalls, barrel counters, lanterns, and a central path cross",
+      "materials": {
+        "stone": 225,
+        "oak_planks": 129,
+        "lantern": 9,
+        "oak_fence": 32,
+        "barrel": 12,
+        "red_wool": 49,
+        "yellow_wool": 49,
+        "blue_wool": 49,
+        "green_wool": 49
+      }
+    },
+    "sky_bridge": {
+      "file": "sky_bridge.json",
+      "footprint": [
+        17,
+        5
+      ],
+      "height": 6,
+      "summary": "17x5 raised oak-and-cobblestone sky bridge with railings, arch supports, and torch markers",
+      "materials": {
+        "cobblestone": 94,
+        "oak_planks": 17,
+        "oak_fence": 34,
+        "torch": 10
+      }
+    },
+    "beacon_plaza": {
+      "file": "beacon_plaza.json",
+      "footprint": [
+        13,
+        13
+      ],
+      "height": 8,
+      "summary": "13x13 bright beacon plaza with quartz rings, sea-lantern corners, and a raised central beacon pedestal",
+      "materials": {
+        "polished_andesite": 113,
+        "quartz_block": 73,
+        "sea_lantern": 24,
+        "lantern": 4,
+        "amethyst_block": 5,
+        "beacon": 1,
+        "glowstone": 4
+      }
     }
   }
 }

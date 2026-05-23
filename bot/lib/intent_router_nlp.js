@@ -77,6 +77,13 @@ function _ctxBuf(bot) {
   return fresh.length > 0 ? fresh : null;
 }
 
+function isSpeculativeBuildDiscussion(body) {
+  const text = String(body || '').toLowerCase();
+  if (!/\b(build|building|make|construct|design|create|observatory|wizard tower|market square|sky bridge|beacon plaza)\b/.test(text)) return false;
+  return /\b(should we|someday|some day|later|another day|wish we could|tell me a story|remember|talked about)\b/.test(text)
+    || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build|do you remember|where (is|are|did))\b/.test(text);
+}
+
 // Chat ACK placeholders (fish/farm/cook) must not evict build skills from the buffer;
 // conversational chat intents may repeat ("say something nice" → "do it again").
 const CHAT_BUFFER_INTENTS = new Set([
@@ -526,6 +533,7 @@ const DISPATCHERS = {
 // Same return shape: {matched, intent_name, action, body}.
 export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
+  if (isSpeculativeBuildDiscussion(body)) return { matched: false, nlp_zone: 'speculative_discussion' };
   // ANAPHORA PRE-PROCESSOR (council round 2 unanimous): short modifier
   // phrases ("higher", "again", "over there") amend the last fired skill
   // BEFORE NLP gets a vote. NLP doesn't know the previous action; only

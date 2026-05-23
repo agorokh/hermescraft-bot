@@ -127,6 +127,43 @@ test('hotel-sized build prompts route to advanced Foreman pipeline', async () =>
   assert.equal(route.body.name, 'grand_hotel');
 });
 
+test('gallery build prompts route to advanced Foreman pipeline', async () => {
+  for (const [body, expected] of [
+    ['Rosie build a crystal observatory here', 'crystal_observatory'],
+    ['Rosie make me a wizard tower', 'wizard_tower'],
+    ['Rosie set up a marketplace', 'market_square'],
+    ['Rosie build a sky bridge', 'sky_bridge'],
+    ['Rosie make a beacon plaza', 'beacon_plaza'],
+  ]) {
+    const route = await tryRoute(stubBot('Adalynn'), body, 'Adalynn');
+    assert.ok(route.matched, `${body} must match router`);
+    assert.equal(route.action, 'build_schematic_advanced');
+    assert.equal(route.body.name, expected);
+  }
+});
+
+test('schematic routes normalize stale low player Y to nearby solid ground', async () => {
+  const bot = stubBot('Adalynn', { x: 260, y: 63, z: 286 });
+  bot.blockAt = (pos) => {
+    if (pos.x === 262 && pos.z === 286 && pos.y === 64) return { name: 'grass_block', boundingBox: 'block' };
+    return { name: 'air', boundingBox: 'empty' };
+  };
+  const route = await tryRoute(bot, 'Rosie build a sky bridge here', 'Adalynn');
+  assert.ok(route.matched, 'sky bridge prompt must route');
+  assert.equal(route.action, 'build_schematic_advanced');
+  assert.equal(route.body.name, 'sky_bridge');
+  assert.equal(route.body.y, 65);
+});
+
+test('schematic routes lift low surface Y when target chunk readback is missing', async () => {
+  const bot = stubBot('Adalynn', { x: 260, y: 63, z: 286 });
+  bot.blockAt = () => null;
+  const route = await tryRoute(bot, 'Rosie build a sky bridge here', 'Adalynn');
+  assert.ok(route.matched, 'sky bridge prompt must route');
+  assert.equal(route.body.name, 'sky_bridge');
+  assert.equal(route.body.y, 65);
+});
+
 for (const p of PROMPTS) {
   test(`kid prompt "${p.id}" — full pipeline (mention + strip + route)`, async () => {
     const target = p.expect_actions.includes('collect') ? 'Steve' : 'Rosie';

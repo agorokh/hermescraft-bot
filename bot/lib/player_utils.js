@@ -37,14 +37,45 @@ export function intFromMatch(text, regex) {
 const CLEAR_FOOT_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'short_grass', 'tall_grass']);
 const NON_GROUND_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava']);
 
+function isSolidGround(block) {
+  return block
+    && block.boundingBox === 'block'
+    && !NON_GROUND_BLOCKS.has(block.name);
+}
+
 function isValidTowerFooting(bot, footX, footY, footZ) {
   const ground = bot.blockAt(new Vec3(footX, footY - 1, footZ));
   const space = bot.blockAt(new Vec3(footX, footY, footZ));
-  const groundSolid = ground
-    && ground.boundingBox === 'block'
-    && !NON_GROUND_BLOCKS.has(ground.name);
+  const groundSolid = isSolidGround(ground);
   const spaceClear = !space || CLEAR_FOOT_BLOCKS.has(space.name);
   return groundSolid && spaceClear;
+}
+
+// Entity Y can lag after teleports or come through as a low/feet coordinate
+// in live Mineflayer sessions. For schematic builds, prefer the closest solid
+// surface near the requested base so "build here" does not bury the structure.
+export function normalizeBuildBaseY(bot, x, z, rawY) {
+  const baseY = Math.floor(rawY);
+  const startY = Math.min(319, baseY + 5);
+  const endY = Math.max(-64, baseY - 8);
+  const columns = [
+    [x, z],
+    [x - 1, z],
+    [x + 1, z],
+    [x, z - 1],
+    [x, z + 1],
+  ];
+  for (let y = startY; y >= endY; y--) {
+    for (const [cx, cz] of columns) {
+      const ground = bot.blockAt(new Vec3(cx, y, cz));
+      const space = bot.blockAt(new Vec3(cx, y + 1, cz));
+      if (isSolidGround(ground) && (!space || CLEAR_FOOT_BLOCKS.has(space.name))) {
+        return y + 1;
+      }
+    }
+  }
+  if (baseY >= 0 && baseY < 64) return baseY + 2;
+  return baseY;
 }
 
 // Pick a tower footprint offset: solid ground at footY-1 and buildable air at footY.

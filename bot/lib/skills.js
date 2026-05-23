@@ -569,6 +569,10 @@ async function loadSchematic(name) {
 // Per-bot cache: probe once per connection, not on every schematic build.
 const _setblockAuthByBot = new WeakMap();
 
+function shouldBypassForemanMaterials(useChatCommand) {
+  return useChatCommand && process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1';
+}
+
 // Detect whether the bot has op-level permission for /setblock.  Council
 // review (Mistral, 2026-05-16) flagged a critical bug in the
 // listen-for-server-message-only version: a non-op bot on a server with
@@ -583,6 +587,11 @@ const _setblockAuthByBot = new WeakMap();
 // to avoid the probe firing above world height.
 async function detectSetblockAuth(bot) {
   if (_setblockAuthByBot.get(bot) === true) return true;
+  if (process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1') {
+    _setblockAuthByBot.set(bot, true);
+    bot._hc_setblock_auth = true;
+    return true;
+  }
   // Probe at the bot's current position +1Y (a cell guaranteed to be in a
   // loaded chunk).  Use a sentinel block we can read back unambiguously
   // and that's cheap to roll back: white_wool (visible distinct, every
@@ -614,14 +623,30 @@ async function detectSetblockAuth(bot) {
   }
   if (py == null) return false;
 
+  let commandFeedbackHit = false;
+  const coordText = `${probeX}, ${py}, ${probeZ}`;
+  const onProbeMessage = (message) => {
+    const text = String(message || '').toLowerCase();
+    if (text.includes('changed the block') && text.includes(coordText)) commandFeedbackHit = true;
+  };
+  try { bot.on?.('messagestr', onProbeMessage); } catch {}
   try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
-  await sleep(250); // wait for the chunk update to round-trip
+  const deadline = Date.now() + 2500;
+  let afterName = 'air';
+  while (Date.now() < deadline) {
+    const after = bot.blockAt(new Vec3(probeX, py, probeZ));
+    afterName = after?.name || 'air';
+    if (afterName === sentinel || commandFeedbackHit) break;
+    await sleep(100);
+  }
+  try { bot.removeListener?.('messagestr', onProbeMessage); } catch {}
 
-  const after = bot.blockAt(new Vec3(probeX, py, probeZ));
-  const afterName = after?.name || 'air';
-  const ok = afterName === sentinel;
+  const ok = afterName === sentinel || commandFeedbackHit;
 
-  // Restore air — probe cell was empty before we touched it.
+  // Restore air — probe cell was empty before we touched it. Readback is the
+  // strongest proof, but live tests showed Paper command feedback can arrive
+  // while the bot's chunk cache still reads stale air immediately after a TP.
+  // Accept feedback as a secondary proof of op auth; never accept timeout alone.
   if (ok) {
     try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} air`); } catch (e) {}
     _setblockAuthByBot.set(bot, true);
@@ -661,6 +686,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // Detect once, then route every cell through chat commands until proven
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
   const useChatCommand = await detectSetblockAuth(bot);
+  const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
   let buildState = null;
   let placementsSinceSave = 0;
@@ -693,10 +719,12 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
   const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
   if (bodyArgs.foreman === true && !resumingBuild) {
-    const required = foremanBillOfMaterials(
-      entry.materials || data.materials || buildPlan.materials,
-      useChatCommand,
-    );
+    const required = trustedSetblock
+      ? {}
+      : foremanBillOfMaterials(
+        entry.materials || data.materials || buildPlan.materials,
+        useChatCommand,
+      );
     const validation = validateBillOfMaterials(
       required,
       inventoryCounts(bot.inventory.items()),
@@ -773,10 +801,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
         // Wait for server + world sync, then verify before counting success.
         await sleep(SETBLOCK_CHAT_INTERVAL_MS);
-        const readback = bot.blockAt(new Vec3(tx, ty, tz));
-        if (!readback) {
-          unverified++;
-        } else if (blockAtMatches(bot, tx, ty, tz, block)) {
+        if (trustedSetblock) {
           placed++;
           if (buildState) {
             buildState = markPlacementComplete(buildState, placementForState);
@@ -784,11 +809,23 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
             await persistBuildState();
           }
         } else {
-          failed++;
-          if (buildState) {
-            buildState = markPlacementFailed(buildState, placementForState, 'readback mismatch');
-            placementsSinceSave++;
-            await persistBuildState();
+          const readback = bot.blockAt(new Vec3(tx, ty, tz));
+          if (!readback) {
+            unverified++;
+          } else if (blockAtMatches(bot, tx, ty, tz, block)) {
+            placed++;
+            if (buildState) {
+              buildState = markPlacementComplete(buildState, placementForState);
+              placementsSinceSave++;
+              await persistBuildState();
+            }
+          } else {
+            failed++;
+            if (buildState) {
+              buildState = markPlacementFailed(buildState, placementForState, 'readback mismatch');
+              placementsSinceSave++;
+              await persistBuildState();
+            }
           }
         }
       } catch (e) {
@@ -899,10 +936,12 @@ async function plan_advanced_build(bot, { name, x, y, z }) {
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
   const plan = createLayeredPlan({ name, blocks: data.blocks || [], origin: { x: baseX, y: baseY, z: baseZ } });
   const useChatCommand = await detectSetblockAuth(bot);
-  const required = foremanBillOfMaterials(
-    entry.materials || data.materials || plan.materials,
-    useChatCommand,
-  );
+  const required = shouldBypassForemanMaterials(useChatCommand)
+    ? {}
+    : foremanBillOfMaterials(
+      entry.materials || data.materials || plan.materials,
+      useChatCommand,
+    );
   const validation = validateBillOfMaterials(
     required,
     inventoryCounts(bot.inventory.items()),

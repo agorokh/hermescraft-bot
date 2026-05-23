@@ -26,7 +26,7 @@
 
 import { extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, resolveSchematicName } from './schematic_resolve.js';
-import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
 function extractKidName(body) {
@@ -205,6 +205,7 @@ const INTENTS = [
       // Treehouse FIRST — \bhouse\b doesn't match inside "treehouse", so
       // an explicit pattern is required (post-mortem 2026-05-17 A/B run).
       /\b(build|make|put up|build me|set up|construct)\b.*\b(treehouse|tree house|tree fort|tree home)\b/i,
+      /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(observatory|telescope|stargazing|wizard|mage|magic|market|marketplace|bazaar|village square|town square|sky bridge|bridge|walkway|beacon|plaza)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(biggest|huge|giant|massive|grand|fancy)\b.*\b(house|home|building|structure)\b/i,
       /\b(build|make|put up|build me|set up|construct)\b.*\b(house|cottage|home|cabin|structure)\b/i,
@@ -226,11 +227,13 @@ const INTENTS = [
       if (name === 'list') return { action: 'list_schematics', body: {} };
       if (!name) return null;
       const kidName = extractKidName(ctx.body);
+      const buildX = Math.floor(p.x) + 2;
+      const buildZ = Math.floor(p.z);
       const schemBody = {
         name,
-        x: Math.floor(p.x) + 2,
-        y: Math.floor(p.y),
-        z: Math.floor(p.z),
+        x: buildX,
+        y: normalizeBuildBaseY(bot, buildX, buildZ, p.y),
+        z: buildZ,
       };
       if (kidName) schemBody.kid_name = kidName;
       const action = isAdvancedSchematicName(name) ? 'build_schematic_advanced' : 'build_schematic';
@@ -448,6 +451,13 @@ const INTENTS = [
 
 // ── Public router ──────────────────────────────────────────────────
 
+function isSpeculativeBuildDiscussion(body) {
+  const text = String(body || '').toLowerCase();
+  if (!/\b(build|building|make|construct|design|create|observatory|wizard tower|market square|sky bridge|beacon plaza)\b/.test(text)) return false;
+  return /\b(should we|someday|some day|later|another day|wish we could|tell me a story|remember|talked about)\b/.test(text)
+    || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build|do you remember|where (is|are|did))\b/.test(text);
+}
+
 // Deterministic stop/cancel hot path — must run before NLP classification.
 export async function tryStopRoute(bot, body, sender) {
   if (!bot || !body) return { matched: false };
@@ -471,6 +481,7 @@ export async function tryStopRoute(bot, body, sender) {
 // normal LLM-driven command queue.
 export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
+  if (isSpeculativeBuildDiscussion(body)) return { matched: false };
   const senderEntity = findPlayerEntity(bot, sender);
   const ctx = { sender, senderEntity, message: body, body, dryRun: opts.dryRun };
 

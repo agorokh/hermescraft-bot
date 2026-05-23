@@ -100,7 +100,10 @@ async function tryRoute(bot, body, sender) {
   if (nlp.matched) return nlp;
   if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
     const regex = await tryRouteRegex(bot, body, sender);
-    if (regex.matched && SURVIVAL_REGEX_FALLBACK.has(regex.intent_name)) {
+    if (
+      regex.matched
+      && (SURVIVAL_REGEX_FALLBACK.has(regex.intent_name) || regex.action === 'build_schematic_advanced')
+    ) {
       regex._fallback_from_nlp_zone = nlp.nlp_zone;
       regex._fallback_from_nlp_score = nlp.nlp_score;
       regex.skill_id = recordLastSkill(bot, regex.intent_name, regex.action, regex.body, body);
@@ -680,6 +683,12 @@ async function handleChat(username, message) {
           }
           log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
           if (ACTIONS[route.action]) {
+            const latestChat = chatLog[chatLog.length - 1];
+            if (latestChat && latestChat.from === username && latestChat.message === routing.body) {
+              latestChat.handledByRouter = true;
+              latestChat.routerIntent = route.intent_name;
+              latestChat.routerAction = route.action;
+            }
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
             runIntentRoutedAction(route.action, actionBody).then((result) => {
@@ -743,6 +752,12 @@ async function handleChat(username, message) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }
               const actionBody = actionBodyForRoute(route);
+              const latestChat = chatLog[chatLog.length - 1];
+              if (latestChat && latestChat.from === username && latestChat.message === routing.body) {
+                latestChat.handledByRouter = true;
+                latestChat.routerIntent = route.intent_name;
+                latestChat.routerAction = route.action;
+              }
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               runIntentRoutedAction(route.action, actionBody).then((result) => {
                 handleIntentRouterActionResult({
@@ -1463,7 +1478,7 @@ function briefState() {
   // Nearby broadcasts are capped at 2 most recent to reduce cascade noise.
   const now = Date.now();
   const recentAll = chatLog
-    .filter(m => now - m.time < 30000 && m.from !== bot.username);
+    .filter(m => now - m.time < 30000 && m.from !== bot.username && !m.handledByRouter);
   const directMsgs = recentAll.filter(m => m.private || m.whisper);
   const broadcastMsgs = recentAll.filter(m => !m.private && !m.whisper).slice(-2);
   const recentChat = [...directMsgs, ...broadcastMsgs]
@@ -1585,7 +1600,8 @@ function getFullState() {
   const biome = b.blockAt(pos)?.biome?.name || 'unknown';
 
   // Unread chat
-  const unreadChat = chatLog.length > 0 ? chatLog.slice(-5).map(m => ({
+  const unreadChatSource = chatLog.filter(m => !m.handledByRouter).slice(-5);
+  const unreadChat = unreadChatSource.length > 0 ? unreadChatSource.map(m => ({
     from: m.from, message: m.message,
     ago: Math.round((Date.now() - m.time) / 1000) + 's',
   })) : [];

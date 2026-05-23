@@ -1,11 +1,18 @@
-import { readFile, writeFile } from 'fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-export const BUILD_STATE_FILE = join(__dirname, '..', 'build_state.json');
+export const BUILD_STATE_DIR = join(__dirname, '..', 'build_states');
+/** @deprecated use buildStateFileForId — single-file path kept for tests */
+export const BUILD_STATE_FILE = join(BUILD_STATE_DIR, 'build_state.json');
+
+export function buildStateFileForId(buildId) {
+  const safe = String(buildId || 'unknown').replace(/[^a-zA-Z0-9._-]+/g, '_');
+  return join(BUILD_STATE_DIR, `${safe}.json`);
+}
 
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
 const DEFAULT_HEALTH_PAUSE_THRESHOLD = 8;
@@ -176,11 +183,18 @@ export function markPlacementFailed(state, placement, error, now = Date.now()) {
 
 export function pendingPlacements(plan, state = {}) {
   const completed = new Set(state.completed || []);
-  return (plan.placements || []).filter((placement) => !completed.has(placement.id));
+  const failed = new Set((state.failed || []).map((f) => f.id));
+  return (plan.placements || []).filter(
+    (placement) => !completed.has(placement.id) && !failed.has(placement.id),
+  );
 }
 
 export async function saveBuildState(state, file = BUILD_STATE_FILE) {
-  await writeFile(file, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  await mkdir(dirname(file), { recursive: true });
+  const payload = `${JSON.stringify(state, null, 2)}\n`;
+  const tmp = `${file}.tmp-${process.pid}`;
+  await writeFile(tmp, payload, 'utf8');
+  await rename(tmp, file);
 }
 
 export async function loadBuildState(file = BUILD_STATE_FILE) {
@@ -225,13 +239,28 @@ export function safetySnapshotFromBot(bot) {
   return { health: bot?.health, hostiles };
 }
 
+function normalizePauseMs(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function normalizeIntervalMs(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.max(100, n) : fallback;
+}
+
 export async function waitWhileSentryRequired(bot, opts = {}) {
-  const maxPauseMs = opts.maxPauseMs ?? 15000;
-  const checkIntervalMs = opts.checkIntervalMs ?? 1000;
+  const maxPauseMs = normalizePauseMs(opts.maxPauseMs, 15000);
+  const checkIntervalMs = normalizeIntervalMs(opts.checkIntervalMs, 1000);
+  const snapshot = () => shouldPauseForSentry(safetySnapshotFromBot(bot), opts);
+  if (maxPauseMs <= 0) {
+    const decision = snapshot();
+    return { paused: decision.pause, reason: decision.pause ? decision.reason : null };
+  }
   const started = Date.now();
   let lastDecision = { pause: false, reason: null };
   while (Date.now() - started < maxPauseMs) {
-    lastDecision = shouldPauseForSentry(safetySnapshotFromBot(bot), opts);
+    lastDecision = snapshot();
     if (!lastDecision.pause) return { paused: false, reason: null };
     await new Promise((r) => setTimeout(r, checkIntervalMs));
   }

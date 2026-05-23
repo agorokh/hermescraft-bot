@@ -5,16 +5,19 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   buildBillOfMaterials,
+  buildStateFileForId,
   computeFootprint,
   createBuildState,
   createLayeredPlan,
   inventoryCounts,
   loadBuildState,
   markPlacementComplete,
+  markPlacementFailed,
   pendingPlacements,
   saveBuildState,
   shouldPauseForSentry,
   validateBillOfMaterials,
+  waitWhileSentryRequired,
 } from '../lib/advanced_build_pipeline.js';
 
 const blocks = [
@@ -71,6 +74,20 @@ test('build state resumes without duplicating completed placements', () => {
   assert.equal(pending.some((p) => p.id === plan.placements[0].id), false);
 });
 
+test('pendingPlacements skips failed placement ids', () => {
+  const plan = createLayeredPlan({ name: 'tiny', blocks, origin: { x: 0, y: 70, z: 0 } });
+  const failed = markPlacementFailed(createBuildState(plan), plan.placements[0], 'chunk unloaded');
+  const pending = pendingPlacements(plan, failed);
+  assert.equal(pending.some((p) => p.id === plan.placements[0].id), false);
+});
+
+test('buildStateFileForId namespaces state per build', () => {
+  const a = buildStateFileForId('well-10-64-10');
+  const b = buildStateFileForId('tower-0-70-0');
+  assert.notEqual(a, b);
+  assert.match(a, /build_states\/well-10-64-10\.json$/);
+});
+
 test('build state can be saved and loaded from disk', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'hc-build-state-'));
   const file = join(dir, 'build_state.json');
@@ -82,6 +99,30 @@ test('build state can be saved and loaded from disk', async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('waitWhileSentryRequired returns immediately when pause not required', async () => {
+  const bot = {
+    health: 20,
+    entities: {},
+    entity: { position: { distanceTo: () => 999 } },
+  };
+  assert.deepEqual(
+    await waitWhileSentryRequired(bot, { maxPauseMs: 0, checkIntervalMs: 1 }),
+    { paused: false, reason: null },
+  );
+});
+
+test('waitWhileSentryRequired treats invalid timing opts as defaults', async () => {
+  const bot = {
+    health: 20,
+    entities: {},
+    entity: { position: { distanceTo: () => 999 } },
+  };
+  assert.deepEqual(
+    await waitWhileSentryRequired(bot, { maxPauseMs: 'nope', checkIntervalMs: -5 }),
+    { paused: false, reason: null },
+  );
 });
 
 test('shouldPauseForSentry triggers on low health or nearby hostile', () => {

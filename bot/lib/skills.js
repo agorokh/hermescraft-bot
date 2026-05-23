@@ -30,17 +30,21 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
 import {
+  buildStateFileForId,
   createBuildState,
   createLayeredPlan,
   inventoryCounts,
   loadBuildState,
   markPlacementComplete,
   markPlacementFailed,
+  normalizeBlockName,
   pendingPlacements,
   saveBuildState,
   validateBillOfMaterials,
   waitWhileSentryRequired,
 } from './advanced_build_pipeline.js';
+
+const BUILD_STATE_SAVE_EVERY_N = 10;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -66,11 +70,6 @@ function findInventoryItem(bot, itemName) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-function normalizeBlockName(name) {
-  if (!name) return '';
-  return String(name).toLowerCase().replace(/^minecraft:/, '');
 }
 
 function collectItemMatches(tossedItem, collectedEntity) {
@@ -585,7 +584,7 @@ async function detectSetblockAuth(bot) {
   return ok;
 }
 
-async function build_schematic(bot, { name, x, y, z }) {
+async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const stopGen = captureStopGen(bot);
   if (!name) return { result: `build_schematic needs a schematic name` };
   if (x == null || y == null || z == null) return { result: `build_schematic needs x, y, z origin` };
@@ -602,6 +601,8 @@ async function build_schematic(bot, { name, x, y, z }) {
   if (blocks.length === 0) return { result: `Schematic ${name} is empty.` };
 
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
+  const buildId = `${name}-${baseX}-${baseY}-${baseZ}`;
+  const stateFile = buildStateFileForId(buildId);
   const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
   const centerX = baseX + Math.floor(fw / 2);
   const centerZ = baseZ + Math.floor(fl / 2);
@@ -615,9 +616,15 @@ async function build_schematic(bot, { name, x, y, z }) {
   // Detect once, then route every cell through chat commands until proven
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
   const useChatCommand = await detectSetblockAuth(bot);
-  const bodyArgs = arguments[1] || {};
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
   let buildState = null;
+  let placementsSinceSave = 0;
+  const persistBuildState = async (force = false) => {
+    if (!buildState) return;
+    if (!force && placementsSinceSave < BUILD_STATE_SAVE_EVERY_N) return;
+    await saveBuildState(buildState, stateFile);
+    placementsSinceSave = 0;
+  };
   if (bodyArgs.foreman === true) {
     const required = entry.materials || data.materials || buildPlan.materials;
     const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
@@ -627,13 +634,13 @@ async function build_schematic(bot, { name, x, y, z }) {
     }
   }
   if (bodyArgs.record_state === true || bodyArgs.resume === true) {
-    const saved = bodyArgs.resume === true ? await loadBuildState() : null;
-    if (saved && saved.build_id === `${name}-${baseX}-${baseY}-${baseZ}` && saved.status !== 'done') {
+    const saved = bodyArgs.resume === true ? await loadBuildState(stateFile) : null;
+    if (saved && saved.build_id === buildId && saved.status !== 'done') {
       buildState = saved;
     } else {
       buildState = createBuildState(buildPlan);
     }
-    await saveBuildState(buildState);
+    await persistBuildState(true);
   }
 
   bot._schematicBuildActive = true;
@@ -641,6 +648,7 @@ async function build_schematic(bot, { name, x, y, z }) {
   let failed = 0;
   let unverified = 0;
   const missing = new Set();
+  const totalPlacedSoFar = () => (buildState ? (buildState.completed?.length || 0) : placed);
   try {
   // Pathfind near the origin (footprint center) only when we'll actually
   // need to be near it. /setblock works at arbitrary range from the bot.
@@ -673,13 +681,13 @@ async function build_schematic(bot, { name, x, y, z }) {
     const tx = baseX + dx, ty = baseY + dy, tz = baseZ + dz;
     const placementForState = { id: `${tx},${ty},${tz}:${normalizeBlockName(block)}` };
 
-    if (bodyArgs.sentry_pause !== false) {
+    if (bodyArgs.sentry_pause === true) {
       const sentry = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
       if (sentry.paused) {
         if (buildState) {
           buildState.status = 'paused_sentry';
           buildState.pause_reason = sentry.reason;
-          await saveBuildState(buildState);
+          await persistBuildState(true);
         }
         return { result: `Build "${name}" paused for Sentry Mode: ${sentry.reason}. Resume with build_schematic_advanced resume=true.` };
       }
@@ -694,25 +702,34 @@ async function build_schematic(bot, { name, x, y, z }) {
         // Wait for server + world sync, then verify before counting success.
         await sleep(SETBLOCK_CHAT_INTERVAL_MS);
         const readback = bot.blockAt(new Vec3(tx, ty, tz));
-        if (!readback) unverified++;
-        else if (blockAtMatches(bot, tx, ty, tz, block)) {
+        if (!readback) {
+          unverified++;
+          if (buildState) {
+            buildState = markPlacementFailed(buildState, placementForState, 'unverified: target chunk not loaded');
+            placementsSinceSave++;
+            await persistBuildState();
+          }
+        } else if (blockAtMatches(bot, tx, ty, tz, block)) {
           placed++;
           if (buildState) {
             buildState = markPlacementComplete(buildState, placementForState);
-            await saveBuildState(buildState);
+            placementsSinceSave++;
+            await persistBuildState();
           }
         } else {
           failed++;
           if (buildState) {
             buildState = markPlacementFailed(buildState, placementForState, 'readback mismatch');
-            await saveBuildState(buildState);
+            placementsSinceSave++;
+            await persistBuildState();
           }
         }
       } catch (e) {
         failed++;
         if (buildState) {
           buildState = markPlacementFailed(buildState, placementForState, e.message);
-          await saveBuildState(buildState);
+          placementsSinceSave++;
+          await persistBuildState();
         }
       }
     } else {
@@ -729,13 +746,15 @@ async function build_schematic(bot, { name, x, y, z }) {
         placed++;
         if (buildState) {
           buildState = markPlacementComplete(buildState, placementForState);
-          await saveBuildState(buildState);
+          placementsSinceSave++;
+          await persistBuildState();
         }
       } else {
         failed++;
         if (buildState) {
           buildState = markPlacementFailed(buildState, placementForState, r.reason || 'place failed');
-          await saveBuildState(buildState);
+          placementsSinceSave++;
+          await persistBuildState();
         }
       }
       // Move closer if we drift out of reach (every 8 placements).
@@ -753,21 +772,24 @@ async function build_schematic(bot, { name, x, y, z }) {
   const unverifiedStr = unverified > 0 ? ` ${unverified} cells unverified (chunk unloaded).` : '';
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
   const total = solidBlocks.length;
-  if (placed === total && total > 0) {
+  const placedCount = totalPlacedSoFar();
+  if (placedCount === total && total > 0) {
     if (buildState) {
       buildState.status = 'done';
       buildState = { ...buildState, updated_at: Date.now() };
-      await saveBuildState(buildState);
+      await persistBuildState(true);
     }
-    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${total} blocks placed${mode}.${unverifiedStr}` };
+    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placedCount}/${total} blocks placed${mode}.${unverifiedStr}` };
   }
   if (buildState && placed + failed >= sorted.length) {
     buildState.status = failed === 0 ? 'done' : 'partial';
     buildState = { ...buildState, updated_at: Date.now() };
-    await saveBuildState(buildState);
+    await persistBuildState(true);
+  } else if (buildState) {
+    await persistBuildState(true);
   }
   return {
-    result: `Built ${placed}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}${unverifiedStr}`,
+    result: `Built ${placedCount}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}${unverifiedStr}`,
   };
   } finally {
     bot._schematicBuildActive = false;
@@ -794,7 +816,12 @@ async function plan_advanced_build(bot, { name, x, y, z }) {
   if (!name) return { result: `plan_advanced_build needs a schematic name` };
   if (x == null || y == null || z == null) return { result: `plan_advanced_build needs x, y, z origin` };
 
-  const loaded = await loadSchematic(name);
+  let loaded;
+  try {
+    loaded = await loadSchematic(name);
+  } catch (e) {
+    return { result: `Couldn't load schematic ${name}: ${e.message}` };
+  }
   if (loaded.error) return { result: loaded.error };
   const { entry, data } = loaded;
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);

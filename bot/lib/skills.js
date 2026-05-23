@@ -632,9 +632,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
   let buildState = null;
   let placementsSinceSave = 0;
+  const saveEveryN = bodyArgs.record_state === true ? 1 : BUILD_STATE_SAVE_EVERY_N;
   const persistBuildState = async (force = false) => {
     if (!buildState) return;
-    if (!force && placementsSinceSave < BUILD_STATE_SAVE_EVERY_N) return;
+    if (!force && placementsSinceSave < saveEveryN) return;
     await saveBuildState(buildState, stateFile);
     placementsSinceSave = 0;
   };
@@ -643,6 +644,12 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   let savedState = null;
   if (resumeEnabled) {
     savedState = await loadBuildState(stateFile);
+  }
+  if (resumeEnabled && savedState?.build_id === buildId && savedState?.status === 'done') {
+    const doneCount = savedState.completed?.length || buildPlan.totalBlocks;
+    return {
+      result: `Build "${name}" at ${baseX},${baseY},${baseZ} is already complete (${doneCount}/${buildPlan.totalBlocks} blocks).`,
+    };
   }
   const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
   if (bodyArgs.foreman === true && !resumingBuild) {

@@ -17,6 +17,7 @@ import {
   markPlacementComplete,
   markPlacementFailed,
   pendingPlacements,
+  reconcileCompletedPlacements,
   saveBuildState,
   shouldPauseForSentry,
   validateBillOfMaterials,
@@ -82,6 +83,26 @@ test('build state resumes without duplicating completed placements', () => {
   const pending = pendingPlacements(plan, state);
   assert.equal(pending.length, plan.totalBlocks - 1);
   assert.equal(pending.some((p) => p.id === plan.placements[0].id), false);
+});
+
+test('resume reconciliation removes completed placements missing from the world', () => {
+  const plan = createLayeredPlan({ name: 'tiny', blocks, origin: { x: 0, y: 70, z: 0 } });
+  const state = markPlacementComplete(createBuildState(plan, 1000), plan.placements[0], 2000);
+  const reconciled = reconcileCompletedPlacements(plan, state, () => 'air');
+
+  assert.deepEqual(reconciled.completed, []);
+  assert.equal(reconciled.resume_reconciled_missing.length, 1);
+  assert.match(reconciled.resume_reconciled_missing[0].reason, /expected/);
+  assert.equal(pendingPlacements(plan, reconciled).some((p) => p.id === plan.placements[0].id), true);
+});
+
+test('resume reconciliation keeps completed placements verified in the world', () => {
+  const plan = createLayeredPlan({ name: 'tiny', blocks, origin: { x: 0, y: 70, z: 0 } });
+  const state = markPlacementComplete(createBuildState(plan, 1000), plan.placements[0], 2000);
+  const reconciled = reconcileCompletedPlacements(plan, state, (_x, _y, _z) => plan.placements[0].block);
+
+  assert.deepEqual(reconciled.completed, state.completed);
+  assert.equal(pendingPlacements(plan, reconciled).some((p) => p.id === plan.placements[0].id), false);
 });
 
 test('pendingPlacements skips permanent failures but retries transient ones', () => {

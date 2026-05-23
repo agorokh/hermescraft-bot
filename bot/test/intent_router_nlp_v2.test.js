@@ -202,6 +202,13 @@ test('house of ice → ice_castle schematic (keyword order)', async () => {
   assert.equal(r.body.name, 'ice_castle');
 });
 
+test('hotel prompts route to advanced build schematic action', async () => {
+  const r = await tryRoute(stubBot(), 'build me a huge fancy hotel right here', 'Adalynn');
+  assert.equal(r.matched, true, `expected hotel route: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
+  assert.equal(r.action, 'build_schematic_advanced');
+  assert.equal(r.body.name, 'grand_hotel');
+});
+
 test('ride_horse phrasing is no_dispatcher and not emote_jump regex', async () => {
   const bot = stubBot();
   const r = await tryRoute(bot, 'i want to jump on the horse', 'Adalynn');

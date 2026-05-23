@@ -237,6 +237,33 @@ export function pendingPlacements(plan, state = {}) {
   );
 }
 
+export function reconcileCompletedPlacements(plan, state = {}, blockNameAt) {
+  if (!state || !Array.isArray(state.completed) || typeof blockNameAt !== 'function') return state;
+  const expectedById = new Map((plan.placements || []).map((p) => [p.id, p]));
+  const kept = [];
+  const removed = [];
+  for (const id of state.completed) {
+    const placement = expectedById.get(id);
+    if (!placement) {
+      removed.push({ id, reason: 'not in plan' });
+      continue;
+    }
+    const actual = normalizeBlockName(blockNameAt(placement.x, placement.y, placement.z));
+    if (actual === placement.block) {
+      kept.push(id);
+    } else {
+      removed.push({ id, reason: `world has ${actual || 'unknown'}, expected ${placement.block}` });
+    }
+  }
+  if (removed.length === 0 && kept.length === state.completed.length) return state;
+  return {
+    ...state,
+    completed: kept,
+    resume_reconciled_at: Date.now(),
+    resume_reconciled_missing: removed,
+  };
+}
+
 export async function saveBuildState(state, file = BUILD_STATE_FILE) {
   await mkdir(dirname(file), { recursive: true });
   const payload = `${JSON.stringify(state, null, 2)}\n`;

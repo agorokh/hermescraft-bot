@@ -1,5 +1,7 @@
 // Shared kid-keyword → schematic name mapping for regex and NLP routers.
 
+const ADVANCED_SCHEMATICS = new Set(['grand_hotel']);
+
 function wantsSchematicList(body) {
   const b = String(body).toLowerCase();
   return /\b(what can|what could|show me|list)\b/i.test(b)
@@ -12,6 +14,10 @@ function wantsSchematicList(body) {
 export function resolveSchematicName(body) {
   const b = String(body).toLowerCase();
   if (wantsSchematicList(b)) return 'list';
+  if (/\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/.test(b)) return 'grand_hotel';
+  if (/\b(big|huge|giant|massive|fancy|grand|biggest)\b/.test(b) && /\b(house|home|building|structure)\b/.test(b)) {
+    return 'grand_hotel';
+  }
   if (/\b(ice|frozen|frosty)\b/.test(b) && /\b(castle|fort|house|palace|home|cottage)\b/.test(b)) {
     return 'ice_castle';
   }
@@ -23,4 +29,8 @@ export function resolveSchematicName(body) {
   if (/\b(castle|fort|palace|tower|watchtower|outpost)\b/.test(b)) return 'small_tower';
   if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(b)) return 'campfire_spot';
   return null;
+}
+
+export function isAdvancedSchematicName(name) {
+  return ADVANCED_SCHEMATICS.has(String(name || '').toLowerCase());
 }

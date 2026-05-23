@@ -24,6 +24,8 @@
 
 import pathfinderPkg from 'mineflayer-pathfinder';
 const { goals } = pathfinderPkg;
+import schematicPkg from 'prismarine-schematic';
+const { Schematic } = schematicPkg;
 import { Vec3 } from 'vec3';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
@@ -31,6 +33,7 @@ import { dirname, join } from 'path';
 import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
 import {
   buildStateFileForId,
+  buildBillOfMaterials,
   createBuildState,
   createLayeredPlan,
   foremanBillOfMaterials,
@@ -40,6 +43,7 @@ import {
   markPlacementFailed,
   normalizeBlockName,
   pendingPlacements,
+  reconcileCompletedPlacements,
   saveBuildState,
   validateBillOfMaterials,
   waitWhileSentryRequired,
@@ -530,7 +534,35 @@ async function loadSchematic(name) {
     const available = Object.keys(idx.schematics || {}).join(', ');
     return { error: `Unknown schematic "${name}". Available: ${available}` };
   }
-  const raw = await readFile(join(SCHEMATICS_DIR, entry.file), 'utf8');
+  const file = join(SCHEMATICS_DIR, entry.file);
+  if (entry.file.endsWith('.schem') || entry.file.endsWith('.schematic')) {
+    const schematic = await Schematic.read(await readFile(file));
+    const start = schematic.start();
+    const blocks = [];
+    await schematic.forEach(async (block, pos) => {
+      const blockName = normalizeBlockName(block?.name);
+      if (!blockName || blockName === 'air' || blockName === 'cave_air' || blockName === 'void_air') return;
+      blocks.push([pos.x - start.x, pos.y - start.y, pos.z - start.z, blockName]);
+    });
+    const data = {
+      schema_version: 1,
+      name,
+      footprint: [schematic.size.x, schematic.size.z],
+      height: schematic.size.y,
+      materials: buildBillOfMaterials(blocks),
+      blocks,
+    };
+    return {
+      entry: {
+        ...entry,
+        footprint: entry.footprint || data.footprint,
+        height: entry.height || data.height,
+        materials: entry.materials || data.materials,
+      },
+      data,
+    };
+  }
+  const raw = await readFile(file, 'utf8');
   return { entry, data: JSON.parse(raw) };
 }
 
@@ -646,10 +678,18 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     savedState = await loadBuildState(stateFile);
   }
   if (resumeEnabled && savedState?.build_id === buildId && savedState?.status === 'done') {
-    const doneCount = savedState.completed?.length || buildPlan.totalBlocks;
-    return {
-      result: `Build "${name}" at ${baseX},${baseY},${baseZ} is already complete (${doneCount}/${buildPlan.totalBlocks} blocks).`,
-    };
+    const verifiedState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
+      const block = bot.blockAt(new Vec3(wx, wy, wz));
+      return block?.name || null;
+    });
+    const doneCount = verifiedState.completed?.length || 0;
+    if (doneCount >= buildPlan.totalBlocks) {
+      return {
+        result: `Build "${name}" at ${baseX},${baseY},${baseZ} is already complete (${doneCount}/${buildPlan.totalBlocks} blocks).`,
+      };
+    }
+    savedState = { ...verifiedState, status: 'running' };
+    await saveBuildState(savedState, stateFile);
   }
   const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
   if (bodyArgs.foreman === true && !resumingBuild) {
@@ -669,7 +709,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
   if (bodyArgs.record_state === true || resumeEnabled) {
     if (resumingBuild) {
-      buildState = savedState;
+      buildState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
+        const block = bot.blockAt(new Vec3(wx, wy, wz));
+        return block?.name || null;
+      });
     } else {
       buildState = createBuildState(buildPlan);
     }

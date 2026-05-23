@@ -114,6 +114,22 @@
         "torch": 1
       }
     },
+    "grand_hotel": {
+      "file": "grand_hotel.json",
+      "footprint": [
+        13,
+        12
+      ],
+      "height": 10,
+      "summary": "13x12 two-story grand hotel with lobby, balcony, windows, roof rail, and warm lighting",
+      "materials": {
+        "cobblestone": 215,
+        "oak_planks": 449,
+        "glass_pane": 32,
+        "torch": 9,
+        "oak_fence": 47
+      }
+    },
     "dirt_shelter": {
       "file": "dirt_shelter.json",
       "footprint": [3, 3],

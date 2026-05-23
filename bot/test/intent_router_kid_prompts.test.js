@@ -120,6 +120,13 @@ test('build handlers anchor on bot position when sender entity is unresolvable',
   }
 });
 
+test('hotel-sized build prompts route to advanced Foreman pipeline', async () => {
+  const route = await tryRoute(stubBot('Adalynn'), 'Rosie build me a grand hotel right here', 'Adalynn');
+  assert.ok(route.matched, 'hotel prompt must match router');
+  assert.equal(route.action, 'build_schematic_advanced');
+  assert.equal(route.body.name, 'grand_hotel');
+});
+
 for (const p of PROMPTS) {
   test(`kid prompt "${p.id}" — full pipeline (mention + strip + route)`, async () => {
     const target = p.expect_actions.includes('collect') ? 'Steve' : 'Rosie';

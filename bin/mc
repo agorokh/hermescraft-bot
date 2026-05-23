@@ -1130,7 +1130,11 @@ EOF
         Z="${4:?Usage: mc build_schematic_advanced NAME X Y Z [resume=true]}"
         RESUME="${5:-true}"
         require_int "$X"; require_int "$Y"; require_int "$Z"
-        ADV_BUILD_JSON=$(python3 -c "import json,sys; resume=str(sys.argv[5]).lower() not in ('0','false','no','off'); print(json.dumps({'name':sys.argv[1],'x':int(sys.argv[2]),'y':int(sys.argv[3]),'z':int(sys.argv[4]),'resume':resume}))" "$NAME" "$X" "$Y" "$Z" "$RESUME")
+        ADV_BUILD_JSON=$(python3 -c "import json,sys
+raw=str(sys.argv[5] or 'true').strip().lower()
+if '=' in raw: raw=raw.split('=',1)[1]
+resume=raw not in ('0','false','no','off')
+print(json.dumps({'name':sys.argv[1],'x':int(sys.argv[2]),'y':int(sys.argv[3]),'z':int(sys.argv[4]),'resume':resume}))" "$NAME" "$X" "$Y" "$Z" "$RESUME")
         pretty "$(api_post '/task/build_schematic_advanced' "$ADV_BUILD_JSON")"
         ;;
 

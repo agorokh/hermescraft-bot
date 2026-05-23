@@ -10,6 +10,7 @@ import {
   computeFootprint,
   createBuildState,
   createLayeredPlan,
+  inventoryBlockCount,
   inventoryCounts,
   loadBuildState,
   markPlacementComplete,
@@ -82,11 +83,18 @@ test('build state resumes without duplicating completed placements', () => {
   assert.equal(pending.some((p) => p.id === plan.placements[0].id), false);
 });
 
-test('pendingPlacements skips failed placement ids', () => {
+test('pendingPlacements skips permanent failures but retries transient ones', () => {
   const plan = createLayeredPlan({ name: 'tiny', blocks, origin: { x: 0, y: 70, z: 0 } });
-  const failed = markPlacementFailed(createBuildState(plan), plan.placements[0], 'chunk unloaded');
-  const pending = pendingPlacements(plan, failed);
-  assert.equal(pending.some((p) => p.id === plan.placements[0].id), false);
+  const permanent = markPlacementFailed(createBuildState(plan), plan.placements[0], 'missing inventory');
+  assert.equal(pendingPlacements(plan, permanent).some((p) => p.id === plan.placements[0].id), false);
+
+  const transient = markPlacementFailed(createBuildState(plan), plan.placements[0], 'unverified: target chunk not loaded');
+  assert.equal(pendingPlacements(plan, transient).some((p) => p.id === plan.placements[0].id), true);
+});
+
+test('inventoryBlockCount accepts bucket aliases for fluids', () => {
+  const counts = inventoryCounts([{ name: 'water_bucket', count: 2 }]);
+  assert.equal(inventoryBlockCount(counts, 'water'), 2);
 });
 
 test('buildStateFileForId namespaces state per build', () => {

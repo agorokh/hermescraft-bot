@@ -626,7 +626,12 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     await saveBuildState(buildState, stateFile);
     placementsSinceSave = 0;
   };
-  if (bodyArgs.foreman === true) {
+  let savedState = null;
+  if (bodyArgs.resume === true) {
+    savedState = await loadBuildState(stateFile);
+  }
+  const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
+  if (bodyArgs.foreman === true && !resumingBuild) {
     const required = filterForemanRequired(entry.materials || data.materials || buildPlan.materials);
     const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
     if (!validation.ok) {
@@ -635,9 +640,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     }
   }
   if (bodyArgs.record_state === true || bodyArgs.resume === true) {
-    const saved = bodyArgs.resume === true ? await loadBuildState(stateFile) : null;
-    if (saved && saved.build_id === buildId && saved.status !== 'done') {
-      buildState = saved;
+    if (resumingBuild) {
+      buildState = savedState;
     } else {
       buildState = createBuildState(buildPlan);
     }
@@ -705,11 +709,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         const readback = bot.blockAt(new Vec3(tx, ty, tz));
         if (!readback) {
           unverified++;
-          if (buildState) {
-            buildState = markPlacementFailed(buildState, placementForState, 'unverified: target chunk not loaded');
-            placementsSinceSave++;
-            await persistBuildState();
-          }
         } else if (blockAtMatches(bot, tx, ty, tz, block)) {
           placed++;
           if (buildState) {

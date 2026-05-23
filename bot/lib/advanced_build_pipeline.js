@@ -19,6 +19,10 @@ const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
 const FOREMAN_INVENTORY_EXEMPT = new Set([
   'water', 'lava', 'fire', 'soul_fire', 'bubble_column', 'powder_snow',
 ]);
+const INVENTORY_BLOCK_ALIASES = {
+  water: ['water_bucket'],
+  lava: ['lava_bucket'],
+};
 const DEFAULT_HEALTH_PAUSE_THRESHOLD = 8;
 const DEFAULT_HOSTILE_PAUSE_RADIUS = 10;
 const HOSTILE_MOB_TYPES = new Set([
@@ -67,6 +71,24 @@ export function inventoryCounts(items = []) {
   return counts;
 }
 
+export function inventoryBlockCount(available, block) {
+  const name = normalizeBlockName(block);
+  let have = Number(available?.[name] || 0);
+  for (const alias of INVENTORY_BLOCK_ALIASES[name] || []) {
+    have += Number(available?.[alias] || 0);
+  }
+  return have;
+}
+
+export function isRetryableBuildFailure(error) {
+  const msg = String(error || '').toLowerCase();
+  if (msg.includes('missing inventory')) return false;
+  return msg.includes('chunk not loaded')
+    || msg.includes('unverified')
+    || msg.includes('readback mismatch')
+    || msg.includes('place failed');
+}
+
 export function filterForemanRequired(required) {
   const filtered = Object.create(null);
   for (const [block, count] of Object.entries(required || {})) {
@@ -80,9 +102,10 @@ export function filterForemanRequired(required) {
 export function validateBillOfMaterials(required, available) {
   const missing = [];
   for (const [block, count] of Object.entries(required || {})) {
-    const have = Number(available?.[normalizeBlockName(block)] || 0);
+    const name = normalizeBlockName(block);
+    const have = inventoryBlockCount(available, name);
     const need = Number(count || 0);
-    if (have < need) missing.push({ block: normalizeBlockName(block), need, have, missing: need - have });
+    if (have < need) missing.push({ block: name, need, have, missing: need - have });
   }
   return { ok: missing.length === 0, missing };
 }
@@ -197,9 +220,13 @@ export function markPlacementFailed(state, placement, error, now = Date.now()) {
 
 export function pendingPlacements(plan, state = {}) {
   const completed = new Set(state.completed || []);
-  const failed = new Set((state.failed || []).map((f) => f.id));
+  const permanentFailed = new Set(
+    (state.failed || [])
+      .filter((f) => !isRetryableBuildFailure(f.error))
+      .map((f) => f.id),
+  );
   return (plan.placements || []).filter(
-    (placement) => !completed.has(placement.id) && !failed.has(placement.id),
+    (placement) => !completed.has(placement.id) && !permanentFailed.has(placement.id),
   );
 }
 

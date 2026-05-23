@@ -7,6 +7,7 @@ import {
   buildBillOfMaterials,
   buildStateFileForId,
   filterForemanRequired,
+  foremanBillOfMaterials,
   computeFootprint,
   createBuildState,
   createLayeredPlan,
@@ -32,7 +33,7 @@ const blocks = [
 
 test('filterForemanRequired skips fluids not carried in inventory', () => {
   assert.deepEqual(
-    { ...filterForemanRequired({ cobblestone: 24, water: 1, lava: 2 }) },
+    { ...filterForemanRequired({ cobblestone: 24, water: 1, lava: 2, flowing_water: 1, flowing_lava: 1 }) },
     { cobblestone: 24 },
   );
 });
@@ -97,8 +98,18 @@ test('pendingPlacements skips permanent failures but retries transient ones', ()
 });
 
 test('inventoryBlockCount accepts bucket aliases for fluids', () => {
-  const counts = inventoryCounts([{ name: 'water_bucket', count: 2 }]);
+  const counts = inventoryCounts([
+    { name: 'water_bucket', count: 2 },
+    { name: 'lava_bucket', count: 1 },
+  ]);
   assert.equal(inventoryBlockCount(counts, 'water'), 2);
+  assert.equal(inventoryBlockCount(counts, 'lava'), 1);
+});
+
+test('foremanBillOfMaterials keeps fluids when setblock is unavailable', () => {
+  const required = { cobblestone: 10, water: 1 };
+  assert.deepEqual({ ...foremanBillOfMaterials(required, false) }, required);
+  assert.deepEqual({ ...foremanBillOfMaterials(required, true) }, { cobblestone: 10 });
 });
 
 test('buildStateFileForId namespaces state per build', () => {

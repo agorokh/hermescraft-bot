@@ -33,7 +33,7 @@ import {
   buildStateFileForId,
   createBuildState,
   createLayeredPlan,
-  filterForemanRequired,
+  foremanBillOfMaterials,
   inventoryCounts,
   loadBuildState,
   markPlacementComplete,
@@ -646,7 +646,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
   const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
   if (bodyArgs.foreman === true && !resumingBuild) {
-    const required = filterForemanRequired(entry.materials || data.materials || buildPlan.materials);
+    const required = foremanBillOfMaterials(
+      entry.materials || data.materials || buildPlan.materials,
+      useChatCommand,
+    );
     const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
     if (!validation.ok) {
       const miss = validation.missing.map((m) => `${m.block} need ${m.need}, have ${m.have}`).join('; ');
@@ -687,10 +690,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     if (a[0] !== b[0]) return a[0] - b[0];
     return a[2] - b[2];
   });
-  const solidBlocks = blocks.filter(([, , , block]) =>
-    block && block !== 'air' && block !== 'cave_air' && block !== 'void_air'
-  );
-
   for (const [dx, dy, dz, block] of sorted) {
     if (skillWasStopped(bot, stopGen)) break;
     // Skip explicit air cells — schematic authors sometimes encode them as
@@ -790,7 +789,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
   const unverifiedStr = unverified > 0 ? ` ${unverified} cells unverified (chunk unloaded).` : '';
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
-  const total = solidBlocks.length;
+  const total = buildPlan.totalBlocks;
   const placedCount = totalPlacedSoFar();
   if (placedCount === total && total > 0) {
     if (buildState) {
@@ -845,7 +844,11 @@ async function plan_advanced_build(bot, { name, x, y, z }) {
   const { entry, data } = loaded;
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
   const plan = createLayeredPlan({ name, blocks: data.blocks || [], origin: { x: baseX, y: baseY, z: baseZ } });
-  const required = filterForemanRequired(entry.materials || data.materials || plan.materials);
+  const useChatCommand = await detectSetblockAuth(bot);
+  const required = foremanBillOfMaterials(
+    entry.materials || data.materials || plan.materials,
+    useChatCommand,
+  );
   const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
   const layerSummary = plan.layers.map((l) => `Y=${l.y}:${l.placements.length}`).join(', ');
   const scaffoldCount = plan.scaffolding.length;

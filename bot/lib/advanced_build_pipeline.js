@@ -17,7 +17,8 @@ export function buildStateFileForId(buildId) {
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
 /** Blocks placeable via /setblock but not carried as stackable inventory. */
 const FOREMAN_INVENTORY_EXEMPT = new Set([
-  'water', 'lava', 'fire', 'soul_fire', 'bubble_column', 'powder_snow',
+  'water', 'flowing_water', 'lava', 'flowing_lava', 'fire', 'soul_fire',
+  'bubble_column', 'powder_snow',
 ]);
 const INVENTORY_BLOCK_ALIASES = {
   water: ['water_bucket'],
@@ -97,6 +98,10 @@ export function filterForemanRequired(required) {
     filtered[name] = Number(count || 0);
   }
   return filtered;
+}
+
+export function foremanBillOfMaterials(required, setblockCapable = true) {
+  return setblockCapable ? filterForemanRequired(required) : { ...(required || {}) };
 }
 
 export function validateBillOfMaterials(required, available) {

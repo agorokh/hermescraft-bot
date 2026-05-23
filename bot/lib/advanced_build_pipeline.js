@@ -256,7 +256,12 @@ export function reconcileCompletedPlacements(plan, state = {}, blockNameAt) {
       removed.push({ id, reason: 'not in plan' });
       continue;
     }
-    const actual = normalizeBlockName(blockNameAt(placement.x, placement.y, placement.z));
+    const rawName = blockNameAt(placement.x, placement.y, placement.z);
+    if (rawName == null || rawName === '') {
+      kept.push(id);
+      continue;
+    }
+    const actual = normalizeBlockName(rawName);
     if (actual === placement.block) {
       kept.push(id);
     } else {

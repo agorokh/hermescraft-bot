@@ -539,7 +539,7 @@ async function loadSchematic(name) {
     const schematic = await Schematic.read(await readFile(file));
     const start = schematic.start();
     const blocks = [];
-    await schematic.forEach((block, pos) => {
+    schematic.forEach((block, pos) => {
       const blockName = normalizeBlockName(block?.name);
       if (!blockName || blockName === 'air' || blockName === 'cave_air' || blockName === 'void_air') return;
       blocks.push([pos.x - start.x, pos.y - start.y, pos.z - start.z, blockName]);

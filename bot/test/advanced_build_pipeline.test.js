@@ -105,6 +105,15 @@ test('resume reconciliation keeps completed placements verified in the world', (
   assert.equal(pendingPlacements(plan, reconciled).some((p) => p.id === plan.placements[0].id), false);
 });
 
+test('resume reconciliation keeps completed placements when readback is unavailable', () => {
+  const plan = createLayeredPlan({ name: 'tiny', blocks, origin: { x: 0, y: 70, z: 0 } });
+  const state = markPlacementComplete(createBuildState(plan, 1000), plan.placements[0], 2000);
+  const reconciled = reconcileCompletedPlacements(plan, state, () => null);
+
+  assert.deepEqual(reconciled.completed, state.completed);
+  assert.equal(pendingPlacements(plan, reconciled).some((p) => p.id === plan.placements[0].id), false);
+});
+
 test('pendingPlacements skips permanent failures but retries transient ones', () => {
   const plan = createLayeredPlan({ name: 'tiny', blocks, origin: { x: 0, y: 70, z: 0 } });
   const permanent = markPlacementFailed(createBuildState(plan), plan.placements[0], 'missing inventory');

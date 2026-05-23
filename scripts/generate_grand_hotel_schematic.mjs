@@ -84,10 +84,10 @@ for (let z = 1; z < L - 1; z++) {
   put(W - 1, 9, z, 'oak_fence');
 }
 
-// Warm visible lighting.
+// Warm visible lighting on interior floors (torch needs solid block below).
 for (const [x, y, z] of [
-  [3, 2, 2], [9, 2, 2], [3, 2, 8], [9, 2, 8],
-  [3, 6, 2], [9, 6, 2], [3, 6, 8], [9, 6, 8],
+  [3, 5, 2], [9, 5, 2], [3, 5, 8], [9, 5, 8],
+  [3, 9, 2], [9, 9, 2], [3, 9, 8], [9, 9, 8],
   [6, 9, 5],
 ]) {
   put(x, y, z, 'torch');

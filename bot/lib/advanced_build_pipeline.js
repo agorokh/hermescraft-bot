@@ -238,7 +238,15 @@ export function pendingPlacements(plan, state = {}) {
 }
 
 export function reconcileCompletedPlacements(plan, state = {}, blockNameAt) {
-  if (!state || !Array.isArray(state.completed) || typeof blockNameAt !== 'function') return state;
+  if (
+    !plan
+    || !Array.isArray(plan.placements)
+    || !state
+    || !Array.isArray(state.completed)
+    || typeof blockNameAt !== 'function'
+  ) {
+    return state;
+  }
   const expectedById = new Map((plan.placements || []).map((p) => [p.id, p]));
   const kept = [];
   const removed = [];

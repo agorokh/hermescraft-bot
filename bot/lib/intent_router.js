@@ -206,8 +206,8 @@ const INTENTS = [
       // an explicit pattern is required (post-mortem 2026-05-17 A/B run).
       /\b(build|make|put up|build me|set up|construct)\b.*\b(treehouse|tree house|tree fort|tree home)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/i,
-      /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(biggest|huge|giant|massive|grand|fancy)\b.*\b(house|home|build|building)\b/i,
-      /\b(build|make|put up|build me|set up|construct)\b.*\b(house|cottage|home|cabin)\b/i,
+      /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(biggest|huge|giant|massive|grand|fancy)\b.*\b(house|home|building|structure)\b/i,
+      /\b(build|make|put up|build me|set up|construct)\b.*\b(house|cottage|home|cabin|structure)\b/i,
       /\b(build|make|put up|set up|construct)\b.*\b(well|fountain)\b/i,
       // "design" added because kids say "Rosie design a garden" — original
       // verb list missed it, dropping garden prompts to 0.00 in live A/B.

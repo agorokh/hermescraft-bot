@@ -20,9 +20,9 @@ function readJson(file) {
 test('grand_hotel is a large advanced schematic with consistent materials', () => {
   const index = readJson('INDEX.json');
   const entry = index.schematics.grand_hotel;
-  const schematic = readJson(entry.file);
 
   assert.ok(entry, 'INDEX must expose grand_hotel');
+  const schematic = readJson(entry.file);
   assert.equal(schematic.blocks.length, 752);
   assert.ok(schematic.blocks.length > 700, 'hotel must be visibly larger than legacy templates');
   assert.deepEqual(schematic.materials, { ...buildBillOfMaterials(schematic.blocks) });

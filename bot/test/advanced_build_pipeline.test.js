@@ -113,6 +113,17 @@ test('waitWhileSentryRequired returns immediately when pause not required', asyn
   );
 });
 
+test('waitWhileSentryRequired honors maxPauseMs of zero', async () => {
+  const bot = {
+    health: 6,
+    entities: {},
+    entity: { position: { distanceTo: () => 999 } },
+  };
+  const result = await waitWhileSentryRequired(bot, { maxPauseMs: 0, checkIntervalMs: 1 });
+  assert.equal(result.paused, true);
+  assert.match(result.reason, /health/);
+});
+
 test('waitWhileSentryRequired treats invalid timing opts as defaults', async () => {
   const bot = {
     health: 20,

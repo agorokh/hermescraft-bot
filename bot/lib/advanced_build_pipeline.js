@@ -241,6 +241,7 @@ export function safetySnapshotFromBot(bot) {
 
 function normalizePauseMs(value, fallback) {
   const n = Number(value);
+  if (Number.isFinite(n) && n === 0) return 0;
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 

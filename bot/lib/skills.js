@@ -782,7 +782,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placedCount}/${total} blocks placed${mode}.${unverifiedStr}` };
   }
   if (buildState && placed + failed >= sorted.length) {
-    buildState.status = failed === 0 ? 'done' : 'partial';
+    buildState.status = (buildState.failed?.length || 0) > 0 ? 'partial' : 'done';
     buildState = { ...buildState, updated_at: Date.now() };
     await persistBuildState(true);
   } else if (buildState) {

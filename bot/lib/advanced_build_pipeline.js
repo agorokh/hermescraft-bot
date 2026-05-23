@@ -15,6 +15,10 @@ export function buildStateFileForId(buildId) {
 }
 
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
+/** Blocks placeable via /setblock but not carried as stackable inventory. */
+const FOREMAN_INVENTORY_EXEMPT = new Set([
+  'water', 'lava', 'fire', 'soul_fire', 'bubble_column', 'powder_snow',
+]);
 const DEFAULT_HEALTH_PAUSE_THRESHOLD = 8;
 const DEFAULT_HOSTILE_PAUSE_RADIUS = 10;
 const HOSTILE_MOB_TYPES = new Set([
@@ -61,6 +65,16 @@ export function inventoryCounts(items = []) {
     counts[name] = (counts[name] || 0) + Number(item.count || 0);
   }
   return counts;
+}
+
+export function filterForemanRequired(required) {
+  const filtered = Object.create(null);
+  for (const [block, count] of Object.entries(required || {})) {
+    const name = normalizeBlockName(block);
+    if (FOREMAN_INVENTORY_EXEMPT.has(name)) continue;
+    filtered[name] = Number(count || 0);
+  }
+  return filtered;
 }
 
 export function validateBillOfMaterials(required, available) {
@@ -192,7 +206,7 @@ export function pendingPlacements(plan, state = {}) {
 export async function saveBuildState(state, file = BUILD_STATE_FILE) {
   await mkdir(dirname(file), { recursive: true });
   const payload = `${JSON.stringify(state, null, 2)}\n`;
-  const tmp = `${file}.tmp-${process.pid}`;
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   await writeFile(tmp, payload, 'utf8');
   await rename(tmp, file);
 }
@@ -240,9 +254,9 @@ export function safetySnapshotFromBot(bot) {
 }
 
 function normalizePauseMs(value, fallback) {
+  if (value == null) return fallback;
   const n = Number(value);
-  if (Number.isFinite(n) && n === 0) return 0;
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+  return Number.isFinite(n) ? Math.max(0, n) : fallback;
 }
 
 function normalizeIntervalMs(value, fallback) {

@@ -896,6 +896,33 @@ async function createBot() {
           _wrapBuildSchematic._hc_automem_wrapped = true;
           ACTIONS.build_schematic = _wrapBuildSchematic;
         }
+        const _origBuildSchematicAdvanced = ACTIONS.build_schematic_advanced;
+        if (_origBuildSchematicAdvanced && !_origBuildSchematicAdvanced._hc_automem_wrapped) {
+          const _wrapBuildSchematicAdvanced = async (body) => {
+            const result = await _origBuildSchematicAdvanced(body);
+            try {
+              const r = result?.result || '';
+              let m = r.match(/Built (?:schematic )?"?([\w_-]+)"? at ([-\d]+),([-\d]+),([-\d]+) — (\d+)\/(\d+)/);
+              let schemName, x, y, z, placed, total;
+              if (m) {
+                [, schemName, x, y, z, placed, total] = m;
+              } else {
+                m = r.match(/Built (\d+)\/(\d+) of "([\w_-]+)" at ([-\d]+),([-\d]+),([-\d]+)/);
+                if (m) [, placed, total, schemName, x, y, z] = m;
+              }
+              if (m && Number(placed) > 0) {
+                const kidName = body && typeof body.kid_name === 'string' && body.kid_name.trim()
+                  ? body.kid_name.trim()
+                  : null;
+                const label = kidName ? `${kidName} (${schemName})` : schemName;
+                autoRememberFact(`Built ${label} for kid at ${x},${y},${z} (${placed}/${total} blocks). Schematic build.`);
+              }
+            } catch { /* swallow */ }
+            return result;
+          };
+          _wrapBuildSchematicAdvanced._hc_automem_wrapped = true;
+          ACTIONS.build_schematic_advanced = _wrapBuildSchematicAdvanced;
+        }
         const _origBuildTower = ACTIONS.build_tower;
         if (_origBuildTower && !_origBuildTower._hc_automem_wrapped) {
           const _wrapBuildTower = async (body) => {

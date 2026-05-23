@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import {
   buildBillOfMaterials,
   buildStateFileForId,
+  filterForemanRequired,
   computeFootprint,
   createBuildState,
   createLayeredPlan,
@@ -27,6 +28,13 @@ const blocks = [
   [0, 1, 0, 'glass_pane'],
   [0, 2, 0, 'oak_planks'],
 ];
+
+test('filterForemanRequired skips fluids not carried in inventory', () => {
+  assert.deepEqual(
+    { ...filterForemanRequired({ cobblestone: 24, water: 1, lava: 2 }) },
+    { cobblestone: 24 },
+  );
+});
 
 test('buildBillOfMaterials ignores air and normalizes minecraft namespace', () => {
   assert.deepEqual({ ...buildBillOfMaterials(blocks) }, {

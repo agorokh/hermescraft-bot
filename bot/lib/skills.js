@@ -33,6 +33,7 @@ import {
   buildStateFileForId,
   createBuildState,
   createLayeredPlan,
+  filterForemanRequired,
   inventoryCounts,
   loadBuildState,
   markPlacementComplete,
@@ -626,7 +627,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     placementsSinceSave = 0;
   };
   if (bodyArgs.foreman === true) {
-    const required = entry.materials || data.materials || buildPlan.materials;
+    const required = filterForemanRequired(entry.materials || data.materials || buildPlan.materials);
     const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
     if (!validation.ok) {
       const miss = validation.missing.map((m) => `${m.block} need ${m.need}, have ${m.have}`).join('; ');
@@ -739,6 +740,11 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       if (!findInventoryItem(bot, block)) {
         missing.add(block);
         failed++;
+        if (buildState) {
+          buildState = markPlacementFailed(buildState, placementForState, 'missing inventory');
+          placementsSinceSave++;
+          await persistBuildState();
+        }
         continue;
       }
       const r = await placeOne(bot, block, tx, ty, tz);
@@ -782,7 +788,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placedCount}/${total} blocks placed${mode}.${unverifiedStr}` };
   }
   if (buildState && placed + failed >= sorted.length) {
-    buildState.status = (buildState.failed?.length || 0) > 0 ? 'partial' : 'done';
+    buildState.status = placedCount === total ? 'done' : 'partial';
     buildState = { ...buildState, updated_at: Date.now() };
     await persistBuildState(true);
   } else if (buildState) {
@@ -826,7 +832,7 @@ async function plan_advanced_build(bot, { name, x, y, z }) {
   const { entry, data } = loaded;
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
   const plan = createLayeredPlan({ name, blocks: data.blocks || [], origin: { x: baseX, y: baseY, z: baseZ } });
-  const required = entry.materials || data.materials || plan.materials;
+  const required = filterForemanRequired(entry.materials || data.materials || plan.materials);
   const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
   const layerSummary = plan.layers.map((l) => `Y=${l.y}:${l.placements.length}`).join(', ');
   const scaffoldCount = plan.scaffolding.length;

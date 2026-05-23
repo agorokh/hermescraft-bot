@@ -88,7 +88,7 @@ const gallery = [
   payload(
     'crystal_observatory',
     [11, 11],
-    12,
+    11,
     '11x11 crystal observatory with amethyst pylons, glass dome, glowstone telescope floor, and dark tile base',
     (b) => {
       b.circle(5, 5, 0, 5, 'deepslate_tiles');
@@ -136,7 +136,7 @@ const gallery = [
   payload(
     'market_square',
     [15, 15],
-    6,
+    5,
     '15x15 village market square with four colorful stalls, barrel counters, lanterns, and a central path cross',
     (b) => {
       b.rect(0, 14, 0, 14, 0, 'stone');
@@ -166,7 +166,7 @@ const gallery = [
   payload(
     'sky_bridge',
     [17, 5],
-    6,
+    7,
     '17x5 raised oak-and-cobblestone sky bridge with railings, arch supports, and torch markers',
     (b) => {
       for (let x = 0; x < 17; x++) {
@@ -190,7 +190,7 @@ const gallery = [
   payload(
     'beacon_plaza',
     [13, 13],
-    8,
+    6,
     '13x13 bright beacon plaza with quartz rings, sea-lantern corners, and a raised central beacon pedestal',
     (b) => {
       b.circle(6, 6, 0, 6, 'polished_andesite');

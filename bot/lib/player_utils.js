@@ -66,7 +66,16 @@ export function normalizeBuildBaseY(bot, x, z, rawY) {
     [x, z + 1],
   ];
   for (let y = startY; y >= endY; y--) {
-    for (const [cx, cz] of columns) {
+    // Prefer the build column before neighbors so canopy/structure in adjacent
+    // columns does not steal the foot Y.
+    const [centerX, centerZ] = columns[0];
+    const centerGround = bot.blockAt(new Vec3(centerX, y, centerZ));
+    const centerSpace = bot.blockAt(new Vec3(centerX, y + 1, centerZ));
+    if (isSolidGround(centerGround) && (!centerSpace || CLEAR_FOOT_BLOCKS.has(centerSpace.name))) {
+      return y + 1;
+    }
+    for (let i = 1; i < columns.length; i++) {
+      const [cx, cz] = columns[i];
       const ground = bot.blockAt(new Vec3(cx, y, cz));
       const space = bot.blockAt(new Vec3(cx, y + 1, cz));
       if (isSolidGround(ground) && (!space || CLEAR_FOOT_BLOCKS.has(space.name))) {

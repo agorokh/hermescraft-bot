@@ -654,14 +654,15 @@ async function handleChat(username, message) {
 
   if (forMe) {
     // Message is for us — add to chatLog (visible in mc read_chat / mc status)
-    chatLog.push({
+    const chatEntry = {
       time: Date.now(),
       from: username,
       message: routing.body,
       private: !routing.isBroadcast,
       channel: routing.channel,
       targets: routing.targets.length > 0 ? routing.targets : undefined,
-    });
+    };
+    chatLog.push(chatEntry);
     if (chatLog.length > MAX_LOG) chatLog.shift();
     log(`[Chat${routing.isBroadcast ? '' : ' @me'}] <${username}> ${routing.body}`);
     
@@ -683,12 +684,9 @@ async function handleChat(username, message) {
           }
           log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
           if (ACTIONS[route.action]) {
-            const latestChat = chatLog[chatLog.length - 1];
-            if (latestChat && latestChat.from === username && latestChat.message === routing.body) {
-              latestChat.handledByRouter = true;
-              latestChat.routerIntent = route.intent_name;
-              latestChat.routerAction = route.action;
-            }
+            chatEntry.handledByRouter = true;
+            chatEntry.routerIntent = route.intent_name;
+            chatEntry.routerAction = route.action;
             const actionBody = actionBodyForRoute(route);
             // Fire-and-forget — long-running actions don't block chat thread.
             runIntentRoutedAction(route.action, actionBody).then((result) => {
@@ -752,12 +750,9 @@ async function handleChat(username, message) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }
               const actionBody = actionBodyForRoute(route);
-              const latestChat = chatLog[chatLog.length - 1];
-              if (latestChat && latestChat.from === username && latestChat.message === routing.body) {
-                latestChat.handledByRouter = true;
-                latestChat.routerIntent = route.intent_name;
-                latestChat.routerAction = route.action;
-              }
+              chatEntry.handledByRouter = true;
+              chatEntry.routerIntent = route.intent_name;
+              chatEntry.routerAction = route.action;
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               runIntentRoutedAction(route.action, actionBody).then((result) => {
                 handleIntentRouterActionResult({

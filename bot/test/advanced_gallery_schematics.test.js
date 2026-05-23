@@ -54,6 +54,14 @@ test('advanced gallery schematics are large, valid, and Foreman-readable', () =>
   }
 });
 
+
+test('generic bridge and beacon words do not hijack gallery schematics', () => {
+  assert.equal(resolveSchematicName('build a castle with a bridge'), 'small_tower');
+  assert.equal(resolveSchematicName('build a house near the bridge'), 'small_house');
+  assert.equal(resolveSchematicName('place a beacon on the hill'), null);
+  assert.equal(resolveSchematicName('build a sky bridge over the river'), 'sky_bridge');
+});
+
 test('kid gallery aliases route to the advanced Foreman path', () => {
   for (const [body, expected] of [
     ['rosie build a crystal observatory here', 'crystal_observatory'],

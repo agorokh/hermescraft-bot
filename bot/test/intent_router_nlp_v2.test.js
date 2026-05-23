@@ -224,6 +224,14 @@ test('gallery prompts route to advanced build schematic action', async () => {
   }
 });
 
+
+test('imperative remember-to-build gallery prompts still route', async () => {
+  const r = await tryRouteRegex(stubBot(), 'remember to build a wizard tower here', 'Adalynn');
+  assert.equal(r.matched, true, `expected imperative regex route: ${r.action}`);
+  assert.equal(r.action, 'build_schematic_advanced');
+  assert.equal(r.body.name, 'wizard_tower');
+});
+
 test('gallery discussion prompts do not dispatch advanced builds', async () => {
   for (const body of [
     'should we build a sky bridge someday?',

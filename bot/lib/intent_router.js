@@ -25,7 +25,7 @@
 // ctx = { sender, senderEntity, message, body }
 
 import { extractOreFromBody } from './intent_slot_extract.js';
-import { isAdvancedSchematicName, resolveSchematicName } from './schematic_resolve.js';
+import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
@@ -450,14 +450,6 @@ const INTENTS = [
 ];
 
 // ── Public router ──────────────────────────────────────────────────
-
-function isSpeculativeBuildDiscussion(body) {
-  const text = String(body || '').toLowerCase();
-  if (!/\b(build|building|make|construct|design|create|observatory|wizard tower|market square|sky bridge|beacon plaza)\b/.test(text)) return false;
-  return /\b(should we|someday|some day|later|another day|wish we could|tell me a story|remember|talked about)\b/.test(text)
-    || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build|do you remember|where (is|are|did))\b/.test(text);
-}
-
 // Deterministic stop/cancel hot path — must run before NLP classification.
 export async function tryStopRoute(bot, body, sender) {
   if (!bot || !body) return { matched: false };

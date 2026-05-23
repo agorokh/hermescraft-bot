@@ -160,6 +160,7 @@ test('schematic routes lift low surface Y when target chunk readback is missing'
   bot.blockAt = () => null;
   const route = await tryRoute(bot, 'Rosie build a sky bridge here', 'Adalynn');
   assert.ok(route.matched, 'sky bridge prompt must route');
+  assert.equal(route.action, 'build_schematic_advanced');
   assert.equal(route.body.name, 'sky_bridge');
   assert.equal(route.body.y, 65);
 });

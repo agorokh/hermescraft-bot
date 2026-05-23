@@ -29,10 +29,10 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { extractGatherBlockFromBody, extractOreFromBody } from './intent_slot_extract.js';
-import { isAdvancedSchematicName, resolveSchematicName } from './schematic_resolve.js';
+import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
-import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { findPlayerEntity, normalizeBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,14 +76,6 @@ function _ctxBuf(bot) {
   if (fresh.length !== buf.length) _ctxBufByBot.set(bot.username, fresh);
   return fresh.length > 0 ? fresh : null;
 }
-
-function isSpeculativeBuildDiscussion(body) {
-  const text = String(body || '').toLowerCase();
-  if (!/\b(build|building|make|construct|design|create|observatory|wizard tower|market square|sky bridge|beacon plaza)\b/.test(text)) return false;
-  return /\b(should we|someday|some day|later|another day|wish we could|tell me a story|remember|talked about)\b/.test(text)
-    || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build|do you remember|where (is|are|did))\b/.test(text);
-}
-
 // Chat ACK placeholders (fish/farm/cook) must not evict build skills from the buffer;
 // conversational chat intents may repeat ("say something nice" → "do it again").
 const CHAT_BUFFER_INTENTS = new Set([
@@ -373,10 +365,17 @@ const DISPATCHERS = {
     const name = resolveSchematicName(ctx.body);
     if (name === 'list') return { action: 'list_schematics', body: {} };
     if (!name) return null;
+    const buildX = Math.floor(p.x) + 2;
+    const buildZ = Math.floor(p.z);
     const action = isAdvancedSchematicName(name) ? 'build_schematic_advanced' : 'build_schematic';
     return {
       action,
-      body: { name, x: Math.floor(p.x) + 2, y: Math.floor(p.y), z: Math.floor(p.z) },
+      body: {
+        name,
+        x: buildX,
+        y: normalizeBuildBaseY(bot, buildX, buildZ, p.y),
+        z: buildZ,
+      },
     };
   },
 

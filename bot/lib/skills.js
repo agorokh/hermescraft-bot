@@ -654,6 +654,36 @@ async function detectSetblockAuth(bot) {
   return ok;
 }
 
+
+async function waitForSetblockOutcome(bot, { x, y, z, block }, timeoutMs = SETBLOCK_CHAT_INTERVAL_MS + 150) {
+  const coordComma = `${x}, ${y}, ${z}`;
+  const coordSpace = `${x} ${y} ${z}`;
+  let feedbackOk = false;
+  let feedbackFail = false;
+  const onMessage = (message) => {
+    const text = String(message || '').toLowerCase();
+    const mentionsCoord = text.includes(coordComma) || text.includes(coordSpace);
+    if (!mentionsCoord) return;
+    if (text.includes('changed the block') || text.includes('set block')) feedbackOk = true;
+    if (text.includes('cannot') || text.includes('unknown block') || text.includes('failed')
+      || text.includes('out of bounds') || text.includes('not allowed')) {
+      feedbackFail = true;
+    }
+  };
+  try { bot.on?.('messagestr', onMessage); } catch {}
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (feedbackFail) break;
+    if (feedbackOk || blockAtMatches(bot, x, y, z, block)) break;
+    await sleep(25);
+  }
+  try { bot.removeListener?.('messagestr', onMessage); } catch {}
+  if (feedbackFail) return { ok: false, reason: 'setblock rejected' };
+  if (feedbackOk || blockAtMatches(bot, x, y, z, block)) return { ok: true };
+  if (!bot.blockAt(new Vec3(x, y, z))) return { ok: null, reason: 'chunk unloaded' };
+  return { ok: false, reason: 'readback mismatch' };
+}
+
 async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const stopGen = captureStopGen(bot);
   if (!name) return { result: `build_schematic needs a schematic name` };
@@ -800,11 +830,20 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       try {
         bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
         // Wait for server + world sync, then verify before counting success.
-        await sleep(SETBLOCK_CHAT_INTERVAL_MS);
-        if (trustedSetblock) {
+        const outcome = await waitForSetblockOutcome(bot, { x: tx, y: ty, z: tz, block });
+        if (outcome.ok === true) {
           placed++;
           if (buildState) {
             buildState = markPlacementComplete(buildState, placementForState);
+            placementsSinceSave++;
+            await persistBuildState();
+          }
+        } else if (outcome.ok === null) {
+          unverified++;
+        } else if (trustedSetblock) {
+          failed++;
+          if (buildState) {
+            buildState = markPlacementFailed(buildState, placementForState, outcome.reason || 'setblock failed');
             placementsSinceSave++;
             await persistBuildState();
           }

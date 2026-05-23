@@ -24,8 +24,8 @@ export function resolveSchematicName(body) {
   if (/\b(observatory|telescope|stargazing|star\s*tower|crystal\s*lab)\b/.test(b)) return 'crystal_observatory';
   if (/\b(wizard|mage|magic|spell)\b/.test(b) && /\b(tower|spire|castle|house)\b/.test(b)) return 'wizard_tower';
   if (/\b(market|marketplace|bazaar|village\s*square|town\s*square|shopping\s*street)\b/.test(b)) return 'market_square';
-  if (/\b(sky\s*bridge|bridge|walkway|overpass)\b/.test(b)) return 'sky_bridge';
-  if (/\b(beacon\s*plaza|beacon|plaza|light\s*plaza)\b/.test(b)) return 'beacon_plaza';
+  if (/\b(sky\s*bridge|sky\s*walkway|sky\s*overpass)\b/.test(b)) return 'sky_bridge';
+  if (/\b(beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/.test(b)) return 'beacon_plaza';
   if (/\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/.test(b)) return 'grand_hotel';
   if (/\b(ice|frozen|frosty)\b/.test(b) && /\b(castle|fort|house|palace|home|cottage)\b/.test(b)) {
     return 'ice_castle';
@@ -46,3 +46,13 @@ export function resolveSchematicName(body) {
 export function isAdvancedSchematicName(name) {
   return ADVANCED_SCHEMATICS.has(String(name || '').toLowerCase());
 }
+/** Recall / hypothetical build chat — must not dispatch a schematic placement. */
+export function isSpeculativeBuildDiscussion(body) {
+  const text = String(body || '').toLowerCase();
+  if (!/\b(build|building|make|construct|design|create|observatory|wizard tower|market square|sky bridge|beacon plaza)\b/.test(text)) {
+    return false;
+  }
+  return /\b(should we|someday|some day|later|another day|wish we could|tell me a story|talked about|do you remember|remember when)\b/.test(text)
+    || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build|where (is|are|did))\b/.test(text);
+}
+

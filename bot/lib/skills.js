@@ -78,7 +78,8 @@ function bodyFlagEnabled(value, defaultEnabled = true) {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
   let s = String(value).trim().toLowerCase();
-  if (s.includes('=')) s = s.split('=', 1)[1];
+  const eq = s.indexOf('=');
+  if (eq !== -1) s = s.slice(eq + 1).trim();
   if (['0', 'false', 'no', 'off'].includes(s)) return false;
   if (['1', 'true', 'yes', 'on'].includes(s)) return true;
   return defaultEnabled;

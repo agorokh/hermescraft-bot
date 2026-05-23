@@ -650,7 +650,11 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       entry.materials || data.materials || buildPlan.materials,
       useChatCommand,
     );
-    const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
+    const validation = validateBillOfMaterials(
+      required,
+      inventoryCounts(bot.inventory.items()),
+      useChatCommand,
+    );
     if (!validation.ok) {
       const miss = validation.missing.map((m) => `${m.block} need ${m.need}, have ${m.have}`).join('; ');
       return { result: `Foreman rejected "${name}" at ${baseX},${baseY},${baseZ}: missing materials — ${miss}.` };
@@ -849,7 +853,11 @@ async function plan_advanced_build(bot, { name, x, y, z }) {
     entry.materials || data.materials || plan.materials,
     useChatCommand,
   );
-  const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
+  const validation = validateBillOfMaterials(
+    required,
+    inventoryCounts(bot.inventory.items()),
+    useChatCommand,
+  );
   const layerSummary = plan.layers.map((l) => `Y=${l.y}:${l.placements.length}`).join(', ');
   const scaffoldCount = plan.scaffolding.length;
   if (!validation.ok) {

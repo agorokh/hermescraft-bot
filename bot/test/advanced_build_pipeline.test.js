@@ -106,6 +106,13 @@ test('inventoryBlockCount accepts bucket aliases for fluids', () => {
   assert.equal(inventoryBlockCount(counts, 'lava'), 1);
 });
 
+test('validateBillOfMaterials ignores bucket aliases without setblock', () => {
+  const available = inventoryCounts([{ name: 'water_bucket', count: 1 }]);
+  const result = validateBillOfMaterials({ water: 1 }, available, false);
+  assert.equal(result.ok, false);
+  assert.equal(result.missing[0].block, 'water');
+});
+
 test('foremanBillOfMaterials keeps fluids when setblock is unavailable', () => {
   const required = { cobblestone: 10, water: 1 };
   assert.deepEqual({ ...foremanBillOfMaterials(required, false) }, required);

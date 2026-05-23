@@ -104,11 +104,13 @@ export function foremanBillOfMaterials(required, setblockCapable = true) {
   return setblockCapable ? filterForemanRequired(required) : { ...(required || {}) };
 }
 
-export function validateBillOfMaterials(required, available) {
+export function validateBillOfMaterials(required, available, setblockCapable = true) {
   const missing = [];
   for (const [block, count] of Object.entries(required || {})) {
     const name = normalizeBlockName(block);
-    const have = inventoryBlockCount(available, name);
+    const have = setblockCapable
+      ? inventoryBlockCount(available, name)
+      : Number(available?.[name] || 0);
     const need = Number(count || 0);
     if (have < need) missing.push({ block: name, need, have, missing: need - have });
   }

@@ -29,6 +29,18 @@ import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
+import {
+  createBuildState,
+  createLayeredPlan,
+  inventoryCounts,
+  loadBuildState,
+  markPlacementComplete,
+  markPlacementFailed,
+  pendingPlacements,
+  saveBuildState,
+  validateBillOfMaterials,
+  waitWhileSentryRequired,
+} from './advanced_build_pipeline.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -603,6 +615,27 @@ async function build_schematic(bot, { name, x, y, z }) {
   // Detect once, then route every cell through chat commands until proven
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
   const useChatCommand = await detectSetblockAuth(bot);
+  const bodyArgs = arguments[1] || {};
+  const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
+  let buildState = null;
+  if (bodyArgs.foreman === true) {
+    const required = entry.materials || data.materials || buildPlan.materials;
+    const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
+    if (!validation.ok) {
+      const miss = validation.missing.map((m) => `${m.block} need ${m.need}, have ${m.have}`).join('; ');
+      return { result: `Foreman rejected "${name}" at ${baseX},${baseY},${baseZ}: missing materials — ${miss}.` };
+    }
+  }
+  if (bodyArgs.record_state === true || bodyArgs.resume === true) {
+    const saved = bodyArgs.resume === true ? await loadBuildState() : null;
+    if (saved && saved.build_id === `${name}-${baseX}-${baseY}-${baseZ}` && saved.status !== 'done') {
+      buildState = saved;
+    } else {
+      buildState = createBuildState(buildPlan);
+    }
+    await saveBuildState(buildState);
+  }
+
   bot._schematicBuildActive = true;
   let placed = 0;
   let failed = 0;
@@ -620,7 +653,9 @@ async function build_schematic(bot, { name, x, y, z }) {
   }
   if (skillWasStopped(bot, stopGen)) return { result: `build_schematic interrupted` };
 
-  const sorted = [...blocks].sort((a, b) => {
+  const sorted = buildState
+    ? pendingPlacements(buildPlan, buildState).map((p) => [p.dx, p.dy, p.dz, p.block])
+    : [...blocks].sort((a, b) => {
     if (a[1] !== b[1]) return a[1] - b[1];
     if (a[0] !== b[0]) return a[0] - b[0];
     return a[2] - b[2];
@@ -636,6 +671,19 @@ async function build_schematic(bot, { name, x, y, z }) {
     // hazard; physical placeBlock just no-ops.
     if (!block || block === 'air' || block === 'cave_air' || block === 'void_air') continue;
     const tx = baseX + dx, ty = baseY + dy, tz = baseZ + dz;
+    const placementForState = { id: `${tx},${ty},${tz}:${normalizeBlockName(block)}` };
+
+    if (bodyArgs.sentry_pause !== false) {
+      const sentry = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
+      if (sentry.paused) {
+        if (buildState) {
+          buildState.status = 'paused_sentry';
+          buildState.pause_reason = sentry.reason;
+          await saveBuildState(buildState);
+        }
+        return { result: `Build "${name}" paused for Sentry Mode: ${sentry.reason}. Resume with build_schematic_advanced resume=true.` };
+      }
+    }
 
     if (useChatCommand) {
       // Rapid /setblock burst. The server processes commands in order, so
@@ -647,10 +695,25 @@ async function build_schematic(bot, { name, x, y, z }) {
         await sleep(SETBLOCK_CHAT_INTERVAL_MS);
         const readback = bot.blockAt(new Vec3(tx, ty, tz));
         if (!readback) unverified++;
-        else if (blockAtMatches(bot, tx, ty, tz, block)) placed++;
-        else failed++;
+        else if (blockAtMatches(bot, tx, ty, tz, block)) {
+          placed++;
+          if (buildState) {
+            buildState = markPlacementComplete(buildState, placementForState);
+            await saveBuildState(buildState);
+          }
+        } else {
+          failed++;
+          if (buildState) {
+            buildState = markPlacementFailed(buildState, placementForState, 'readback mismatch');
+            await saveBuildState(buildState);
+          }
+        }
       } catch (e) {
         failed++;
+        if (buildState) {
+          buildState = markPlacementFailed(buildState, placementForState, e.message);
+          await saveBuildState(buildState);
+        }
       }
     } else {
       // Survival / non-op fallback. Requires the bot to have the block in
@@ -662,8 +725,19 @@ async function build_schematic(bot, { name, x, y, z }) {
         continue;
       }
       const r = await placeOne(bot, block, tx, ty, tz);
-      if (r.ok) placed++;
-      else failed++;
+      if (r.ok) {
+        placed++;
+        if (buildState) {
+          buildState = markPlacementComplete(buildState, placementForState);
+          await saveBuildState(buildState);
+        }
+      } else {
+        failed++;
+        if (buildState) {
+          buildState = markPlacementFailed(buildState, placementForState, r.reason || 'place failed');
+          await saveBuildState(buildState);
+        }
+      }
       // Move closer if we drift out of reach (every 8 placements).
       if ((placed + failed) % 8 === 0) {
         try {
@@ -680,7 +754,17 @@ async function build_schematic(bot, { name, x, y, z }) {
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
   const total = solidBlocks.length;
   if (placed === total && total > 0) {
+    if (buildState) {
+      buildState.status = 'done';
+      buildState = { ...buildState, updated_at: Date.now() };
+      await saveBuildState(buildState);
+    }
     return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placed}/${total} blocks placed${mode}.${unverifiedStr}` };
+  }
+  if (buildState && placed + failed >= sorted.length) {
+    buildState.status = failed === 0 ? 'done' : 'partial';
+    buildState = { ...buildState, updated_at: Date.now() };
+    await saveBuildState(buildState);
   }
   return {
     result: `Built ${placed}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${missingStr}${unverifiedStr}`,
@@ -706,6 +790,36 @@ async function list_schematics(bot, _body) {
   }
 }
 
+async function plan_advanced_build(bot, { name, x, y, z }) {
+  if (!name) return { result: `plan_advanced_build needs a schematic name` };
+  if (x == null || y == null || z == null) return { result: `plan_advanced_build needs x, y, z origin` };
+
+  const loaded = await loadSchematic(name);
+  if (loaded.error) return { result: loaded.error };
+  const { entry, data } = loaded;
+  const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
+  const plan = createLayeredPlan({ name, blocks: data.blocks || [], origin: { x: baseX, y: baseY, z: baseZ } });
+  const required = entry.materials || data.materials || plan.materials;
+  const validation = validateBillOfMaterials(required, inventoryCounts(bot.inventory.items()));
+  const layerSummary = plan.layers.map((l) => `Y=${l.y}:${l.placements.length}`).join(', ');
+  const scaffoldCount = plan.scaffolding.length;
+  if (!validation.ok) {
+    const miss = validation.missing.map((m) => `${m.block} need ${m.need}, have ${m.have}`).join('; ');
+    return { result: `Foreman rejected "${name}" at ${baseX},${baseY},${baseZ}: missing materials — ${miss}. Plan was ${plan.totalBlocks} blocks, layers ${layerSummary}, ${scaffoldCount} outside-footprint scaffold cells.` };
+  }
+  return { result: `Foreman approved "${name}" at ${baseX},${baseY},${baseZ}: ${plan.totalBlocks} blocks, layers ${layerSummary}, ${scaffoldCount} outside-footprint scaffold cells. Ready for build_schematic_advanced.` };
+}
+
+async function build_schematic_advanced(bot, body) {
+  return build_schematic(bot, {
+    ...body,
+    foreman: true,
+    record_state: true,
+    resume: body?.resume !== false,
+    sentry_pause: body?.sentry_pause !== false,
+  });
+}
+
 // ── Public registration helper ──────────────────────────────────────
 
 export function registerHighLevelSkills(ACTIONS, ensureBot) {
@@ -715,6 +829,8 @@ export function registerHighLevelSkills(ACTIONS, ensureBot) {
   ACTIONS.light_area        = async (body) => light_area(ensureBot(), body);
   ACTIONS.follow_player_v2  = async (body) => follow_player_v2(ensureBot(), body);
   ACTIONS.build_schematic   = async (body) => build_schematic(ensureBot(), body);
+  ACTIONS.plan_advanced_build = async (body) => plan_advanced_build(ensureBot(), body);
+  ACTIONS.build_schematic_advanced = async (body) => build_schematic_advanced(ensureBot(), body);
   ACTIONS.list_schematics   = async (body) => list_schematics(ensureBot(), body);
   return ACTIONS;
 }

@@ -984,6 +984,8 @@ SKILL PRIMITIVES (high-level intent verbs):
   mc scene|perceive [range]                   Scene summary (GET /scene; legacy mc perceive)
   mc sense                                    Full perception snapshot (POST /action/perceive)
   mc build_schematic|schem NAME X Y Z         Place schematic at origin
+  mc plan_advanced_build|plan_build NAME X Y Z Foreman plan + inventory validation
+  mc build_schematic_advanced|adv_schem NAME X Y Z [resume]  Background Foreman build
   mc list_schematics|schems                   List available schematics
 
 SOCIAL:
@@ -1109,6 +1111,27 @@ EOF
         require_int "$X"; require_int "$Y"; require_int "$Z"
         SCHEM_JSON=$(python3 -c "import json,sys; print(json.dumps({'name':sys.argv[1],'x':int(sys.argv[2]),'y':int(sys.argv[3]),'z':int(sys.argv[4])}))" "$NAME" "$X" "$Y" "$Z")
         pretty "$(api_post '/action/build_schematic' "$SCHEM_JSON")"
+        ;;
+
+    plan_advanced_build|plan_build|foreman_plan)
+        NAME="${1:?Usage: mc plan_advanced_build NAME X Y Z}"
+        X="${2:?Usage: mc plan_advanced_build NAME X Y Z}"
+        Y="${3:?Usage: mc plan_advanced_build NAME X Y Z}"
+        Z="${4:?Usage: mc plan_advanced_build NAME X Y Z}"
+        require_int "$X"; require_int "$Y"; require_int "$Z"
+        ADV_PLAN_JSON=$(python3 -c "import json,sys; print(json.dumps({'name':sys.argv[1],'x':int(sys.argv[2]),'y':int(sys.argv[3]),'z':int(sys.argv[4])}))" "$NAME" "$X" "$Y" "$Z")
+        pretty "$(api_post '/action/plan_advanced_build' "$ADV_PLAN_JSON")"
+        ;;
+
+    build_schematic_advanced|adv_schem|advanced_build)
+        NAME="${1:?Usage: mc build_schematic_advanced NAME X Y Z [resume=true]}"
+        X="${2:?Usage: mc build_schematic_advanced NAME X Y Z [resume=true]}"
+        Y="${3:?Usage: mc build_schematic_advanced NAME X Y Z [resume=true]}"
+        Z="${4:?Usage: mc build_schematic_advanced NAME X Y Z [resume=true]}"
+        RESUME="${5:-true}"
+        require_int "$X"; require_int "$Y"; require_int "$Z"
+        ADV_BUILD_JSON=$(python3 -c "import json,sys; resume=str(sys.argv[5]).lower() not in ('0','false','no','off'); print(json.dumps({'name':sys.argv[1],'x':int(sys.argv[2]),'y':int(sys.argv[3]),'z':int(sys.argv[4]),'resume':resume}))" "$NAME" "$X" "$Y" "$Z" "$RESUME")
+        pretty "$(api_post '/task/build_schematic_advanced' "$ADV_BUILD_JSON")"
         ;;
 
     list_schematics|schematics|schems)

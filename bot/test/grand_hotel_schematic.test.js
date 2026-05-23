@@ -47,6 +47,16 @@ test('hotel aliases resolve to the advanced grand_hotel target', () => {
   assert.equal(isAdvancedSchematicName('small_house'), false);
 });
 
+test('specialized schematics win over grand_hotel adjective fallback', () => {
+  for (const [body, expected] of [
+    ['build a giant tree house', 'treehouse'],
+    ['build a grand tree home', 'treehouse'],
+    ['make a huge ice castle', 'ice_castle'],
+  ]) {
+    assert.equal(resolveSchematicName(body), expected, body);
+  }
+});
+
 test('Foreman validates grand_hotel inventory deterministically', () => {
   const schematic = readJson('grand_hotel.json');
   const missing = validateBillOfMaterials(schematic.materials, { oak_planks: 64 });

@@ -243,6 +243,7 @@ export async function loadBuildState(file = BUILD_STATE_FILE) {
     return JSON.parse(await readFile(file, 'utf8'));
   } catch (e) {
     if (e.code === 'ENOENT') return null;
+    if (e instanceof SyntaxError) return null;
     throw e;
   }
 }

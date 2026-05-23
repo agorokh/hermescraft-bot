@@ -73,6 +73,17 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function bodyFlagEnabled(value, defaultEnabled = true) {
+  if (value === undefined || value === null) return defaultEnabled;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  let s = String(value).trim().toLowerCase();
+  if (s.includes('=')) s = s.split('=', 1)[1];
+  if (['0', 'false', 'no', 'off'].includes(s)) return false;
+  if (['1', 'true', 'yes', 'on'].includes(s)) return true;
+  return defaultEnabled;
+}
+
 function collectItemMatches(tossedItem, collectedEntity) {
   const want = normalizeBlockName(tossedItem);
   const got = normalizeBlockName(itemNameFromCollectEntity(collectedEntity));
@@ -626,8 +637,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     await saveBuildState(buildState, stateFile);
     placementsSinceSave = 0;
   };
+  const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
+  const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
   let savedState = null;
-  if (bodyArgs.resume === true) {
+  if (resumeEnabled) {
     savedState = await loadBuildState(stateFile);
   }
   const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
@@ -639,7 +652,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       return { result: `Foreman rejected "${name}" at ${baseX},${baseY},${baseZ}: missing materials — ${miss}.` };
     }
   }
-  if (bodyArgs.record_state === true || bodyArgs.resume === true) {
+  if (bodyArgs.record_state === true || resumeEnabled) {
     if (resumingBuild) {
       buildState = savedState;
     } else {
@@ -686,7 +699,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     const tx = baseX + dx, ty = baseY + dy, tz = baseZ + dz;
     const placementForState = { id: `${tx},${ty},${tz}:${normalizeBlockName(block)}` };
 
-    if (bodyArgs.sentry_pause === true) {
+    if (sentryEnabled) {
       const sentry = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
       if (sentry.paused) {
         if (buildState) {
@@ -847,8 +860,8 @@ async function build_schematic_advanced(bot, body) {
     ...body,
     foreman: true,
     record_state: true,
-    resume: body?.resume !== false,
-    sentry_pause: body?.sentry_pause !== false,
+    resume: bodyFlagEnabled(body?.resume, true),
+    sentry_pause: bodyFlagEnabled(body?.sentry_pause, true),
   });
 }
 

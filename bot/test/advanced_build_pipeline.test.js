@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -106,6 +106,17 @@ test('buildStateFileForId namespaces state per build', () => {
   const b = buildStateFileForId('tower-0-70-0');
   assert.notEqual(a, b);
   assert.match(a, /build_states\/well-10-64-10\.json$/);
+});
+
+test('loadBuildState returns null for corrupt JSON', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'hc-build-state-'));
+  const file = join(dir, 'corrupt.json');
+  try {
+    await writeFile(file, '{not json', 'utf8');
+    assert.equal(await loadBuildState(file), null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('build state can be saved and loaded from disk', async () => {

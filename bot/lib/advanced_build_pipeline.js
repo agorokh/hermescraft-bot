@@ -80,13 +80,13 @@ export function inventoryBlockCount(available, block) {
   return have;
 }
 
-export function isRetryableBuildFailure(error) {
+export function isPermanentBuildFailure(error) {
   const msg = String(error || '').toLowerCase();
-  if (msg.includes('missing inventory')) return false;
-  return msg.includes('chunk not loaded')
-    || msg.includes('unverified')
-    || msg.includes('readback mismatch')
-    || msg.includes('place failed');
+  return msg.includes('missing inventory') || msg.includes('foreman rejected');
+}
+
+export function isRetryableBuildFailure(error) {
+  return !isPermanentBuildFailure(error);
 }
 
 export function filterForemanRequired(required) {
@@ -222,7 +222,7 @@ export function pendingPlacements(plan, state = {}) {
   const completed = new Set(state.completed || []);
   const permanentFailed = new Set(
     (state.failed || [])
-      .filter((f) => !isRetryableBuildFailure(f.error))
+      .filter((f) => isPermanentBuildFailure(f.error))
       .map((f) => f.id),
   );
   return (plan.placements || []).filter(

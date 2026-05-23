@@ -88,7 +88,11 @@ test('pendingPlacements skips permanent failures but retries transient ones', ()
   const permanent = markPlacementFailed(createBuildState(plan), plan.placements[0], 'missing inventory');
   assert.equal(pendingPlacements(plan, permanent).some((p) => p.id === plan.placements[0].id), false);
 
-  const transient = markPlacementFailed(createBuildState(plan), plan.placements[0], 'unverified: target chunk not loaded');
+  const transient = markPlacementFailed(
+    createBuildState(plan),
+    plan.placements[0],
+    'no adjacent block to place against at 0,70,0',
+  );
   assert.equal(pendingPlacements(plan, transient).some((p) => p.id === plan.placements[0].id), true);
 });
 

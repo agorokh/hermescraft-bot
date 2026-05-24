@@ -261,13 +261,15 @@ const INTENTS = [
       // directions at +2/-2 offset, pick the first one where the air block
       // above the surface is actually air (not torch/sapling from a prior
       // prompt). Falls back to +2x if no clear spot found.
-      const baseY = Math.floor(p.y);
       const [dx, dz] = pickTowerFootOffset(bot, p);
+      const footX = Math.floor(p.x) + dx;
+      const footZ = Math.floor(p.z) + dz;
+      const baseY = normalizeBuildBaseY(bot, footX, footZ, p.y);
       const kidName = extractKidName(ctx.body);
       const towerBody = {
-        x: Math.floor(p.x) + dx,
+        x: footX,
         y: baseY,
-        z: Math.floor(p.z) + dz,
+        z: footZ,
         height,
         material,
       };

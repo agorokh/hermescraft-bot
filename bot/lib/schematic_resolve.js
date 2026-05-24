@@ -22,15 +22,16 @@ export function resolveSchematicName(body) {
   const b = String(body).toLowerCase();
   if (wantsSchematicList(b)) return 'list';
   if (/\b(observatory|telescope|stargazing|star\s*tower|crystal\s*lab)\b/.test(b)) return 'crystal_observatory';
-  if (/\b(wizard|mage|magic|spell)\b/.test(b) && /\b(tower|spire|castle)\b/.test(b)) return 'wizard_tower';
-  if (/\b(marketplace|bazaar|village\s*square|town\s*square|shopping\s*street|market\s*square)\b/.test(b)) return 'market_square';
-  if (/\b(sky\s*bridge|sky\s*walkway|sky\s*overpass)\b/.test(b)) return 'sky_bridge';
-  if (/\b(beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/.test(b)) return 'beacon_plaza';
-  if (/\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/.test(b)) return 'grand_hotel';
   if (/\b(ice|frozen|frosty)\b/.test(b) && /\b(castle|fort|house|palace|home|cottage)\b/.test(b)) {
     return 'ice_castle';
   }
   if (/\b(igloo|snow\s*house|snow\s*home|snow\s*shelter|snow\s*hut)\b/.test(b)) return 'igloo';
+  if (/\b(?:wizard|mage|magic|spell)\s*(?:tower|spire|castle)\b/.test(b)
+    || /\b(?:tower|spire|castle)\s*(?:of\s+)?(?:wizard|mage|magic|spell)s?\b/.test(b)) return 'wizard_tower';
+  if (/\b(marketplace|bazaar|village\s*square|town\s*square|shopping\s*street|market\s*square)\b/.test(b)) return 'market_square';
+  if (/\b(sky\s*bridge|sky\s*walkway|sky\s*overpass)\b/.test(b)) return 'sky_bridge';
+  if (/\b(beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/.test(b)) return 'beacon_plaza';
+  if (/\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/.test(b)) return 'grand_hotel';
   if (/\b(treehouse|tree house|tree fort|tree home)\b/.test(b)) return 'treehouse';
   if (/\b(big|huge|giant|massive|fancy|grand|biggest)\b/.test(b) && /\b(house|home|building|structure)\b/.test(b)) {
     return 'grand_hotel';

@@ -301,6 +301,12 @@ test('imperative build with trailing later qualifier is not speculative', () => 
   assert.equal(isSpeculativeBuildDiscussion('i wish we could build a wizard tower later'), true);
 });
 
+test('wizard_tower requires compound wizard/magic + tower phrasing', () => {
+  assert.equal(resolveSchematicName('build a spell tower'), 'wizard_tower');
+  assert.equal(resolveSchematicName('build a castle with magic lights'), 'small_tower');
+  assert.equal(resolveSchematicName('build a frozen magic castle'), 'ice_castle');
+});
+
 test('market alias does not hijack house builds near a market', () => {
   assert.equal(resolveSchematicName('build a house near the market'), 'small_house');
   assert.equal(resolveSchematicName('build a marketplace'), 'market_square');

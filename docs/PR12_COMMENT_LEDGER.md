@@ -1,11 +1,19 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `5324b6b2757025a6ffc03e5f5b2aae81b956d205`
+**Watermark:** `29daba1edb42f92fe01a1c47a7b1397f434d6f19` (pre-Round 17 push)
 
 ## Summary
 
-- Review threads: **46** (46 RESOLVED / 0 UNRESOLVED)
+- Review threads: **49** (49 RESOLVED / 0 UNRESOLVED after Round 17 code fixes)
 - agorokh comments: **0**
+
+## Round 17 (post-`29daba1` Bugbot)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294967634 build_tower missing normalizeBuildBaseY (regex + NLP) | RESOLVED | Normalize Y at tower foot offset in both routers |
+| r3294967637 wizard_tower false positives from non-proximate word pairs | RESOLVED | Compound wizard/magic + tower patterns; ice_castle before wizard |
+| r3294981683 detectSetblockAuth probe listener lacks try/finally | RESOLVED | Wrap probe loop in try/finally for listener cleanup |
 
 ## Round 16 (post-`06c0846` Codex)
 
@@ -104,3 +112,6 @@
 | 44 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294927193 |
 | 45 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294949257 |
 | 46 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294959684 |
+| 47 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294967634 |
+| 48 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294967637 |
+| 49 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294981683 |

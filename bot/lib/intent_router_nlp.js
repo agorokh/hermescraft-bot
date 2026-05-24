@@ -394,11 +394,13 @@ const DISPATCHERS = {
     const buildables = ['oak_planks', 'cobblestone', 'stone', 'oak_log', 'dirt', 'spruce_planks'];
     const found = bot.inventory.items().find((i) => buildables.includes(i.name));
     const material = found ? found.name : 'oak_planks';
-    const baseY = Math.floor(p.y);
     const [dx, dz] = pickTowerFootOffset(bot, p);
+    const footX = Math.floor(p.x) + dx;
+    const footZ = Math.floor(p.z) + dz;
+    const baseY = normalizeBuildBaseY(bot, footX, footZ, p.y);
     return {
       action: 'build_tower',
-      body: { x: Math.floor(p.x) + dx, y: baseY, z: Math.floor(p.z) + dz, height, material },
+      body: { x: footX, y: baseY, z: footZ, height, material },
     };
   },
 

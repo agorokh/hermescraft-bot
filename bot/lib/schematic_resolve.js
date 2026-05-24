@@ -24,10 +24,6 @@ export function resolveSchematicName(body) {
   if (/\b(observatory|telescope|stargazing|star\s*tower|crystal\s*lab)\b/.test(b)) return 'crystal_observatory';
   if (/\b(wizard|mage|magic|spell)\b/.test(b) && /\b(tower|spire|castle)\b/.test(b)) return 'wizard_tower';
   if (/\b(marketplace|bazaar|village\s*square|town\s*square|shopping\s*street|market\s*square)\b/.test(b)) return 'market_square';
-  if (/\b(build|make|set up|construct|create|design)\b.*\bmarket\b/.test(b)
-    && !/\b(house|home|cottage|cabin|tower|garden|well|hotel|bridge|plaza|observatory|igloo|castle|fort|treehouse)\b/.test(b)) {
-    return 'market_square';
-  }
   if (/\b(sky\s*bridge|sky\s*walkway|sky\s*overpass)\b/.test(b)) return 'sky_bridge';
   if (/\b(beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/.test(b)) return 'beacon_plaza';
   if (/\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/.test(b)) return 'grand_hotel';
@@ -44,6 +40,7 @@ export function resolveSchematicName(body) {
   if (/\b(garden|flower bed|flower patch|flower garden)\b/.test(b)) return 'garden';
   if (/\b(castle|fort|palace|tower|watchtower|outpost)\b/.test(b)) return 'small_tower';
   if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(b)) return 'campfire_spot';
+  if (/\b(build|make|set up|construct|create|design)\b.*\bmarket\b/.test(b)) return 'market_square';
   return null;
 }
 

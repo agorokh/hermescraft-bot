@@ -1,11 +1,17 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `542005c99df0d6c24fe423392424d9b146504ab3`
+**Watermark:** `5324b6b2757025a6ffc03e5f5b2aae81b956d205`
 
 ## Summary
 
-- Review threads: **45** (target: 45 RESOLVED / 0 UNRESOLVED)
+- Review threads: **46** (46 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
+
+## Round 16 (post-`06c0846` Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294959684 market fallback hijacks mansion/fire pit near market | RESOLVED | Move bare build+market fallback after all structure branches |
 
 ## Round 15 (post-`b7e9d89` Bugbot)
 
@@ -97,3 +103,4 @@
 | 43 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294926923 |
 | 44 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294927193 |
 | 45 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294949257 |
+| 46 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294959684 |

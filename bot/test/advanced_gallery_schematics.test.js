@@ -62,6 +62,18 @@ test('generic bridge and beacon words do not hijack gallery schematics', () => {
   assert.equal(resolveSchematicName('build a sky bridge over the river'), 'sky_bridge');
 });
 
+
+test('gallery training phrases resolve to schematic names', () => {
+  for (const [body, expected] of [
+    ['make a sky bridge over there', 'sky_bridge'],
+    ['build a sky walkway', 'sky_bridge'],
+    ['make a bright beacon plaza', 'beacon_plaza'],
+    ['build a beacon plaza with lights', 'beacon_plaza'],
+  ]) {
+    assert.equal(resolveSchematicName(body), expected, body);
+  }
+});
+
 test('kid gallery aliases route to the advanced Foreman path', () => {
   for (const [body, expected] of [
     ['rosie build a crystal observatory here', 'crystal_observatory'],

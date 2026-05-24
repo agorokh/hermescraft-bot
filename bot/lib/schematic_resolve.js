@@ -22,7 +22,7 @@ export function resolveSchematicName(body) {
   const b = String(body).toLowerCase();
   if (wantsSchematicList(b)) return 'list';
   if (/\b(observatory|telescope|stargazing|star\s*tower|crystal\s*lab)\b/.test(b)) return 'crystal_observatory';
-  if (/\b(wizard|mage|magic|spell)\b/.test(b) && /\b(tower|spire|castle|house)\b/.test(b)) return 'wizard_tower';
+  if (/\b(wizard|mage|magic|spell)\b/.test(b) && /\b(tower|spire|castle)\b/.test(b)) return 'wizard_tower';
   if (/\b(market|marketplace|bazaar|village\s*square|town\s*square|shopping\s*street)\b/.test(b)) return 'market_square';
   if (/\b(sky\s*bridge|sky\s*walkway|sky\s*overpass)\b/.test(b)) return 'sky_bridge';
   if (/\b(beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/.test(b)) return 'beacon_plaza';

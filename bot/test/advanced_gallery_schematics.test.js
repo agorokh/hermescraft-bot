@@ -63,6 +63,12 @@ test('generic bridge and beacon words do not hijack gallery schematics', () => {
 });
 
 
+
+test('magic house resolves to small_house not wizard_tower', () => {
+  assert.equal(resolveSchematicName('build a magic house'), 'small_house');
+  assert.equal(resolveSchematicName('make me a wizard tower'), 'wizard_tower');
+});
+
 test('gallery training phrases resolve to schematic names', () => {
   for (const [body, expected] of [
     ['make a sky bridge over there', 'sky_bridge'],

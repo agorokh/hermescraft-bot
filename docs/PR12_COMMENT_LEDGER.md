@@ -46,3 +46,10 @@ All bot reviews map to threads above; no additional actionable items.
 ## Verification
 
 `cd bot && npm test` — 180/180 passing.
+## Post-watermark round 2 (after `23969b6`)
+
+| # | Thread ID | Author | Path | Status | Resolution |
+|---|-----------|--------|------|--------|------------|
+| 16 | PRRT_kwDOSfkEa86EV9Dw | cursor | schematic_resolve.js | RESOLVED | Router regex + corpus utterances aligned to qualified aliases |
+| 17 | PRRT_kwDOSfkEa86EV-Xn | cursor | intent_corpus.json | RESOLVED | Same alignment + regression test |
+

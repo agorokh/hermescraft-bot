@@ -1,6 +1,6 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `2977e9a` (pre-Round 20 push)
+**Watermark:** `acd6bdb` (Round 20 push — bazaar location guard, mage/magic castle regex)
 
 ## Summary
 

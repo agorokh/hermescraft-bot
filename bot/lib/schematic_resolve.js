@@ -52,7 +52,7 @@ export function isSpeculativeBuildDiscussion(body) {
   const mentionsBuildTopic = /\b(build|building|built|construct|design|schematic)\b/.test(text)
     || resolveSchematicName(text) != null;
   if (!mentionsBuildTopic) return false;
-  return /\b(should we|someday|some day|later|another day|wish we could|tell me a story|talked about|do you remember|remember when)\b/.test(text)
+  return /\b(should we (?:build|make|construct|have a|try to|get a|add a)|someday|some day|later|another day|wish we could|tell me a story|talked about|do you remember|remember when)\b/.test(text)
     || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build)\b/.test(text)
     || (/\bwhere (is|are)\b/.test(text) && resolveSchematicName(text) != null)
     || /\bwhere did (we|you) build\b/.test(text);

@@ -263,6 +263,12 @@ test('past-tense built recall is treated as speculative discussion', () => {
 });
 
 
+
+test('imperative build with trailing should-we qualifier is not speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('build a market square, should we put it here?'), false);
+  assert.equal(isSpeculativeBuildDiscussion('build a beacon plaza, should we use the oak?'), false);
+});
+
 test('where-is recall matches schematic aliases via resolver', () => {
   assert.equal(isSpeculativeBuildDiscussion('where is the fire pit?'), true);
   assert.equal(isSpeculativeBuildDiscussion('where is the tree fort?'), true);

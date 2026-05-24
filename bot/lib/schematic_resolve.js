@@ -49,9 +49,9 @@ export function isAdvancedSchematicName(name) {
 /** Recall / hypothetical build chat — must not dispatch a schematic placement. */
 export function isSpeculativeBuildDiscussion(body) {
   const text = String(body || '').toLowerCase();
-  if (!/\b(build|building|built|construct|design|observatory|wizard tower|market square|sky bridge|beacon plaza|schematic)\b/.test(text)) {
-    return false;
-  }
+  const mentionsBuildTopic = /\b(build|building|built|construct|design|schematic)\b/.test(text)
+    || resolveSchematicName(text) != null;
+  if (!mentionsBuildTopic) return false;
   return /\b(should we|someday|some day|later|another day|wish we could|tell me a story|talked about|do you remember|remember when)\b/.test(text)
     || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build)\b/.test(text)
     || /\bwhere (is|are) (the |our )?(sky bridge|beacon plaza|wizard tower|crystal observatory|market square|grand hotel|treehouse|garden|well|ice castle|small house|small tower|igloo|campfire)\b/.test(text)

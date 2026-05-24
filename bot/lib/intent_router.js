@@ -219,6 +219,7 @@ const INTENTS = [
       /\bshow me your (builds|schematics|templates)\b/i,
     ],
     async handler(bot, ctx) {
+      if (isSpeculativeBuildDiscussion(ctx.body)) return null;
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
       const body = ctx.body.toLowerCase();
@@ -247,6 +248,7 @@ const INTENTS = [
       /\b(tower|pillar|column)\b.*\b(here|right here|where I am)\b/i,
     ],
     async handler(bot, ctx) {
+      if (isSpeculativeBuildDiscussion(ctx.body)) return null;
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
       // Extract a height if mentioned: "5 blocks high", "10 tall"
@@ -473,7 +475,6 @@ export async function tryStopRoute(bot, body, sender) {
 // normal LLM-driven command queue.
 export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
-  if (isSpeculativeBuildDiscussion(body)) return { matched: false };
   const senderEntity = findPlayerEntity(bot, sender);
   const ctx = { sender, senderEntity, message: body, body, dryRun: opts.dryRun };
 

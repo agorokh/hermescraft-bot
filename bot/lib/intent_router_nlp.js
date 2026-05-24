@@ -360,6 +360,7 @@ const DISPATCHERS = {
   },
 
   build_schematic: (bot, ctx) => {
+    if (isSpeculativeBuildDiscussion(ctx.body)) return null;
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
     const name = resolveSchematicName(ctx.body);
@@ -380,6 +381,7 @@ const DISPATCHERS = {
   },
 
   build_tower: (bot, ctx) => {
+    if (isSpeculativeBuildDiscussion(ctx.body)) return null;
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
     const height = intFromMatch(ctx.body, /(\d+)\s*(blocks?\s*)?(high|tall)/i) || 5;

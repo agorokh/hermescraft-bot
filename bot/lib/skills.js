@@ -624,10 +624,14 @@ async function detectSetblockAuth(bot) {
   if (py == null) return false;
 
   let commandFeedbackHit = false;
-  const coordText = `${probeX}, ${py}, ${probeZ}`;
+  const coordComma = `${probeX}, ${py}, ${probeZ}`;
+  const coordSpace = `${probeX} ${py} ${probeZ}`;
   const onProbeMessage = (message) => {
     const text = String(message || '').toLowerCase();
-    if (text.includes('changed the block') && text.includes(coordText)) commandFeedbackHit = true;
+    const mentionsCoord = text.includes(coordComma) || text.includes(coordSpace);
+    if (mentionsCoord && (text.includes('changed the block') || text.includes('set block'))) {
+      commandFeedbackHit = true;
+    }
   };
   try { bot.on?.('messagestr', onProbeMessage); } catch {}
   try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}

@@ -232,6 +232,17 @@ test('imperative remember-to-build gallery prompts still route', async () => {
   assert.equal(r.body.name, 'wizard_tower');
 });
 
+
+test('speculative build discussion guard does not block non-build intents', async () => {
+  const bot = stubBot();
+  const pos = await tryRouteRegex(bot, 'where are you', 'Adalynn');
+  assert.equal(pos.matched, true, 'position report must still route');
+  assert.equal(pos.action, 'chat');
+
+  const mixed = await tryRouteRegex(bot, 'make me a sword, where is the village?', 'Adalynn');
+  assert.equal(mixed.matched, false, 'non-build mixed prompt should fall through regex router');
+});
+
 test('gallery discussion prompts do not dispatch advanced builds', async () => {
   for (const body of [
     'should we build a sky bridge someday?',

@@ -1,11 +1,18 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `ffcaa511ec264da6112c6a7adaffa6b2ba2306ad`
+**Watermark:** `80b0786f739479919c989ff5ba9ea3af792ddf60`
 
 ## Summary
 
-- Review threads: **42** (target: 42 RESOLVED / 0 UNRESOLVED)
+- Review threads: **44** (target: 44 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
+
+## Round 14 (post-`113d0df` Bugbot + Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294926923 NLP speculative gate blocks non-build mixed intents | RESOLVED | Build-only gate + where-primary recall blocks all intents |
+| r3294927193 bare "later" in hardRecall blocks imperative builds | RESOLVED | Move later/another day to softRecall with imperative exception |
 
 ## Round 13 (post-`c7f222c` Codex)
 
@@ -81,3 +88,5 @@
 | 40 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294122330 |
 | 41 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294905478 |
 | 42 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294905481 |
+| 43 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294926923 |
+| 44 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294927193 |

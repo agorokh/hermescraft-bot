@@ -310,9 +310,9 @@ async function ensureTrained() {
 // Intent → action dispatch. The classifier picks the intent; this maps it
 // to a concrete action body (with slot extraction where needed).
 
-const SPECULATIVE_MOVEMENT_INTENTS = new Set([
-  'come_here', 'follow_me', 'goto', 'stop',
-  'emote_wave', 'emote_jump', 'emote_dance', 'emote_sit',
+const SPECULATIVE_BUILD_INTENTS = new Set([
+  'build_schematic',
+  'build_tower',
 ]);
 
 const DISPATCHERS = {
@@ -600,9 +600,15 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'no_dispatcher', error: 'no dispatcher for ' + intent };
   }
   if (isSpeculativeBuildDiscussion(body)) {
-    const blocksRecall = resolveSchematicName(body) && !SPECULATIVE_MOVEMENT_INTENTS.has(intent);
-    if (blocksRecall) {
-      return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'speculative_discussion' };
+    const resolved = resolveSchematicName(body);
+    if (resolved) {
+      const text = String(body || '').toLowerCase();
+      const wherePrimaryRecall = /^\s*(?:[\w']+\s+){0,4}where (is|are)\b/.test(text.trim())
+        && !/\b(build|make|put up|construct|design|create|set up)\b/.test(text);
+      const blocksBuildRecall = SPECULATIVE_BUILD_INTENTS.has(intent);
+      if (wherePrimaryRecall || blocksBuildRecall) {
+        return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'speculative_discussion' };
+      }
     }
   }
   // ctx already constructed above for anaphora; reuse to avoid double-lookup

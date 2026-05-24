@@ -295,6 +295,12 @@ test('imperative build with recall phrasing is not speculative', () => {
   assert.equal(isSpeculativeBuildDiscussion('remember the crystal observatory we talked about'), true);
 });
 
+test('imperative build with trailing later qualifier is not speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('build me a wizard tower, I need it later'), false);
+  assert.equal(isSpeculativeBuildDiscussion('build a market square, come back later'), false);
+  assert.equal(isSpeculativeBuildDiscussion('i wish we could build a wizard tower later'), true);
+});
+
 test('market alias does not hijack house builds near a market', () => {
   assert.equal(resolveSchematicName('build a house near the market'), 'small_house');
   assert.equal(resolveSchematicName('build a marketplace'), 'market_square');

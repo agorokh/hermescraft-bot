@@ -53,7 +53,7 @@ export function isAdvancedSchematicName(name) {
 /** Recall / hypothetical build chat — must not dispatch a schematic placement. */
 function hasImperativeBuildCommand(text) {
   if (/\bshould we\b/.test(text)) return false;
-  if (/\b(someday|some day|wish we could|later|another day)\b/.test(text)) return false;
+  if (/\b(someday|some day|wish we could)\b/.test(text)) return false;
   return /\b(build|make|put up|construct|design|create|set up)\b(?:\s+(?:the|a|an|me|our|my|that|this)\b|\s+\S+)/.test(text);
 }
 
@@ -65,8 +65,8 @@ export function isSpeculativeBuildDiscussion(body) {
   const whereRecall = /\bwhere (is|are)\b/.test(text)
     && resolveSchematicName(text) != null
     && !/\b(build|make|put up|construct|design|create|set up)\b/.test(text);
-  const softRecall = /\b(talked about|do you remember|remember when|tell me a story)\b/.test(text);
-  const hardRecall = /\b(should we (?:build|make|construct|have a|try to|get a|add a)|someday|some day|later|another day|wish we could)\b/.test(text)
+  const softRecall = /\b(talked about|do you remember|remember when|tell me a story|later|another day)\b/.test(text);
+  const hardRecall = /\b(should we (?:build|make|construct|have a|try to|get a|add a)|someday|some day|wish we could)\b/.test(text)
     || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build)\b/.test(text)
     || /\bwhere did (we|you) build\b/.test(text);
   const imperativeBuild = hasImperativeBuildCommand(text);

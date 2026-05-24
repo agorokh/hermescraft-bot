@@ -1,15 +1,33 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `093cfaac3d20d69e309f7aae0e784f0447450909` (pre-push; updates on next commit)
+**Watermark:** `3d99520d680ea32fb5c787174a77f41ad24e21d4`
 
-- Threads: **32** (32 RESOLVED / 0 UNRESOLVED)
-- agorokh: **0**
+## Summary
+
+- Review threads: **32** (32 RESOLVED / 0 UNRESOLVED)
+- Inline comments: **32**
+- Issue conversation comments: **3** (bot summaries; no actionable items)
+- PR reviews: **22** (bot summaries; Copilot post-watermark errored with no inline findings)
+- agorokh comments: **0**
+
+## Post-watermark audit (after `3d99520`)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Review 4351969149 (copilot, 2026-05-24T07:35:22Z) | RESOLVED | Error-only review on HEAD; no inline comments |
+| Inline comments created/updated after watermark | RESOLVED | **0** threads or inline comments after `3d99520` |
+| CI (validate, Bugbot, CodeRabbit) | RESOLVED | All green on HEAD |
 
 ## Round 8
+
 | Item | Status | Fix |
 |------|--------|-----|
-| r3293768746 should-we false positive on imperative builds | RESOLVED | Require `should we (build|make|...)` not bare `should we` |
+| r3293768746 should-we false positive on imperative builds | RESOLVED | Require `should we (build\|make\|...)` not bare `should we` |
 
+## Full thread inventory
+
+| # | Status | Author | Link |
+|---|--------|--------|------|
 | 1 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3293620001 |
 | 2 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3293620519 |
 | 3 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3293620520 |

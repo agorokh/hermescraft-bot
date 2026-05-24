@@ -1,6 +1,6 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `90c4182` (pre-Round 18 push)
+**Watermark:** `f364631` (Round 18 push — hoist afterName before probe try/finally)
 
 ## Summary
 

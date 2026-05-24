@@ -534,7 +534,6 @@ const DISPATCHERS = {
 // Same return shape: {matched, intent_name, action, body}.
 export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
-  if (isSpeculativeBuildDiscussion(body)) return { matched: false, nlp_zone: 'speculative_discussion' };
   // ANAPHORA PRE-PROCESSOR (council round 2 unanimous): short modifier
   // phrases ("higher", "again", "over there") amend the last fired skill
   // BEFORE NLP gets a vote. NLP doesn't know the previous action; only
@@ -598,6 +597,9 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   const decision = await Promise.resolve(dispatch(bot, ctx));
   if (!decision) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
+  }
+  if (isSpeculativeBuildDiscussion(body) && (resolveSchematicName(body) || ['build_schematic', 'build_tower'].includes(intent))) {
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'speculative_discussion' };
   }
   // Record this for future repeat_last_action — only if NOT a repeat itself
   // (avoid recursion on "do it again ... do it again").

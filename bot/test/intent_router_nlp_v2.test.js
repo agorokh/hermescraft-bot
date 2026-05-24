@@ -243,6 +243,19 @@ test('speculative build discussion guard does not block non-build intents', asyn
   assert.equal(mixed.matched, false, 'non-build mixed prompt should fall through regex router');
 });
 
+
+test('speculative gallery discussion returns dispatcher_null without global NLP block', async () => {
+  const r = await tryRoute(stubBot(), 'should we build a sky bridge someday?', 'Adalynn');
+  assert.equal(r.matched, false);
+  assert.ok(['dispatcher_null', 'oov', 'clarify'].includes(r.nlp_zone), r.nlp_zone);
+});
+
+test('NLP speculative guard does not block non-build emote intents', async () => {
+  const r = await tryRoute(stubBot(), 'dance for me', 'Adalynn');
+  assert.equal(r.matched, true, `expected emote route: zone=${r.nlp_zone}`);
+  assert.equal(r.intent_name, 'emote_dance');
+});
+
 test('gallery discussion prompts do not dispatch advanced builds', async () => {
   for (const body of [
     'should we build a sky bridge someday?',

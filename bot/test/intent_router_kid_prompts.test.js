@@ -127,6 +127,17 @@ test('hotel-sized build prompts route to advanced Foreman pipeline', async () =>
   assert.equal(route.body.name, 'grand_hotel');
 });
 
+test('gallery regex matches compact schematic aliases without spaces', async () => {
+  for (const [body, expected] of [
+    ['Rosie build a skybridge here', 'sky_bridge'],
+    ['Rosie make a beaconplaza', 'beacon_plaza'],
+  ]) {
+    const route = await tryRoute(stubBot('Adalynn'), body, 'Adalynn');
+    assert.ok(route.matched, `${body} must match router`);
+    assert.equal(route.body.name, expected);
+  }
+});
+
 test('gallery build prompts route to advanced Foreman pipeline', async () => {
   for (const [body, expected] of [
     ['Rosie build a crystal observatory here', 'crystal_observatory'],

@@ -1,30 +1,25 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `e00d0ab4676fb46f9734585c0c4e43c5676034209`
+**Watermark:** `559e1b265435b6042dacbc1db4caaa9f1d5d3c81`
 
 ## Summary
 
-- Review threads: **35** (target: 35 RESOLVED / 0 UNRESOLVED)
+- Review threads: **38** (target: 38 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
+
+## Round 11 (post-`499af0e` Bugbot + Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294102962 setblock probe accepts player chat as auth proof | RESOLVED | Listen on `message` with system-only feedback filter |
+| r3294102964 waitForSetblockOutcome trusts non-system chat | RESOLVED | Same filter; prefer readback before feedback-only success |
+| r3294107861 regex literal spaces vs resolver `\s*` | RESOLVED | Align compound keywords with `\s*` in build_schematic regex |
 
 ## Round 10 (post-`a708af1` Codex)
 
 | Item | Status | Fix |
 |------|--------|-----|
 | r3294087195 where-is blocks imperative builds with location qualifiers | RESOLVED | Skip where-recall when build imperatives present |
-
-## Round 9 (post-`0af4b61` Bugbot)
-
-| Item | Status | Fix |
-|------|--------|-----|
-| r3294072299 NLP speculative guard after dispatch side effects | RESOLVED | Move guard before `dispatch()` call |
-| r3294072301 wizard regex matches bare magic/mage/wizard | RESOLVED | Require compound `wizard tower/spire/castle` in regex |
-
-## Round 8
-
-| Item | Status | Fix |
-|------|--------|-----|
-| r3293768746 should-we false positive on imperative builds | RESOLVED | Require `should we (build\|make\|...)` not bare `should we` |
 
 ## Full thread inventory
 
@@ -65,3 +60,6 @@
 | 33 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294072299 |
 | 34 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294072301 |
 | 35 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294087195 |
+| 36 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294102962 |
+| 37 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294102964 |
+| 38 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294107861 |

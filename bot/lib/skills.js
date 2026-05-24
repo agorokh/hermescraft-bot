@@ -594,6 +594,22 @@ function messageMentionsCoords(message, x, y, z) {
   return triples.some((triple) => triple.replace(/\s*,\s*|\s+/g, ' ').trim() === target);
 }
 
+function extractMessageText(message) {
+  if (message && typeof message.toString === 'function') {
+    try { return message.toString(); } catch { /* fall through */ }
+  }
+  return String(message || '');
+}
+
+/** Command feedback only — ignore player chat that happens to mention coords. */
+function isSetblockCommandFeedback(message, position) {
+  if (position === 'chat') return false;
+  const text = extractMessageText(message).trim();
+  if (/^<\w+>/.test(text)) return false;
+  const lower = text.toLowerCase();
+  return lower.includes('changed the block') || lower.includes('set block');
+}
+
 async function detectSetblockAuth(bot) {
   if (_setblockAuthByBot.get(bot) === true) return true;
   if (process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1') {
@@ -633,14 +649,13 @@ async function detectSetblockAuth(bot) {
   if (py == null) return false;
 
   let commandFeedbackHit = false;
-  const onProbeMessage = (message) => {
-    const text = String(message || '').toLowerCase();
-    if (messageMentionsCoords(text, probeX, py, probeZ)
-      && (text.includes('changed the block') || text.includes('set block'))) {
+  const onProbeMessage = (message, position) => {
+    if (!isSetblockCommandFeedback(message, position)) return;
+    if (messageMentionsCoords(extractMessageText(message), probeX, py, probeZ)) {
       commandFeedbackHit = true;
     }
   };
-  try { bot.on?.('messagestr', onProbeMessage); } catch {}
+  try { bot.on?.('message', onProbeMessage); } catch {}
   try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
   const deadline = Date.now() + 2500;
   let afterName = 'air';
@@ -650,7 +665,7 @@ async function detectSetblockAuth(bot) {
     if (afterName === sentinel || commandFeedbackHit) break;
     await sleep(100);
   }
-  try { bot.removeListener?.('messagestr', onProbeMessage); } catch {}
+  try { bot.removeListener?.('message', onProbeMessage); } catch {}
 
   const ok = afterName === sentinel || commandFeedbackHit;
 
@@ -669,28 +684,30 @@ async function detectSetblockAuth(bot) {
 async function waitForSetblockOutcome(bot, { x, y, z, block }, timeoutMs = SETBLOCK_CHAT_INTERVAL_MS + 150) {
   let feedbackOk = false;
   let feedbackFail = false;
-  const onMessage = (message) => {
-    const text = String(message || '').toLowerCase();
+  const onMessage = (message, position) => {
+    const text = extractMessageText(message).toLowerCase();
     if (!messageMentionsCoords(text, x, y, z)) return;
-    if (text.includes('changed the block') || text.includes('set block')) feedbackOk = true;
+    if (isSetblockCommandFeedback(message, position)) feedbackOk = true;
     if (text.includes('cannot') || text.includes('unknown block') || text.includes('failed')
       || text.includes('out of bounds') || text.includes('not allowed')) {
       feedbackFail = true;
     }
   };
   try {
-    try { bot.on?.('messagestr', onMessage); } catch {}
+    try { bot.on?.('message', onMessage); } catch {}
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (feedbackFail) break;
-      if (feedbackOk || blockAtMatches(bot, x, y, z, block)) break;
+      if (blockAtMatches(bot, x, y, z, block)) break;
+      if (feedbackOk) break;
       await sleep(25);
     }
   } finally {
-    try { bot.removeListener?.('messagestr', onMessage); } catch {}
+    try { bot.removeListener?.('message', onMessage); } catch {}
   }
   if (feedbackFail) return { ok: false, reason: 'setblock rejected' };
-  if (feedbackOk || blockAtMatches(bot, x, y, z, block)) return { ok: true };
+  if (blockAtMatches(bot, x, y, z, block)) return { ok: true };
+  if (feedbackOk) return { ok: true };
   if (!bot.blockAt(new Vec3(x, y, z))) return { ok: null, reason: 'chunk unloaded' };
   return { ok: false, reason: 'readback mismatch' };
 }

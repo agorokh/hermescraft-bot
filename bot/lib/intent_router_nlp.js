@@ -366,10 +366,11 @@ const DISPATCHERS = {
   },
 
   build_schematic: (bot, ctx) => {
-    if (isSpeculativeBuildDiscussion(ctx.body)) return null;
+    const resolvedName = resolveSchematicName(ctx.body);
+    if (resolvedName !== 'list' && isSpeculativeBuildDiscussion(ctx.body)) return null;
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
-    const name = resolveSchematicName(ctx.body);
+    const name = resolvedName;
     if (name === 'list') return { action: 'list_schematics', body: {} };
     if (!name) return null;
     const buildX = Math.floor(p.x) + 2;

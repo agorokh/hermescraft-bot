@@ -44,7 +44,8 @@ export function resolveSchematicName(body) {
   if (/\b(garden|flower bed|flower patch|flower garden)\b/.test(b)) return 'garden';
   if (/\b(castle|fort|palace|tower|watchtower|outpost)\b/.test(b)) return 'small_tower';
   if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(b)) return 'campfire_spot';
-  if (/\b(build|make|set up|construct|create|design)\b.*\b(?:a|an|the|our|my|me\s+(?:a|an))?\s*market(?:\s+(?:square|place|stall|stalls|area|bazaar))?\b/.test(b)
+  if ((/\b(build|make|set up|construct|create|design)\b.*\b(?:a|an|the|our|my|me\s+(?:a|an))\s+market\b/.test(b)
+    || /\bmarket\s+(?:square|place|stall|stalls|area|bazaar)\b/.test(b))
     && !/\b(at|in|near|by|from|to)\s+(?:the\s+)?market\b/.test(b)) return 'market_square';
   return null;
 }

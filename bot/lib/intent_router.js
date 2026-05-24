@@ -219,12 +219,13 @@ const INTENTS = [
       /\bshow me your (builds|schematics|templates)\b/i,
     ],
     async handler(bot, ctx) {
-      if (isSpeculativeBuildDiscussion(ctx.body)) return null;
+      const resolvedName = resolveSchematicName(ctx.body);
+      if (resolvedName !== 'list' && isSpeculativeBuildDiscussion(ctx.body)) return null;
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
       const body = ctx.body.toLowerCase();
       if (/\bsafe\s+(?:house|home|spot|place)\b/i.test(body)) return null;
-      const name = resolveSchematicName(ctx.body);
+      const name = resolvedName;
       if (name === 'list') return { action: 'list_schematics', body: {} };
       if (!name) return null;
       const kidName = extractKidName(ctx.body);

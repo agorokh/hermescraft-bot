@@ -1,11 +1,18 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `acd6bdb` (Round 20 push — bazaar location guard, mage/magic castle regex)
+**Watermark:** `4597aea` (pre-Round 21 push)
 
 ## Summary
 
-- Review threads: **56** (56 RESOLVED / 0 UNRESOLVED after Round 20 code fixes)
+- Review threads: **58** (58 RESOLVED / 0 UNRESOLVED after Round 21 code fixes)
 - agorokh comments: **0**
+
+## Round 21 (post-`4597aea` Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3295043111 market fallback matches non-build market phrases | RESOLVED | Require article or market+structure noun in fallback |
+| r3295043114 list prompts blocked by speculative filter | RESOLVED | Resolve list intent before speculative guard in regex/NLP |
 
 ## Round 20 (post-`2977e9a` Bugbot + Codex)
 
@@ -144,3 +151,5 @@
 | 54 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295014297 |
 | 55 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295028350 |
 | 56 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295032725 |
+| 57 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295043111 |
+| 58 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295043114 |

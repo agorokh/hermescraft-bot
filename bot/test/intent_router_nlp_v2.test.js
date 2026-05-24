@@ -316,6 +316,12 @@ test('market alias does not hijack house builds near a market', () => {
   assert.equal(resolveSchematicName('make me a sword at the bazaar'), null);
   assert.equal(resolveSchematicName('build a market'), 'market_square');
   assert.equal(resolveSchematicName('build a bazaar'), 'market_square');
+  assert.equal(resolveSchematicName('make market news'), null);
+});
+
+test('list schematic prompts bypass speculative recall guard', () => {
+  assert.equal(resolveSchematicName('show me your schematics we talked about'), 'list');
+  assert.equal(isSpeculativeBuildDiscussion('show me your schematics we talked about'), true);
 });
 
 test('where-is recall for legacy schematics is speculative', () => {

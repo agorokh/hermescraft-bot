@@ -1,6 +1,6 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `68bb7c4676fb46f9734585c0c4e43c5676034209`
+**Watermark:** `e00d0ab4676fb46f9734585c0c4e43c5676034209`
 
 ## Summary
 

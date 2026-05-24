@@ -1,6 +1,6 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `b327bce` (pre-Round 19 push)
+**Watermark:** `1ce4538` (Round 19 push — market fallback, list guard, dedupe resolver)
 
 ## Summary
 

@@ -1,6 +1,6 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `4597aea` (pre-Round 21 push)
+**Watermark:** `7fb55a8` (Round 21 push — market structure noun, list before speculative)
 
 ## Summary
 

@@ -602,11 +602,16 @@ function extractMessageText(message) {
 }
 
 /** Command feedback only — ignore player chat that happens to mention coords. */
-function isSetblockCommandFeedback(message, position) {
+function isCommandFeedbackMessage(message, position) {
   if (position === 'chat') return false;
   const text = extractMessageText(message).trim();
   if (/^<\w+>/.test(text)) return false;
-  const lower = text.toLowerCase();
+  return true;
+}
+
+function isSetblockCommandFeedback(message, position) {
+  if (!isCommandFeedbackMessage(message, position)) return false;
+  const lower = extractMessageText(message).toLowerCase();
   return lower.includes('changed the block') || lower.includes('set block');
 }
 
@@ -650,10 +655,8 @@ async function detectSetblockAuth(bot) {
 
   let commandFeedbackHit = false;
   const onProbeMessage = (message, position) => {
-    if (!isSetblockCommandFeedback(message, position)) return;
-    if (messageMentionsCoords(extractMessageText(message), probeX, py, probeZ)) {
-      commandFeedbackHit = true;
-    }
+    if (!messageMentionsCoords(extractMessageText(message), probeX, py, probeZ)) return;
+    if (isSetblockCommandFeedback(message, position)) commandFeedbackHit = true;
   };
   try { bot.on?.('message', onProbeMessage); } catch {}
   try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
@@ -687,7 +690,8 @@ async function waitForSetblockOutcome(bot, { x, y, z, block }, timeoutMs = SETBL
   const onMessage = (message, position) => {
     const text = extractMessageText(message).toLowerCase();
     if (!messageMentionsCoords(text, x, y, z)) return;
-    if (isSetblockCommandFeedback(message, position)) feedbackOk = true;
+    if (!isCommandFeedbackMessage(message, position)) return;
+    if (text.includes('changed the block') || text.includes('set block')) feedbackOk = true;
     if (text.includes('cannot') || text.includes('unknown block') || text.includes('failed')
       || text.includes('out of bounds') || text.includes('not allowed')) {
       feedbackFail = true;

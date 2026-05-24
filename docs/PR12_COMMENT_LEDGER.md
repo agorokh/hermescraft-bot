@@ -1,11 +1,17 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `80b0786f739479919c989ff5ba9ea3af792ddf60`
+**Watermark:** `542005c99df0d6c24fe423392424d9b146504ab3`
 
 ## Summary
 
-- Review threads: **44** (target: 44 RESOLVED / 0 UNRESOLVED)
+- Review threads: **45** (target: 45 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
+
+## Round 15 (post-`b7e9d89` Bugbot)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294949257 setblock feedbackFail not filtered to command feedback | RESOLVED | Split command-feedback source check from ok/fail phrase matching |
 
 ## Round 14 (post-`113d0df` Bugbot + Codex)
 
@@ -90,3 +96,4 @@
 | 42 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294905481 |
 | 43 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294926923 |
 | 44 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294927193 |
+| 45 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294949257 |

@@ -1,22 +1,18 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `3d99520d680ea32fb5c787174a77f41ad24e21d4`
+**Watermark:** `68bb7c4676fb46f9734585c0c4e43c5676034209`
 
 ## Summary
 
-- Review threads: **32** (32 RESOLVED / 0 UNRESOLVED)
-- Inline comments: **32**
-- Issue conversation comments: **3** (bot summaries; no actionable items)
-- PR reviews: **22** (bot summaries; Copilot post-watermark errored with no inline findings)
+- Review threads: **34** (target: 34 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
 
-## Post-watermark audit (after `3d99520`)
+## Round 9 (post-`0af4b61` Bugbot)
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Review 4351969149 (copilot, 2026-05-24T07:35:22Z) | RESOLVED | Error-only review on HEAD; no inline comments |
-| Inline comments created/updated after watermark | RESOLVED | **0** threads or inline comments after `3d99520` |
-| CI (validate, Bugbot, CodeRabbit) | RESOLVED | All green on HEAD |
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294072299 NLP speculative guard after dispatch side effects | RESOLVED | Move guard before `dispatch()` call |
+| r3294072301 wizard regex matches bare magic/mage/wizard | RESOLVED | Require compound `wizard tower/spire/castle` in regex |
 
 ## Round 8
 
@@ -60,3 +56,5 @@
 | 30 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3293736293 |
 | 31 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3293749738 |
 | 32 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3293768746 |
+| 33 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294072299 |
+| 34 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294072301 |

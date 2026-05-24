@@ -599,16 +599,16 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   if (!dispatch) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'no_dispatcher', error: 'no dispatcher for ' + intent };
   }
-  // ctx already constructed above for anaphora; reuse to avoid double-lookup
-  const decision = await Promise.resolve(dispatch(bot, ctx));
-  if (!decision) {
-    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
-  }
   if (isSpeculativeBuildDiscussion(body)) {
     const blocksRecall = resolveSchematicName(body) && !SPECULATIVE_MOVEMENT_INTENTS.has(intent);
     if (blocksRecall) {
       return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'speculative_discussion' };
     }
+  }
+  // ctx already constructed above for anaphora; reuse to avoid double-lookup
+  const decision = await Promise.resolve(dispatch(bot, ctx));
+  if (!decision) {
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
   }
   // Record this for future repeat_last_action — only if NOT a repeat itself
   // (avoid recursion on "do it again ... do it again").

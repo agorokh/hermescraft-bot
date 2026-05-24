@@ -205,7 +205,7 @@ const INTENTS = [
       // Treehouse FIRST — \bhouse\b doesn't match inside "treehouse", so
       // an explicit pattern is required (post-mortem 2026-05-17 A/B run).
       /\b(build|make|put up|build me|set up|construct)\b.*\b(treehouse|tree house|tree fort|tree home)\b/i,
-      /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(observatory|telescope|stargazing|wizard|mage|magic|market|marketplace|bazaar|village square|town square|sky bridge|sky walkway|sky overpass|beacon plaza|gallery plaza|light plaza)\b/i,
+      /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(observatory|telescope|stargazing|wizard\s*(?:tower|spire|castle)|mage\s*(?:tower|spire)|magic\s*(?:tower|spire)|market|marketplace|bazaar|village square|town square|sky bridge|sky walkway|sky overpass|beacon plaza|gallery plaza|light plaza)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(biggest|huge|giant|massive|grand|fancy)\b.*\b(house|home|building|structure)\b/i,
       /\b(build|make|put up|build me|set up|construct)\b.*\b(house|cottage|home|cabin|structure)\b/i,

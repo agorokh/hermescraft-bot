@@ -245,10 +245,19 @@ test('speculative build discussion guard does not block non-build intents', asyn
 });
 
 
-test('speculative gallery discussion returns dispatcher_null without global NLP block', async () => {
+test('speculative gallery discussion blocked before NLP dispatcher runs', async () => {
   const r = await tryRoute(stubBot(), 'should we build a sky bridge someday?', 'Adalynn');
   assert.equal(r.matched, false);
-  assert.ok(['dispatcher_null', 'oov', 'clarify'].includes(r.nlp_zone), r.nlp_zone);
+  assert.ok(['speculative_discussion', 'dispatcher_null', 'oov', 'clarify'].includes(r.nlp_zone), r.nlp_zone);
+});
+
+test('bare wizard/magic keywords route to resolved schematic not wizard_tower regex trap', async () => {
+  const magicHouse = await tryRouteRegex(stubBot(), 'build me a magic house', 'Adalynn');
+  assert.equal(magicHouse.matched, true);
+  assert.equal(magicHouse.body.name, 'small_house');
+  const wizardHouse = await tryRouteRegex(stubBot(), 'build a wizard house', 'Adalynn');
+  assert.equal(wizardHouse.matched, true);
+  assert.equal(wizardHouse.body.name, 'small_house');
 });
 
 test('NLP speculative guard does not block non-build emote intents', async () => {

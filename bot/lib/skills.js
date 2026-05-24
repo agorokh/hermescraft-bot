@@ -585,6 +585,15 @@ function shouldBypassForemanMaterials(useChatCommand) {
 // the block matches the sentinel, /setblock works; otherwise fall back
 // to physical placement.  Clamps Y to <= 319 (vanilla 1.21 build limit)
 // to avoid the probe firing above world height.
+
+function messageMentionsCoords(message, x, y, z) {
+  const target = `${x} ${y} ${z}`;
+  const triples = String(message || '')
+    .toLowerCase()
+    .match(/-?\d+\s*(?:,\s*|\s+)-?\d+\s*(?:,\s*|\s+)-?\d+/g) || [];
+  return triples.some((triple) => triple.replace(/\s*,\s*|\s+/g, ' ').trim() === target);
+}
+
 async function detectSetblockAuth(bot) {
   if (_setblockAuthByBot.get(bot) === true) return true;
   if (process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1') {
@@ -624,12 +633,10 @@ async function detectSetblockAuth(bot) {
   if (py == null) return false;
 
   let commandFeedbackHit = false;
-  const coordComma = `${probeX}, ${py}, ${probeZ}`;
-  const coordSpace = `${probeX} ${py} ${probeZ}`;
   const onProbeMessage = (message) => {
     const text = String(message || '').toLowerCase();
-    const mentionsCoord = text.includes(coordComma) || text.includes(coordSpace);
-    if (mentionsCoord && (text.includes('changed the block') || text.includes('set block'))) {
+    if (messageMentionsCoords(text, probeX, py, probeZ)
+      && (text.includes('changed the block') || text.includes('set block'))) {
       commandFeedbackHit = true;
     }
   };
@@ -660,14 +667,11 @@ async function detectSetblockAuth(bot) {
 
 
 async function waitForSetblockOutcome(bot, { x, y, z, block }, timeoutMs = SETBLOCK_CHAT_INTERVAL_MS + 150) {
-  const coordComma = `${x}, ${y}, ${z}`;
-  const coordSpace = `${x} ${y} ${z}`;
   let feedbackOk = false;
   let feedbackFail = false;
   const onMessage = (message) => {
     const text = String(message || '').toLowerCase();
-    const mentionsCoord = text.includes(coordComma) || text.includes(coordSpace);
-    if (!mentionsCoord) return;
+    if (!messageMentionsCoords(text, x, y, z)) return;
     if (text.includes('changed the block') || text.includes('set block')) feedbackOk = true;
     if (text.includes('cannot') || text.includes('unknown block') || text.includes('failed')
       || text.includes('out of bounds') || text.includes('not allowed')) {

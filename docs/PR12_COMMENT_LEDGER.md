@@ -46,6 +46,7 @@ All bot reviews map to threads above; no additional actionable items.
 ## Verification
 
 `cd bot && npm test` — 180/180 passing.
+
 ## Post-watermark round 2 (after `23969b6`)
 
 | # | Thread ID | Author | Path | Status | Resolution |

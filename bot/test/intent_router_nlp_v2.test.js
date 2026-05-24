@@ -6,6 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tryRoute, recordLastSkill, resetContextBuffer } from '../lib/intent_router_nlp.js';
+import { isSpeculativeBuildDiscussion } from '../lib/schematic_resolve.js';
 import { tryStopRoute, tryRoute as tryRouteRegex } from '../lib/intent_router.js';
 
 function stubBot(senderName = 'Adalynn', opts = {}) {
@@ -254,6 +255,11 @@ test('NLP speculative guard does not block non-build emote intents', async () =>
   const r = await tryRoute(stubBot(), 'dance for me', 'Adalynn');
   assert.equal(r.matched, true, `expected emote route: zone=${r.nlp_zone}`);
   assert.equal(r.intent_name, 'emote_dance');
+});
+
+
+test('past-tense built recall is treated as speculative discussion', () => {
+  assert.equal(isSpeculativeBuildDiscussion('do you remember that tower we built?'), true);
 });
 
 test('gallery discussion prompts do not dispatch advanced builds', async () => {

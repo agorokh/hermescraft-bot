@@ -1,6 +1,6 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `29daba1edb42f92fe01a1c47a7b1397f434d6f19` (pre-Round 17 push)
+**Watermark:** `bc4e8f3` (Round 17 push — tower Y, wizard compound, probe try/finally)
 
 ## Summary
 

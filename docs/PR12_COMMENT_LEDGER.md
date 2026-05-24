@@ -1,11 +1,17 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `7fb55a8` (Round 21 push — market structure noun, list before speculative)
+**Watermark:** `fffc129` (pre-Round 22 push)
 
 ## Summary
 
-- Review threads: **58** (58 RESOLVED / 0 UNRESOLVED after Round 21 code fixes)
+- Review threads: **59** (59 RESOLVED / 0 UNRESOLVED after Round 22 code fixes)
 - agorokh comments: **0**
+
+## Round 22 (post-`fffc129` Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3295062698 Exclude "on the market" from market-square fallback | RESOLVED | Add `on` to location-qualifier exclusion for market/bazaar aliases |
 
 ## Round 21 (post-`4597aea` Codex)
 
@@ -153,3 +159,4 @@
 | 56 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295032725 |
 | 57 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295043111 |
 | 58 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295043114 |
+| 59 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295062698 |

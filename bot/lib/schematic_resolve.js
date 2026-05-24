@@ -29,7 +29,7 @@ export function resolveSchematicName(body) {
   if (/\b(?:wizard|mage|magic|spell)\s*(?:tower|spire|castle)\b/.test(b)
     || /\b(?:tower|spire|castle)\s*(?:of\s+)?(?:wizard|mage|magic|spell)s?\b/.test(b)) return 'wizard_tower';
   if (/\b(marketplace|bazaar|village\s*square|town\s*square|shopping\s*street|market\s*square)\b/.test(b)
-    && !/\b(at|in|near|by|from|to)\s+(?:the\s+)?(?:bazaar|market(?:place|square)?|village\s*square|town\s*square|shopping\s*street)\b/.test(b)) {
+    && !/\b(at|in|near|by|from|to|on)\s+(?:the\s+)?(?:bazaar|market(?:place|square)?|village\s*square|town\s*square|shopping\s*street)\b/.test(b)) {
     return 'market_square';
   }
   if (/\b(sky\s*bridge|sky\s*walkway|sky\s*overpass)\b/.test(b)) return 'sky_bridge';
@@ -46,7 +46,7 @@ export function resolveSchematicName(body) {
   if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(b)) return 'campfire_spot';
   if ((/\b(build|make|set up|construct|create|design)\b.*\b(?:a|an|the|our|my|me\s+(?:a|an))\s+market\b/.test(b)
     || /\bmarket\s+(?:square|place|stall|stalls|area|bazaar)\b/.test(b))
-    && !/\b(at|in|near|by|from|to)\s+(?:the\s+)?market\b/.test(b)) return 'market_square';
+    && !/\b(at|in|near|by|from|to|on)\s+(?:the\s+)?market\b/.test(b)) return 'market_square';
   return null;
 }
 

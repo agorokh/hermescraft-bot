@@ -313,6 +313,7 @@ test('market alias does not hijack house builds near a market', () => {
   assert.equal(resolveSchematicName('build a mansion near the market'), 'grand_hotel');
   assert.equal(resolveSchematicName('build a fire pit by the market'), 'campfire_spot');
   assert.equal(resolveSchematicName('make me a sword at the market'), null);
+  assert.equal(resolveSchematicName('make me a sword on the market'), null);
   assert.equal(resolveSchematicName('make me a sword at the bazaar'), null);
   assert.equal(resolveSchematicName('build a market'), 'market_square');
   assert.equal(resolveSchematicName('build a bazaar'), 'market_square');

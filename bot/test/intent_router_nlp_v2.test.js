@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tryRoute, recordLastSkill } from '../lib/intent_router_nlp.js';
+import { tryRoute, recordLastSkill, resetContextBuffer } from '../lib/intent_router_nlp.js';
 import { tryStopRoute, tryRoute as tryRouteRegex } from '../lib/intent_router.js';
 
 function stubBot(senderName = 'Adalynn', opts = {}) {
@@ -257,6 +257,8 @@ test('NLP speculative guard does not block non-build emote intents', async () =>
 });
 
 test('gallery discussion prompts do not dispatch advanced builds', async () => {
+  const bot = stubBot();
+  resetContextBuffer(bot);
   for (const body of [
     'should we build a sky bridge someday?',
     'i wish we could build a wizard tower later',
@@ -267,10 +269,10 @@ test('gallery discussion prompts do not dispatch advanced builds', async () => {
     'do you remember the beacon plaza?',
     'where is the sky bridge?',
   ]) {
-    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    const r = await tryRoute(bot, body, 'Adalynn');
     assert.equal(r.matched, false, `NLP fired on discussion prompt: ${body} -> ${r.action}`);
 
-    const regex = await tryRouteRegex(stubBot(), body, 'Adalynn');
+    const regex = await tryRouteRegex(bot, body, 'Adalynn');
     assert.equal(regex.matched, false, `regex fired on discussion prompt: ${body} -> ${regex.action}`);
   }
 });

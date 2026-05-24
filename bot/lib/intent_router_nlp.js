@@ -309,6 +309,15 @@ async function ensureTrained() {
 
 // Intent → action dispatch. The classifier picks the intent; this maps it
 // to a concrete action body (with slot extraction where needed).
+
+const SPECULATIVE_NON_BUILD_INTENTS = new Set([
+  'come_here', 'follow_me', 'goto', 'stop',
+  'emote_wave', 'emote_jump', 'emote_dance', 'emote_sit',
+  'torch_near_me', 'flower_give', 'gather_block', 'give_to_player',
+  'fish_for_food', 'farm_food', 'feed_player', 'return_home',
+  'light_area', 'collect', 'repeat_last_action',
+]);
+
 const DISPATCHERS = {
   stop: () => ({ action: 'stop', body: {} }),
 
@@ -598,7 +607,11 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   if (!decision) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
   }
-  if (isSpeculativeBuildDiscussion(body) && (resolveSchematicName(body) || ['build_schematic', 'build_tower'].includes(intent))) {
+  if (
+    isSpeculativeBuildDiscussion(body)
+    && resolveSchematicName(body)
+    && !SPECULATIVE_NON_BUILD_INTENTS.has(intent)
+  ) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'speculative_discussion' };
   }
   // Record this for future repeat_last_action — only if NOT a repeat itself

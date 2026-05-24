@@ -1,6 +1,6 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `fffc129` (pre-Round 22 push)
+**Watermark:** `6dc0ef0` (Round 22 push — exclude on-the-market location phrases)
 
 ## Summary
 

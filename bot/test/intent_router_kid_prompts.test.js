@@ -127,6 +127,18 @@ test('hotel-sized build prompts route to advanced Foreman pipeline', async () =>
   assert.equal(route.body.name, 'grand_hotel');
 });
 
+test('star tower and spell tower route to gallery schematics not procedural tower', async () => {
+  for (const [body, expected] of [
+    ['Rosie build a star tower here', 'crystal_observatory'],
+    ['Rosie build a spell tower', 'wizard_tower'],
+  ]) {
+    const route = await tryRoute(stubBot('Adalynn'), body, 'Adalynn');
+    assert.ok(route.matched, `${body} must match router`);
+    assert.equal(route.action, 'build_schematic_advanced');
+    assert.equal(route.body.name, expected);
+  }
+});
+
 test('gallery regex matches compact schematic aliases without spaces', async () => {
   for (const [body, expected] of [
     ['Rosie build a skybridge here', 'sky_bridge'],

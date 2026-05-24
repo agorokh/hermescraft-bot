@@ -288,6 +288,12 @@ test('imperative build with where-is location qualifier is not speculative', () 
   assert.equal(isSpeculativeBuildDiscussion('make a wizard tower where are we?'), false);
 });
 
+test('imperative build with recall phrasing is not speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('build the wizard tower we talked about'), false);
+  assert.equal(isSpeculativeBuildDiscussion('make the crystal observatory we talked about'), false);
+  assert.equal(isSpeculativeBuildDiscussion('remember the crystal observatory we talked about'), true);
+});
+
 test('where-is recall for legacy schematics is speculative', () => {
   assert.equal(isSpeculativeBuildDiscussion('where is the treehouse?'), true);
   assert.equal(isSpeculativeBuildDiscussion('where is the garden?'), true);

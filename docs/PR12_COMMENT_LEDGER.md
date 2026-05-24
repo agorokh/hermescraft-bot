@@ -1,11 +1,18 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `559e1b265435b6042dacbc1db4caaa9f1d5d3c81`
+**Watermark:** `2ac92648d065073900a5129a49522b77f653a52e`
 
 ## Summary
 
-- Review threads: **38** (target: 38 RESOLVED / 0 UNRESOLVED)
+- Review threads: **40** (target: 40 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
+
+## Round 12 (post-`6a759a6` Bugbot + Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294115916 recall phrases block imperative builds with "talked about" | RESOLVED | Soft-recall only blocks when no imperative build command |
+| r3294122330 regex missing star tower / spell tower keywords | RESOLVED | Add resolver aliases to build_schematic regex |
 
 ## Round 11 (post-`499af0e` Bugbot + Codex)
 
@@ -63,3 +70,5 @@
 | 36 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294102962 |
 | 37 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294102964 |
 | 38 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294107861 |
+| 39 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294115916 |
+| 40 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294122330 |

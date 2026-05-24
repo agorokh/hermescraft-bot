@@ -54,7 +54,7 @@ export function isSpeculativeBuildDiscussion(body) {
   if (!mentionsBuildTopic) return false;
   return /\b(should we|someday|some day|later|another day|wish we could|tell me a story|talked about|do you remember|remember when)\b/.test(text)
     || /\b(what did (we|you) build|what have (we|you) built|what was built|did (we|you) build)\b/.test(text)
-    || /\bwhere (is|are) (the |our )?(sky bridge|beacon plaza|wizard tower|crystal observatory|market square|grand hotel|treehouse|garden|well|ice castle|small house|small tower|igloo|campfire)\b/.test(text)
+    || (/\bwhere (is|are)\b/.test(text) && resolveSchematicName(text) != null)
     || /\bwhere did (we|you) build\b/.test(text);
 }
 

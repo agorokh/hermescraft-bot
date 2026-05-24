@@ -262,6 +262,12 @@ test('past-tense built recall is treated as speculative discussion', () => {
   assert.equal(isSpeculativeBuildDiscussion('do you remember that tower we built?'), true);
 });
 
+
+test('where-is recall matches schematic aliases via resolver', () => {
+  assert.equal(isSpeculativeBuildDiscussion('where is the fire pit?'), true);
+  assert.equal(isSpeculativeBuildDiscussion('where is the tree fort?'), true);
+});
+
 test('where-is recall for legacy schematics is speculative', () => {
   assert.equal(isSpeculativeBuildDiscussion('where is the treehouse?'), true);
   assert.equal(isSpeculativeBuildDiscussion('where is the garden?'), true);

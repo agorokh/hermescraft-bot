@@ -41,7 +41,8 @@ export function resolveSchematicName(body) {
   if (/\b(garden|flower bed|flower patch|flower garden)\b/.test(b)) return 'garden';
   if (/\b(castle|fort|palace|tower|watchtower|outpost)\b/.test(b)) return 'small_tower';
   if (/\b(campfire|fire pit|firepit|sit spot|hangout)\b/.test(b)) return 'campfire_spot';
-  if (/\b(build|make|set up|construct|create|design)\b.*\bmarket\b/.test(b)) return 'market_square';
+  if (/\b(build|make|set up|construct|create|design)\b.*\b(?:a|an|the|our|my|me\s+(?:a|an))?\s*market(?:\s+(?:square|place|stall|stalls|area|bazaar))?\b/.test(b)
+    && !/\b(at|in|near|by|from|to)\s+(?:the\s+)?market\b/.test(b)) return 'market_square';
   return null;
 }
 
@@ -57,11 +58,12 @@ function hasImperativeBuildCommand(text) {
 
 export function isSpeculativeBuildDiscussion(body) {
   const text = String(body || '').toLowerCase();
+  const resolved = resolveSchematicName(text);
   const mentionsBuildTopic = /\b(build|building|built|construct|design|schematic)\b/.test(text)
-    || resolveSchematicName(text) != null;
+    || resolved != null;
   if (!mentionsBuildTopic) return false;
   const whereRecall = /\bwhere (is|are)\b/.test(text)
-    && resolveSchematicName(text) != null
+    && resolved != null
     && !/\b(build|make|put up|construct|design|create|set up)\b/.test(text);
   const softRecall = /\b(talked about|do you remember|remember when|tell me a story|later|another day)\b/.test(text);
   const hardRecall = /\b(should we (?:build|make|construct|have a|try to|get a|add a)|someday|some day|wish we could)\b/.test(text)

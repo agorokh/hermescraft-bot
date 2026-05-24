@@ -1,11 +1,19 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `f364631` (Round 18 push — hoist afterName before probe try/finally)
+**Watermark:** `b327bce` (pre-Round 19 push)
 
 ## Summary
 
-- Review threads: **51** (51 RESOLVED / 0 UNRESOLVED after Round 18 code fixes)
+- Review threads: **54** (54 RESOLVED / 0 UNRESOLVED after Round 19 code fixes)
 - agorokh comments: **0**
+
+## Round 19 (post-`b327bce` Bugbot + Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3295008174 market fallback hijacks non-build market mentions | RESOLVED | Require market as build target; exclude at/in/near the market |
+| r3295014295 speculative guard blocks list schematic requests | RESOLVED | Exclude `resolved === 'list'` from NLP pre-dispatch block |
+| r3295014297 duplicate resolveSchematicName in speculative guard | RESOLVED | Cache resolved name in local variable |
 
 ## Round 18 (post-`90c4182` Bugbot + Codex)
 
@@ -124,3 +132,6 @@
 | 49 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294981683 |
 | 50 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294990837 |
 | 51 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294991751 |
+| 52 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295008174 |
+| 53 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295014295 |
+| 54 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295014297 |

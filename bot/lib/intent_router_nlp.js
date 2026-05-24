@@ -603,7 +603,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   }
   if (isSpeculativeBuildDiscussion(body)) {
     const resolved = resolveSchematicName(body);
-    if (resolved) {
+    if (resolved && resolved !== 'list') {
       const text = String(body || '').toLowerCase();
       const wherePrimaryRecall = /^\s*(?:[\w']+\s+){0,4}where (is|are)\b/.test(text.trim())
         && !/\b(build|make|put up|construct|design|create|set up)\b/.test(text);

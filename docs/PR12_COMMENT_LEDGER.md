@@ -1,11 +1,18 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `bc4e8f3` (Round 17 push — tower Y, wizard compound, probe try/finally)
+**Watermark:** `90c4182` (pre-Round 18 push)
 
 ## Summary
 
-- Review threads: **49** (49 RESOLVED / 0 UNRESOLVED after Round 17 code fixes)
+- Review threads: **51** (51 RESOLVED / 0 UNRESOLVED after Round 18 code fixes)
 - agorokh comments: **0**
+
+## Round 18 (post-`90c4182` Bugbot + Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294990837 afterName declared inside try, used outside | RESOLVED | Hoist `afterName` before try/finally block |
+| r3294991751 Hoist setblock probe readback state outside try block | RESOLVED | Same fix as r3294990837 |
 
 ## Round 17 (post-`29daba1` Bugbot)
 
@@ -115,3 +122,5 @@
 | 47 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294967634 |
 | 48 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294967637 |
 | 49 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294981683 |
+| 50 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294990837 |
+| 51 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294991751 |

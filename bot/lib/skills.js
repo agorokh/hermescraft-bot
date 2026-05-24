@@ -659,10 +659,10 @@ async function detectSetblockAuth(bot) {
     if (isSetblockCommandFeedback(message, position)) commandFeedbackHit = true;
   };
   try { bot.on?.('message', onProbeMessage); } catch {}
+  let afterName = 'air';
   try {
     try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
     const deadline = Date.now() + 2500;
-    let afterName = 'air';
     while (Date.now() < deadline) {
       const after = bot.blockAt(new Vec3(probeX, py, probeZ));
       afterName = after?.name || 'air';

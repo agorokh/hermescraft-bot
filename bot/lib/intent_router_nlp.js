@@ -310,11 +310,6 @@ async function ensureTrained() {
 // Intent → action dispatch. The classifier picks the intent; this maps it
 // to a concrete action body (with slot extraction where needed).
 
-const SPECULATIVE_BUILD_ACTIONS = new Set([
-  'build_schematic',
-  'build_schematic_advanced',
-  'build_tower',
-]);
 const SPECULATIVE_MOVEMENT_INTENTS = new Set([
   'come_here', 'follow_me', 'goto', 'stop',
   'emote_wave', 'emote_jump', 'emote_dance', 'emote_sit',
@@ -610,9 +605,8 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
   }
   if (isSpeculativeBuildDiscussion(body)) {
-    const blocksBuild = SPECULATIVE_BUILD_ACTIONS.has(decision.action);
     const blocksRecall = resolveSchematicName(body) && !SPECULATIVE_MOVEMENT_INTENTS.has(intent);
-    if (blocksBuild || blocksRecall) {
+    if (blocksRecall) {
       return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'speculative_discussion' };
     }
   }

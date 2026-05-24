@@ -678,14 +678,17 @@ async function waitForSetblockOutcome(bot, { x, y, z, block }, timeoutMs = SETBL
       feedbackFail = true;
     }
   };
-  try { bot.on?.('messagestr', onMessage); } catch {}
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (feedbackFail) break;
-    if (feedbackOk || blockAtMatches(bot, x, y, z, block)) break;
-    await sleep(25);
+  try {
+    try { bot.on?.('messagestr', onMessage); } catch {}
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (feedbackFail) break;
+      if (feedbackOk || blockAtMatches(bot, x, y, z, block)) break;
+      await sleep(25);
+    }
+  } finally {
+    try { bot.removeListener?.('messagestr', onMessage); } catch {}
   }
-  try { bot.removeListener?.('messagestr', onMessage); } catch {}
   if (feedbackFail) return { ok: false, reason: 'setblock rejected' };
   if (feedbackOk || blockAtMatches(bot, x, y, z, block)) return { ok: true };
   if (!bot.blockAt(new Vec3(x, y, z))) return { ok: null, reason: 'chunk unloaded' };

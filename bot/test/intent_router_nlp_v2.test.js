@@ -283,6 +283,11 @@ test('where-is recall matches schematic aliases via resolver', () => {
   assert.equal(isSpeculativeBuildDiscussion('where is the tree fort?'), true);
 });
 
+test('imperative build with where-is location qualifier is not speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('build a sky bridge where is best?'), false);
+  assert.equal(isSpeculativeBuildDiscussion('make a wizard tower where are we?'), false);
+});
+
 test('where-is recall for legacy schematics is speculative', () => {
   assert.equal(isSpeculativeBuildDiscussion('where is the treehouse?'), true);
   assert.equal(isSpeculativeBuildDiscussion('where is the garden?'), true);

@@ -4,8 +4,14 @@
 
 ## Summary
 
-- Review threads: **34** (target: 34 RESOLVED / 0 UNRESOLVED)
+- Review threads: **35** (target: 35 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
+
+## Round 10 (post-`a708af1` Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294087195 where-is blocks imperative builds with location qualifiers | RESOLVED | Skip where-recall when build imperatives present |
 
 ## Round 9 (post-`0af4b61` Bugbot)
 
@@ -58,3 +64,4 @@
 | 32 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3293768746 |
 | 33 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294072299 |
 | 34 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294072301 |
+| 35 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294087195 |

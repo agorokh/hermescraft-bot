@@ -1,7 +1,7 @@
 {
   "name": "hermescraft-bot",
   "version": "3.0.0",
-  "description": "HermesCraft Bot Server — Mineflayer HTTP API for AI agents",
+  "description": "HermesCraft Bot Server \u2014 Mineflayer HTTP API for AI agents",
   "type": "module",
   "main": "server.js",
   "scripts": {

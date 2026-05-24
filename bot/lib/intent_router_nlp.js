@@ -29,10 +29,10 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { extractGatherBlockFromBody, extractOreFromBody } from './intent_slot_extract.js';
-import { isAdvancedSchematicName, resolveSchematicName } from './schematic_resolve.js';
+import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
-import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { findPlayerEntity, normalizeBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -76,7 +76,6 @@ function _ctxBuf(bot) {
   if (fresh.length !== buf.length) _ctxBufByBot.set(bot.username, fresh);
   return fresh.length > 0 ? fresh : null;
 }
-
 // Chat ACK placeholders (fish/farm/cook) must not evict build skills from the buffer;
 // conversational chat intents may repeat ("say something nice" → "do it again").
 const CHAT_BUFFER_INTENTS = new Set([
@@ -310,6 +309,12 @@ async function ensureTrained() {
 
 // Intent → action dispatch. The classifier picks the intent; this maps it
 // to a concrete action body (with slot extraction where needed).
+
+const SPECULATIVE_BUILD_INTENTS = new Set([
+  'build_schematic',
+  'build_tower',
+]);
+
 const DISPATCHERS = {
   stop: () => ({ action: 'stop', body: {} }),
 
@@ -361,30 +366,42 @@ const DISPATCHERS = {
   },
 
   build_schematic: (bot, ctx) => {
+    const resolvedName = resolveSchematicName(ctx.body);
+    if (resolvedName !== 'list' && isSpeculativeBuildDiscussion(ctx.body)) return null;
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
-    const name = resolveSchematicName(ctx.body);
+    const name = resolvedName;
     if (name === 'list') return { action: 'list_schematics', body: {} };
     if (!name) return null;
+    const buildX = Math.floor(p.x) + 2;
+    const buildZ = Math.floor(p.z);
     const action = isAdvancedSchematicName(name) ? 'build_schematic_advanced' : 'build_schematic';
     return {
       action,
-      body: { name, x: Math.floor(p.x) + 2, y: Math.floor(p.y), z: Math.floor(p.z) },
+      body: {
+        name,
+        x: buildX,
+        y: normalizeBuildBaseY(bot, buildX, buildZ, p.y),
+        z: buildZ,
+      },
     };
   },
 
   build_tower: (bot, ctx) => {
+    if (isSpeculativeBuildDiscussion(ctx.body)) return null;
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
     const height = intFromMatch(ctx.body, /(\d+)\s*(blocks?\s*)?(high|tall)/i) || 5;
     const buildables = ['oak_planks', 'cobblestone', 'stone', 'oak_log', 'dirt', 'spruce_planks'];
     const found = bot.inventory.items().find((i) => buildables.includes(i.name));
     const material = found ? found.name : 'oak_planks';
-    const baseY = Math.floor(p.y);
     const [dx, dz] = pickTowerFootOffset(bot, p);
+    const footX = Math.floor(p.x) + dx;
+    const footZ = Math.floor(p.z) + dz;
+    const baseY = normalizeBuildBaseY(bot, footX, footZ, p.y);
     return {
       action: 'build_tower',
-      body: { x: Math.floor(p.x) + dx, y: baseY, z: Math.floor(p.z) + dz, height, material },
+      body: { x: footX, y: baseY, z: footZ, height, material },
     };
   },
 
@@ -584,6 +601,18 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   const dispatch = DISPATCHERS[intent];
   if (!dispatch) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'no_dispatcher', error: 'no dispatcher for ' + intent };
+  }
+  if (isSpeculativeBuildDiscussion(body)) {
+    const resolved = resolveSchematicName(body);
+    if (resolved && resolved !== 'list') {
+      const text = String(body || '').toLowerCase();
+      const wherePrimaryRecall = /^\s*(?:[\w']+\s+){0,4}where (is|are)\b/.test(text.trim())
+        && !/\b(build|make|put up|construct|design|create|set up)\b/.test(text);
+      const blocksBuildRecall = SPECULATIVE_BUILD_INTENTS.has(intent);
+      if (wherePrimaryRecall || blocksBuildRecall) {
+        return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'speculative_discussion' };
+      }
+    }
   }
   // ctx already constructed above for anaphora; reuse to avoid double-lookup
   const decision = await Promise.resolve(dispatch(bot, ctx));

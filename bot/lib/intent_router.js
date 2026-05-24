@@ -25,8 +25,8 @@
 // ctx = { sender, senderEntity, message, body }
 
 import { extractOreFromBody } from './intent_slot_extract.js';
-import { isAdvancedSchematicName, resolveSchematicName } from './schematic_resolve.js';
-import { findPlayerEntity, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
+import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
 function extractKidName(body) {
@@ -205,6 +205,7 @@ const INTENTS = [
       // Treehouse FIRST — \bhouse\b doesn't match inside "treehouse", so
       // an explicit pattern is required (post-mortem 2026-05-17 A/B run).
       /\b(build|make|put up|build me|set up|construct)\b.*\b(treehouse|tree house|tree fort|tree home)\b/i,
+      /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(observatory|telescope|stargazing|star\s*tower|crystal\s*lab|wizard\s*(?:tower|spire|castle)|mage\s*(?:tower|spire|castle)|magic\s*(?:tower|spire|castle)|spell\s*(?:tower|spire|castle)|market|marketplace|bazaar|village\s*square|town\s*square|sky\s*bridge|sky\s*walkway|sky\s*overpass|beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(biggest|huge|giant|massive|grand|fancy)\b.*\b(house|home|building|structure)\b/i,
       /\b(build|make|put up|build me|set up|construct)\b.*\b(house|cottage|home|cabin|structure)\b/i,
@@ -218,19 +219,23 @@ const INTENTS = [
       /\bshow me your (builds|schematics|templates)\b/i,
     ],
     async handler(bot, ctx) {
+      const resolvedName = resolveSchematicName(ctx.body);
+      if (resolvedName !== 'list' && isSpeculativeBuildDiscussion(ctx.body)) return null;
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
       const body = ctx.body.toLowerCase();
       if (/\bsafe\s+(?:house|home|spot|place)\b/i.test(body)) return null;
-      const name = resolveSchematicName(ctx.body);
+      const name = resolvedName;
       if (name === 'list') return { action: 'list_schematics', body: {} };
       if (!name) return null;
       const kidName = extractKidName(ctx.body);
+      const buildX = Math.floor(p.x) + 2;
+      const buildZ = Math.floor(p.z);
       const schemBody = {
         name,
-        x: Math.floor(p.x) + 2,
-        y: Math.floor(p.y),
-        z: Math.floor(p.z),
+        x: buildX,
+        y: normalizeBuildBaseY(bot, buildX, buildZ, p.y),
+        z: buildZ,
       };
       if (kidName) schemBody.kid_name = kidName;
       const action = isAdvancedSchematicName(name) ? 'build_schematic_advanced' : 'build_schematic';
@@ -244,6 +249,7 @@ const INTENTS = [
       /\b(tower|pillar|column)\b.*\b(here|right here|where I am)\b/i,
     ],
     async handler(bot, ctx) {
+      if (isSpeculativeBuildDiscussion(ctx.body)) return null;
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
       // Extract a height if mentioned: "5 blocks high", "10 tall"
@@ -256,13 +262,15 @@ const INTENTS = [
       // directions at +2/-2 offset, pick the first one where the air block
       // above the surface is actually air (not torch/sapling from a prior
       // prompt). Falls back to +2x if no clear spot found.
-      const baseY = Math.floor(p.y);
       const [dx, dz] = pickTowerFootOffset(bot, p);
+      const footX = Math.floor(p.x) + dx;
+      const footZ = Math.floor(p.z) + dz;
+      const baseY = normalizeBuildBaseY(bot, footX, footZ, p.y);
       const kidName = extractKidName(ctx.body);
       const towerBody = {
-        x: Math.floor(p.x) + dx,
+        x: footX,
         y: baseY,
-        z: Math.floor(p.z) + dz,
+        z: footZ,
         height,
         material,
       };
@@ -447,7 +455,6 @@ const INTENTS = [
 ];
 
 // ── Public router ──────────────────────────────────────────────────
-
 // Deterministic stop/cancel hot path — must run before NLP classification.
 export async function tryStopRoute(bot, body, sender) {
   if (!bot || !body) return { matched: false };

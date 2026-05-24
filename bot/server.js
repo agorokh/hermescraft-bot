@@ -100,7 +100,10 @@ async function tryRoute(bot, body, sender) {
   if (nlp.matched) return nlp;
   if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
     const regex = await tryRouteRegex(bot, body, sender);
-    if (regex.matched && SURVIVAL_REGEX_FALLBACK.has(regex.intent_name)) {
+    if (
+      regex.matched
+      && (SURVIVAL_REGEX_FALLBACK.has(regex.intent_name) || regex.action === 'build_schematic_advanced')
+    ) {
       regex._fallback_from_nlp_zone = nlp.nlp_zone;
       regex._fallback_from_nlp_score = nlp.nlp_score;
       regex.skill_id = recordLastSkill(bot, regex.intent_name, regex.action, regex.body, body);
@@ -605,6 +608,17 @@ function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMen
   trimCommandQueue();
 }
 
+
+function routedActionSucceeded(route, result) {
+  return !intentRouterOutcomeFailed(route.action, result) && !isSurvivalBlock(route.action, result);
+}
+
+function markChatEntryHandledByRouter(chatEntry, route) {
+  chatEntry.handledByRouter = true;
+  chatEntry.routerIntent = route.intent_name;
+  chatEntry.routerAction = route.action;
+}
+
 function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
   const survivalBlock = isSurvivalBlock(route.action, result);
   if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
@@ -651,14 +665,15 @@ async function handleChat(username, message) {
 
   if (forMe) {
     // Message is for us — add to chatLog (visible in mc read_chat / mc status)
-    chatLog.push({
+    const chatEntry = {
       time: Date.now(),
       from: username,
       message: routing.body,
       private: !routing.isBroadcast,
       channel: routing.channel,
       targets: routing.targets.length > 0 ? routing.targets : undefined,
-    });
+    };
+    chatLog.push(chatEntry);
     if (chatLog.length > MAX_LOG) chatLog.shift();
     log(`[Chat${routing.isBroadcast ? '' : ' @me'}] <${username}> ${routing.body}`);
     
@@ -686,6 +701,9 @@ async function handleChat(username, message) {
               handleIntentRouterActionResult({
                 username, route, result, channel: routing.channel,
               });
+              if (routedActionSucceeded(route, result)) {
+                markChatEntryHandledByRouter(chatEntry, route);
+              }
             }).catch((e) => {
               log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
               if (route.skill_id != null) {
@@ -748,6 +766,9 @@ async function handleChat(username, message) {
                 handleIntentRouterActionResult({
                   username, route, result, channel: 'public_mention', viaMention: true,
                 });
+                if (routedActionSucceeded(route, result)) {
+                  markChatEntryHandledByRouter(chatEntry, route);
+                }
               }).catch((e) => {
                 log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
               if (route.skill_id != null) {
@@ -1463,7 +1484,7 @@ function briefState() {
   // Nearby broadcasts are capped at 2 most recent to reduce cascade noise.
   const now = Date.now();
   const recentAll = chatLog
-    .filter(m => now - m.time < 30000 && m.from !== bot.username);
+    .filter(m => now - m.time < 30000 && m.from !== bot.username && !m.handledByRouter);
   const directMsgs = recentAll.filter(m => m.private || m.whisper);
   const broadcastMsgs = recentAll.filter(m => !m.private && !m.whisper).slice(-2);
   const recentChat = [...directMsgs, ...broadcastMsgs]
@@ -1585,7 +1606,8 @@ function getFullState() {
   const biome = b.blockAt(pos)?.biome?.name || 'unknown';
 
   // Unread chat
-  const unreadChat = chatLog.length > 0 ? chatLog.slice(-5).map(m => ({
+  const unreadChatSource = chatLog.filter(m => !m.handledByRouter).slice(-5);
+  const unreadChat = unreadChatSource.length > 0 ? unreadChatSource.map(m => ({
     from: m.from, message: m.message,
     ago: Math.round((Date.now() - m.time) / 1000) + 's',
   })) : [];

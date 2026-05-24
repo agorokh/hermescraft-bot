@@ -5,7 +5,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tryRoute, recordLastSkill } from '../lib/intent_router_nlp.js';
+import { tryRoute, recordLastSkill, resetContextBuffer } from '../lib/intent_router_nlp.js';
+import { isSpeculativeBuildDiscussion, resolveSchematicName } from '../lib/schematic_resolve.js';
 import { tryStopRoute, tryRoute as tryRouteRegex } from '../lib/intent_router.js';
 
 function stubBot(senderName = 'Adalynn', opts = {}) {
@@ -207,6 +208,147 @@ test('hotel prompts route to advanced build schematic action', async () => {
   assert.equal(r.matched, true, `expected hotel route: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
   assert.equal(r.action, 'build_schematic_advanced');
   assert.equal(r.body.name, 'grand_hotel');
+});
+
+test('gallery prompts route to advanced build schematic action', async () => {
+  for (const [body, expected] of [
+    ['build a crystal observatory here', 'crystal_observatory'],
+    ['make me a wizard tower', 'wizard_tower'],
+    ['build a market square', 'market_square'],
+    ['build a sky bridge', 'sky_bridge'],
+    ['build a beacon plaza', 'beacon_plaza'],
+  ]) {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    assert.equal(r.matched, true, `expected gallery route for ${body}: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
+    assert.equal(r.action, 'build_schematic_advanced');
+    assert.equal(r.body.name, expected);
+  }
+});
+
+
+test('imperative remember-to-build gallery prompts still route', async () => {
+  const r = await tryRouteRegex(stubBot(), 'remember to build a wizard tower here', 'Adalynn');
+  assert.equal(r.matched, true, `expected imperative regex route: ${r.action}`);
+  assert.equal(r.action, 'build_schematic_advanced');
+  assert.equal(r.body.name, 'wizard_tower');
+});
+
+
+test('speculative build discussion guard does not block non-build intents', async () => {
+  const bot = stubBot();
+  const pos = await tryRouteRegex(bot, 'where are you', 'Adalynn');
+  assert.equal(pos.matched, true, 'position report must still route');
+  assert.equal(pos.action, 'chat');
+
+  const mixed = await tryRouteRegex(bot, 'make me a sword, where is the village?', 'Adalynn');
+  assert.equal(mixed.matched, false, 'non-build mixed prompt should fall through regex router');
+});
+
+
+test('speculative gallery discussion blocked before NLP dispatcher runs', async () => {
+  const r = await tryRoute(stubBot(), 'should we build a sky bridge someday?', 'Adalynn');
+  assert.equal(r.matched, false);
+  assert.ok(['speculative_discussion', 'dispatcher_null', 'oov', 'clarify'].includes(r.nlp_zone), r.nlp_zone);
+});
+
+test('bare wizard/magic keywords route to resolved schematic not wizard_tower regex trap', async () => {
+  const magicHouse = await tryRouteRegex(stubBot(), 'build me a magic house', 'Adalynn');
+  assert.equal(magicHouse.matched, true);
+  assert.equal(magicHouse.body.name, 'small_house');
+  const wizardHouse = await tryRouteRegex(stubBot(), 'build a wizard house', 'Adalynn');
+  assert.equal(wizardHouse.matched, true);
+  assert.equal(wizardHouse.body.name, 'small_house');
+});
+
+test('NLP speculative guard does not block non-build emote intents', async () => {
+  const r = await tryRoute(stubBot(), 'dance for me', 'Adalynn');
+  assert.equal(r.matched, true, `expected emote route: zone=${r.nlp_zone}`);
+  assert.equal(r.intent_name, 'emote_dance');
+});
+
+
+test('past-tense built recall is treated as speculative discussion', () => {
+  assert.equal(isSpeculativeBuildDiscussion('do you remember that tower we built?'), true);
+});
+
+
+
+test('imperative build with trailing should-we qualifier is not speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('build a market square, should we put it here?'), false);
+  assert.equal(isSpeculativeBuildDiscussion('build a beacon plaza, should we use the oak?'), false);
+});
+
+test('where-is recall matches schematic aliases via resolver', () => {
+  assert.equal(isSpeculativeBuildDiscussion('where is the fire pit?'), true);
+  assert.equal(isSpeculativeBuildDiscussion('where is the tree fort?'), true);
+});
+
+test('imperative build with where-is location qualifier is not speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('build a sky bridge where is best?'), false);
+  assert.equal(isSpeculativeBuildDiscussion('make a wizard tower where are we?'), false);
+});
+
+test('imperative build with recall phrasing is not speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('build the wizard tower we talked about'), false);
+  assert.equal(isSpeculativeBuildDiscussion('build wizard tower we talked about'), false);
+  assert.equal(isSpeculativeBuildDiscussion('make the crystal observatory we talked about'), false);
+  assert.equal(isSpeculativeBuildDiscussion('remember the crystal observatory we talked about'), true);
+});
+
+test('imperative build with trailing later qualifier is not speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('build me a wizard tower, I need it later'), false);
+  assert.equal(isSpeculativeBuildDiscussion('build a market square, come back later'), false);
+  assert.equal(isSpeculativeBuildDiscussion('i wish we could build a wizard tower later'), true);
+});
+
+test('wizard_tower requires compound wizard/magic + tower phrasing', () => {
+  assert.equal(resolveSchematicName('build a spell tower'), 'wizard_tower');
+  assert.equal(resolveSchematicName('build a castle with magic lights'), 'small_tower');
+  assert.equal(resolveSchematicName('build a frozen magic castle'), 'ice_castle');
+});
+
+test('market alias does not hijack house builds near a market', () => {
+  assert.equal(resolveSchematicName('build a house near the market'), 'small_house');
+  assert.equal(resolveSchematicName('build a marketplace'), 'market_square');
+  assert.equal(resolveSchematicName('build a mansion near the market'), 'grand_hotel');
+  assert.equal(resolveSchematicName('build a fire pit by the market'), 'campfire_spot');
+  assert.equal(resolveSchematicName('make me a sword at the market'), null);
+  assert.equal(resolveSchematicName('make me a sword on the market'), null);
+  assert.equal(resolveSchematicName('make me a sword at the bazaar'), null);
+  assert.equal(resolveSchematicName('build a market'), 'market_square');
+  assert.equal(resolveSchematicName('build a bazaar'), 'market_square');
+  assert.equal(resolveSchematicName('make market news'), null);
+});
+
+test('list schematic prompts bypass speculative recall guard', () => {
+  assert.equal(resolveSchematicName('show me your schematics we talked about'), 'list');
+  assert.equal(isSpeculativeBuildDiscussion('show me your schematics we talked about'), true);
+});
+
+test('where-is recall for legacy schematics is speculative', () => {
+  assert.equal(isSpeculativeBuildDiscussion('where is the treehouse?'), true);
+  assert.equal(isSpeculativeBuildDiscussion('where is the garden?'), true);
+});
+
+test('gallery discussion prompts do not dispatch advanced builds', async () => {
+  const bot = stubBot();
+  resetContextBuffer(bot);
+  for (const body of [
+    'should we build a sky bridge someday?',
+    'i wish we could build a wizard tower later',
+    'can you tell me a story about building a beacon plaza',
+    'remember the crystal observatory we talked about',
+    'that market square idea sounds cool for another day',
+    'what did we build in the gallery plaza today?',
+    'do you remember the beacon plaza?',
+    'where is the sky bridge?',
+  ]) {
+    const r = await tryRoute(bot, body, 'Adalynn');
+    assert.equal(r.matched, false, `NLP fired on discussion prompt: ${body} -> ${r.action}`);
+
+    const regex = await tryRouteRegex(bot, body, 'Adalynn');
+    assert.equal(regex.matched, false, `regex fired on discussion prompt: ${body} -> ${regex.action}`);
+  }
 });
 
 test('ride_horse phrasing is no_dispatcher and not emote_jump regex', async () => {

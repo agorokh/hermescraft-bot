@@ -569,6 +569,10 @@ async function loadSchematic(name) {
 // Per-bot cache: probe once per connection, not on every schematic build.
 const _setblockAuthByBot = new WeakMap();
 
+function shouldBypassForemanMaterials(useChatCommand) {
+  return useChatCommand && process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1';
+}
+
 // Detect whether the bot has op-level permission for /setblock.  Council
 // review (Mistral, 2026-05-16) flagged a critical bug in the
 // listen-for-server-message-only version: a non-op bot on a server with
@@ -581,8 +585,43 @@ const _setblockAuthByBot = new WeakMap();
 // the block matches the sentinel, /setblock works; otherwise fall back
 // to physical placement.  Clamps Y to <= 319 (vanilla 1.21 build limit)
 // to avoid the probe firing above world height.
+
+function messageMentionsCoords(message, x, y, z) {
+  const target = `${x} ${y} ${z}`;
+  const triples = String(message || '')
+    .toLowerCase()
+    .match(/-?\d+\s*(?:,\s*|\s+)-?\d+\s*(?:,\s*|\s+)-?\d+/g) || [];
+  return triples.some((triple) => triple.replace(/\s*,\s*|\s+/g, ' ').trim() === target);
+}
+
+function extractMessageText(message) {
+  if (message && typeof message.toString === 'function') {
+    try { return message.toString(); } catch { /* fall through */ }
+  }
+  return String(message || '');
+}
+
+/** Command feedback only — ignore player chat that happens to mention coords. */
+function isCommandFeedbackMessage(message, position) {
+  if (position === 'chat') return false;
+  const text = extractMessageText(message).trim();
+  if (/^<\w+>/.test(text)) return false;
+  return true;
+}
+
+function isSetblockCommandFeedback(message, position) {
+  if (!isCommandFeedbackMessage(message, position)) return false;
+  const lower = extractMessageText(message).toLowerCase();
+  return lower.includes('changed the block') || lower.includes('set block');
+}
+
 async function detectSetblockAuth(bot) {
   if (_setblockAuthByBot.get(bot) === true) return true;
+  if (process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1') {
+    _setblockAuthByBot.set(bot, true);
+    bot._hc_setblock_auth = true;
+    return true;
+  }
   // Probe at the bot's current position +1Y (a cell guaranteed to be in a
   // loaded chunk).  Use a sentinel block we can read back unambiguously
   // and that's cheap to roll back: white_wool (visible distinct, every
@@ -614,19 +653,70 @@ async function detectSetblockAuth(bot) {
   }
   if (py == null) return false;
 
-  try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
-  await sleep(250); // wait for the chunk update to round-trip
+  let commandFeedbackHit = false;
+  const onProbeMessage = (message, position) => {
+    if (!messageMentionsCoords(extractMessageText(message), probeX, py, probeZ)) return;
+    if (isSetblockCommandFeedback(message, position)) commandFeedbackHit = true;
+  };
+  try { bot.on?.('message', onProbeMessage); } catch {}
+  let afterName = 'air';
+  try {
+    try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline) {
+      const after = bot.blockAt(new Vec3(probeX, py, probeZ));
+      afterName = after?.name || 'air';
+      if (afterName === sentinel || commandFeedbackHit) break;
+      await sleep(100);
+    }
+  } finally {
+    try { bot.removeListener?.('message', onProbeMessage); } catch {}
+  }
 
-  const after = bot.blockAt(new Vec3(probeX, py, probeZ));
-  const afterName = after?.name || 'air';
-  const ok = afterName === sentinel;
+  const ok = afterName === sentinel || commandFeedbackHit;
 
-  // Restore air — probe cell was empty before we touched it.
+  // Restore air — probe cell was empty before we touched it. Readback is the
+  // strongest proof, but live tests showed Paper command feedback can arrive
+  // while the bot's chunk cache still reads stale air immediately after a TP.
+  // Accept feedback as a secondary proof of op auth; never accept timeout alone.
   if (ok) {
     try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} air`); } catch (e) {}
     _setblockAuthByBot.set(bot, true);
   }
   return ok;
+}
+
+
+async function waitForSetblockOutcome(bot, { x, y, z, block }, timeoutMs = SETBLOCK_CHAT_INTERVAL_MS + 150) {
+  let feedbackOk = false;
+  let feedbackFail = false;
+  const onMessage = (message, position) => {
+    const text = extractMessageText(message).toLowerCase();
+    if (!messageMentionsCoords(text, x, y, z)) return;
+    if (!isCommandFeedbackMessage(message, position)) return;
+    if (text.includes('changed the block') || text.includes('set block')) feedbackOk = true;
+    if (text.includes('cannot') || text.includes('unknown block') || text.includes('failed')
+      || text.includes('out of bounds') || text.includes('not allowed')) {
+      feedbackFail = true;
+    }
+  };
+  try {
+    try { bot.on?.('message', onMessage); } catch {}
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (feedbackFail) break;
+      if (blockAtMatches(bot, x, y, z, block)) break;
+      if (feedbackOk) break;
+      await sleep(25);
+    }
+  } finally {
+    try { bot.removeListener?.('message', onMessage); } catch {}
+  }
+  if (feedbackFail) return { ok: false, reason: 'setblock rejected' };
+  if (blockAtMatches(bot, x, y, z, block)) return { ok: true };
+  if (feedbackOk) return { ok: true };
+  if (!bot.blockAt(new Vec3(x, y, z))) return { ok: null, reason: 'chunk unloaded' };
+  return { ok: false, reason: 'readback mismatch' };
 }
 
 async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
@@ -661,6 +751,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // Detect once, then route every cell through chat commands until proven
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
   const useChatCommand = await detectSetblockAuth(bot);
+  const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
   let buildState = null;
   let placementsSinceSave = 0;
@@ -693,10 +784,12 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
   const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
   if (bodyArgs.foreman === true && !resumingBuild) {
-    const required = foremanBillOfMaterials(
-      entry.materials || data.materials || buildPlan.materials,
-      useChatCommand,
-    );
+    const required = trustedSetblock
+      ? {}
+      : foremanBillOfMaterials(
+        entry.materials || data.materials || buildPlan.materials,
+        useChatCommand,
+      );
     const validation = validateBillOfMaterials(
       required,
       inventoryCounts(bot.inventory.items()),
@@ -772,23 +865,41 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       try {
         bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
         // Wait for server + world sync, then verify before counting success.
-        await sleep(SETBLOCK_CHAT_INTERVAL_MS);
-        const readback = bot.blockAt(new Vec3(tx, ty, tz));
-        if (!readback) {
-          unverified++;
-        } else if (blockAtMatches(bot, tx, ty, tz, block)) {
+        const outcome = await waitForSetblockOutcome(bot, { x: tx, y: ty, z: tz, block });
+        if (outcome.ok === true) {
           placed++;
           if (buildState) {
             buildState = markPlacementComplete(buildState, placementForState);
             placementsSinceSave++;
             await persistBuildState();
           }
-        } else {
+        } else if (outcome.ok === null) {
+          unverified++;
+        } else if (trustedSetblock) {
           failed++;
           if (buildState) {
-            buildState = markPlacementFailed(buildState, placementForState, 'readback mismatch');
+            buildState = markPlacementFailed(buildState, placementForState, outcome.reason || 'setblock failed');
             placementsSinceSave++;
             await persistBuildState();
+          }
+        } else {
+          const readback = bot.blockAt(new Vec3(tx, ty, tz));
+          if (!readback) {
+            unverified++;
+          } else if (blockAtMatches(bot, tx, ty, tz, block)) {
+            placed++;
+            if (buildState) {
+              buildState = markPlacementComplete(buildState, placementForState);
+              placementsSinceSave++;
+              await persistBuildState();
+            }
+          } else {
+            failed++;
+            if (buildState) {
+              buildState = markPlacementFailed(buildState, placementForState, 'readback mismatch');
+              placementsSinceSave++;
+              await persistBuildState();
+            }
           }
         }
       } catch (e) {
@@ -899,10 +1010,12 @@ async function plan_advanced_build(bot, { name, x, y, z }) {
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
   const plan = createLayeredPlan({ name, blocks: data.blocks || [], origin: { x: baseX, y: baseY, z: baseZ } });
   const useChatCommand = await detectSetblockAuth(bot);
-  const required = foremanBillOfMaterials(
-    entry.materials || data.materials || plan.materials,
-    useChatCommand,
-  );
+  const required = shouldBypassForemanMaterials(useChatCommand)
+    ? {}
+    : foremanBillOfMaterials(
+      entry.materials || data.materials || plan.materials,
+      useChatCommand,
+    );
   const validation = validateBillOfMaterials(
     required,
     inventoryCounts(bot.inventory.items()),

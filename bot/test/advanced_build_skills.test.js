@@ -37,3 +37,26 @@ test('Foreman approves stocked grand_hotel plans', async () => {
   assert.match(result.result, /752 blocks/);
   assert.match(result.result, /outside-footprint scaffold cells/);
 });
+
+test('trusted setblock auth bypasses survival material checks for op companions', async () => {
+  const prior = process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH;
+  process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH = '1';
+  try {
+    const fakeBot = {
+      inventory: {
+        items: () => [],
+      },
+    };
+    const actions = registerHighLevelSkills({}, () => fakeBot);
+
+    const result = await actions.plan_advanced_build({ name: 'grand_hotel', x: 10, y: 64, z: 10 });
+    assert.match(result.result, /Foreman approved "grand_hotel"/);
+    assert.doesNotMatch(result.result, /missing materials/);
+  } finally {
+    if (prior == null) {
+      delete process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH;
+    } else {
+      process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH = prior;
+    }
+  }
+});

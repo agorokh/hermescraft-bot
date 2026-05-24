@@ -23,7 +23,11 @@ export function resolveSchematicName(body) {
   if (wantsSchematicList(b)) return 'list';
   if (/\b(observatory|telescope|stargazing|star\s*tower|crystal\s*lab)\b/.test(b)) return 'crystal_observatory';
   if (/\b(wizard|mage|magic|spell)\b/.test(b) && /\b(tower|spire|castle)\b/.test(b)) return 'wizard_tower';
-  if (/\b(market|marketplace|bazaar|village\s*square|town\s*square|shopping\s*street)\b/.test(b)) return 'market_square';
+  if (/\b(marketplace|bazaar|village\s*square|town\s*square|shopping\s*street|market\s*square)\b/.test(b)) return 'market_square';
+  if (/\b(build|make|set up|construct|create|design)\b.*\bmarket\b/.test(b)
+    && !/\b(house|home|cottage|cabin|tower|garden|well|hotel|bridge|plaza|observatory|igloo|castle|fort|treehouse)\b/.test(b)) {
+    return 'market_square';
+  }
   if (/\b(sky\s*bridge|sky\s*walkway|sky\s*overpass)\b/.test(b)) return 'sky_bridge';
   if (/\b(beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/.test(b)) return 'beacon_plaza';
   if (/\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/.test(b)) return 'grand_hotel';
@@ -50,7 +54,7 @@ export function isAdvancedSchematicName(name) {
 function hasImperativeBuildCommand(text) {
   if (/\bshould we\b/.test(text)) return false;
   if (/\b(someday|some day|wish we could|later|another day)\b/.test(text)) return false;
-  return /\b(build|make|put up|construct|design|create|set up)\s+(?:the|a|an|me|our|my|that|this)\b/.test(text);
+  return /\b(build|make|put up|construct|design|create|set up)\b(?:\s+(?:the|a|an|me|our|my|that|this)\b|\s+\S+)/.test(text);
 }
 
 export function isSpeculativeBuildDiscussion(body) {

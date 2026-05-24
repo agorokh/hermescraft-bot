@@ -7,6 +7,13 @@
 - Review threads: **40** (target: 40 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
 
+## Round 13 (post-`c7f222c` Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3294905478 market alias hijacks house-near-market builds | RESOLVED | Require compound market terms or build-market without other structures |
+| r3294905481 bare imperative build phrasing blocked by softRecall | RESOLVED | Accept build-verb + any following token in imperative check |
+
 ## Round 12 (post-`6a759a6` Bugbot + Codex)
 
 | Item | Status | Fix |
@@ -72,3 +79,5 @@
 | 38 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294107861 |
 | 39 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294115916 |
 | 40 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294122330 |
+| 41 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294905478 |
+| 42 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3294905481 |

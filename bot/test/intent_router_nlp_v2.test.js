@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tryRoute, recordLastSkill, resetContextBuffer } from '../lib/intent_router_nlp.js';
-import { isSpeculativeBuildDiscussion } from '../lib/schematic_resolve.js';
+import { isSpeculativeBuildDiscussion, resolveSchematicName } from '../lib/schematic_resolve.js';
 import { tryStopRoute, tryRoute as tryRouteRegex } from '../lib/intent_router.js';
 
 function stubBot(senderName = 'Adalynn', opts = {}) {
@@ -290,8 +290,14 @@ test('imperative build with where-is location qualifier is not speculative', () 
 
 test('imperative build with recall phrasing is not speculative', () => {
   assert.equal(isSpeculativeBuildDiscussion('build the wizard tower we talked about'), false);
+  assert.equal(isSpeculativeBuildDiscussion('build wizard tower we talked about'), false);
   assert.equal(isSpeculativeBuildDiscussion('make the crystal observatory we talked about'), false);
   assert.equal(isSpeculativeBuildDiscussion('remember the crystal observatory we talked about'), true);
+});
+
+test('market alias does not hijack house builds near a market', () => {
+  assert.equal(resolveSchematicName('build a house near the market'), 'small_house');
+  assert.equal(resolveSchematicName('build a marketplace'), 'market_square');
 });
 
 test('where-is recall for legacy schematics is speculative', () => {

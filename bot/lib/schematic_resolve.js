@@ -28,7 +28,10 @@ export function resolveSchematicName(body) {
   if (/\b(igloo|snow\s*house|snow\s*home|snow\s*shelter|snow\s*hut)\b/.test(b)) return 'igloo';
   if (/\b(?:wizard|mage|magic|spell)\s*(?:tower|spire|castle)\b/.test(b)
     || /\b(?:tower|spire|castle)\s*(?:of\s+)?(?:wizard|mage|magic|spell)s?\b/.test(b)) return 'wizard_tower';
-  if (/\b(marketplace|bazaar|village\s*square|town\s*square|shopping\s*street|market\s*square)\b/.test(b)) return 'market_square';
+  if (/\b(marketplace|bazaar|village\s*square|town\s*square|shopping\s*street|market\s*square)\b/.test(b)
+    && !/\b(at|in|near|by|from|to)\s+(?:the\s+)?(?:bazaar|market(?:place|square)?|village\s*square|town\s*square|shopping\s*street)\b/.test(b)) {
+    return 'market_square';
+  }
   if (/\b(sky\s*bridge|sky\s*walkway|sky\s*overpass)\b/.test(b)) return 'sky_bridge';
   if (/\b(beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/.test(b)) return 'beacon_plaza';
   if (/\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/.test(b)) return 'grand_hotel';

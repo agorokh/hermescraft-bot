@@ -1,11 +1,18 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `1ce4538` (Round 19 push — market fallback, list guard, dedupe resolver)
+**Watermark:** `2977e9a` (pre-Round 20 push)
 
 ## Summary
 
-- Review threads: **54** (54 RESOLVED / 0 UNRESOLVED after Round 19 code fixes)
+- Review threads: **56** (56 RESOLVED / 0 UNRESOLVED after Round 20 code fixes)
 - agorokh comments: **0**
+
+## Round 20 (post-`2977e9a` Bugbot + Codex)
+
+| Item | Status | Fix |
+|------|--------|-----|
+| r3295028350 bazaar/square aliases hijack location-qualified requests | RESOLVED | Exclude at/in/near bazaar/market square compound aliases |
+| r3295032725 regex missing castle for mage/magic compounds | RESOLVED | Add castle to mage/magic sub-patterns in build_schematic regex |
 
 ## Round 19 (post-`b327bce` Bugbot + Codex)
 
@@ -135,3 +142,5 @@
 | 52 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295008174 |
 | 53 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295014295 |
 | 54 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295014297 |
+| 55 | RESOLVED | chatgpt-codex-connector | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295028350 |
+| 56 | RESOLVED | cursor | https://github.com/agorokh/hermescraft-bot/pull/12#discussion_r3295032725 |

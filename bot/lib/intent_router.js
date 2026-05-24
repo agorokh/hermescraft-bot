@@ -205,7 +205,7 @@ const INTENTS = [
       // Treehouse FIRST — \bhouse\b doesn't match inside "treehouse", so
       // an explicit pattern is required (post-mortem 2026-05-17 A/B run).
       /\b(build|make|put up|build me|set up|construct)\b.*\b(treehouse|tree house|tree fort|tree home)\b/i,
-      /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(observatory|telescope|stargazing|star\s*tower|crystal\s*lab|wizard\s*(?:tower|spire|castle)|mage\s*(?:tower|spire)|magic\s*(?:tower|spire)|spell\s*(?:tower|spire|castle)|market|marketplace|bazaar|village\s*square|town\s*square|sky\s*bridge|sky\s*walkway|sky\s*overpass|beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/i,
+      /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(observatory|telescope|stargazing|star\s*tower|crystal\s*lab|wizard\s*(?:tower|spire|castle)|mage\s*(?:tower|spire|castle)|magic\s*(?:tower|spire|castle)|spell\s*(?:tower|spire|castle)|market|marketplace|bazaar|village\s*square|town\s*square|sky\s*bridge|sky\s*walkway|sky\s*overpass|beacon\s*plaza|gallery\s*plaza|light\s*plaza)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(hotel|mansion|resort|apartment|apartments|lodge|villa)\b/i,
       /\b(build|make|put up|build me|set up|construct|design|create)\b.*\b(biggest|huge|giant|massive|grand|fancy)\b.*\b(house|home|building|structure)\b/i,
       /\b(build|make|put up|build me|set up|construct)\b.*\b(house|cottage|home|cabin|structure)\b/i,

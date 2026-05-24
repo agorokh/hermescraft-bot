@@ -1,10 +1,10 @@
 # PR #12 Comment Ledger (zero-sampling audit)
 
-**Watermark:** `2ac92648d065073900a5129a49522b77f653a52e`
+**Watermark:** `ffcaa511ec264da6112c6a7adaffa6b2ba2306ad`
 
 ## Summary
 
-- Review threads: **40** (target: 40 RESOLVED / 0 UNRESOLVED)
+- Review threads: **42** (target: 42 RESOLVED / 0 UNRESOLVED)
 - agorokh comments: **0**
 
 ## Round 13 (post-`c7f222c` Codex)

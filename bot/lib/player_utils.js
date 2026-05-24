@@ -37,6 +37,15 @@ export function intFromMatch(text, regex) {
 const CLEAR_FOOT_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'short_grass', 'tall_grass']);
 const NON_GROUND_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava']);
 
+const MIN_BUILD_BASE_Y = -64;
+const MAX_BUILD_BASE_Y = 319;
+
+function clampBuildBaseY(y) {
+  return Math.min(MAX_BUILD_BASE_Y, Math.max(MIN_BUILD_BASE_Y, Math.floor(y)));
+}
+
+
+
 function isSolidGround(block) {
   return block
     && block.boundingBox === 'block'
@@ -71,20 +80,24 @@ export function normalizeBuildBaseY(bot, x, z, rawY) {
     const [centerX, centerZ] = columns[0];
     const centerGround = bot.blockAt(new Vec3(centerX, y, centerZ));
     const centerSpace = bot.blockAt(new Vec3(centerX, y + 1, centerZ));
-    if (isSolidGround(centerGround) && (!centerSpace || CLEAR_FOOT_BLOCKS.has(centerSpace.name))) {
-      return y + 1;
+    const centerFootY = y + 1;
+    if (centerFootY <= MAX_BUILD_BASE_Y
+      && isSolidGround(centerGround) && (!centerSpace || CLEAR_FOOT_BLOCKS.has(centerSpace.name))) {
+      return centerFootY;
     }
     for (let i = 1; i < columns.length; i++) {
       const [cx, cz] = columns[i];
       const ground = bot.blockAt(new Vec3(cx, y, cz));
       const space = bot.blockAt(new Vec3(cx, y + 1, cz));
-      if (isSolidGround(ground) && (!space || CLEAR_FOOT_BLOCKS.has(space.name))) {
-        return y + 1;
+      const footY = y + 1;
+      if (footY <= MAX_BUILD_BASE_Y
+        && isSolidGround(ground) && (!space || CLEAR_FOOT_BLOCKS.has(space.name))) {
+        return footY;
       }
     }
   }
-  if (baseY >= 0 && baseY < 64) return baseY + 2;
-  return baseY;
+  if (baseY >= 0 && baseY < 64) return clampBuildBaseY(baseY + 2);
+  return clampBuildBaseY(baseY);
 }
 
 // Pick a tower footprint offset: solid ground at footY-1 and buildable air at footY.

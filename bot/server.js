@@ -643,11 +643,13 @@ function runTaskVisibleIntentAction(actionName, actionBody) {
     source: 'intent_router',
   };
   return actionFn(actionBody).then((result) => {
+    const failed = intentRouterOutcomeFailed(actionName, result);
     if (currentTask && currentTask.id === taskId && currentTask.status === 'running') {
-      currentTask.status = 'done';
       currentTask.result = result;
+      currentTask.status = failed ? 'error' : 'done';
+      currentTask.error = failed ? (result?.error || result?.result || 'action failed') : null;
     }
-    actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
+    actionHistory.push({ action: actionName, status: failed ? 'error' : 'done', time: Date.now() });
     if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();
     return result;
   }).catch((err) => {
@@ -762,10 +764,10 @@ async function tryNamedTowerFallback(route) {
   const failed = intentRouterOutcomeFailed('build_schematic', fallbackResult);
   if (failed) {
     log(`[IntentRouter fallback failure] build_schematic small_tower: ${String(fallbackResult?.result || fallbackResult?.error || 'failed').slice(0, 160)}`);
-    return { ok: false, result: fallbackResult };
+    return { ok: false, result: fallbackResult, body: fallbackBody };
   }
   log(`[IntentRouter fallback result] build_schematic small_tower: ${String(fallbackResult?.result || '').slice(0, 120)}`);
-  return { ok: true, result: fallbackResult, publicText: publicNamedBuildResult(kidName, fallbackResult) };
+  return { ok: true, result: fallbackResult, body: fallbackBody, publicText: publicNamedBuildResult(kidName, fallbackResult) };
 }
 
 async function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
@@ -786,6 +788,12 @@ async function handleIntentRouterActionResult({ username, route, result, channel
           if (publicFallback) {
             try { bot.chat(publicFallback); } catch {}
           }
+          if (route.skill_id != null) {
+            try { markLastSkillFailed(bot, route.skill_id); } catch {}
+          }
+          try {
+            recordLastSkill(bot, 'build_schematic', 'build_schematic', fallback.body || {}, route.body?.kid_name || route.intent_name);
+          } catch {}
           return true;
         }
       }
@@ -2326,7 +2334,11 @@ const ACTIONS = {
     // extracts "Built X (or similar) at A,B,C" entries within 200 blocks, and
     // surfaces them alongside nearby blocks. Cheap on-disk read (<5ms), no API.
     try {
-      const anchors = readMemoryAnchorsNear(pos, 200, 6);
+      const recallText = chat.slice(-5).map((m) => (
+        typeof m === 'string' ? m : `${m.from || ''} ${m.message || m.text || ''}`
+      )).join(' ');
+      const wantsLatestRecall = /\b(?:last|latest|recent|newest|just built|built together last|last build)\b/i.test(recallText);
+      const anchors = readMemoryAnchorsNear(pos, 200, 6, { sort: wantsLatestRecall ? 'recent' : 'nearest' });
       if (anchors.length > 0) {
         lines.push('## remembered nearby builds (from your memory.md):');
         for (const a of anchors) {

@@ -626,9 +626,6 @@ const TASK_VISIBLE_INTENT_ACTIONS = new Set(['build_schematic_advanced']);
 
 function runTaskVisibleIntentAction(actionName, actionBody) {
   if (currentTask && currentTask.status === 'running') {
-    if (currentTask.source !== 'intent_router') {
-      return ACTIONS[actionName](actionBody);
-    }
     return Promise.resolve({
       error: `Task "${currentTask.action}" is already running. Ask me to stop first.`,
     });
@@ -809,7 +806,9 @@ async function handleIntentRouterActionResult({ username, route, result, channel
       }
       const publicFailure = intentRouterFailureWasInterrupted(result)
         ? 'ok, stopped.'
-        : publicRouterFailure(route, result);
+        : /^Task ".+" is already running\./.test(failureText)
+          ? failureText
+          : publicRouterFailure(route, result);
       try { bot.chat(publicFailure || "hm, couldn't pull that off yet."); } catch {}
     }
     return false;

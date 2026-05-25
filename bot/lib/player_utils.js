@@ -109,7 +109,7 @@ export function schematicBuildBaseY(bot, name, body, x, z, rawY) {
   );
   if (wantsRaisedBridge) {
     const raisedY = normalizedY + 4;
-    return Math.max(requestedY, raisedY);
+    return clampBuildBaseY(Math.max(requestedY, raisedY));
   }
   return normalizedY;
 }

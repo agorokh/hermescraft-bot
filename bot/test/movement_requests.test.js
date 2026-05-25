@@ -25,3 +25,12 @@ test('casual get-it phrasing is not combat without a hostile target', () => {
 test('get phrasing is combat when it names a hostile target', () => {
   assert.equal(hasCombatImperative('come here and get the zombie'), true);
 });
+
+test('save-it phrasing is not combat without a hostile or player target', () => {
+  assert.equal(hasCombatImperative('come here and save it'), false);
+  assert.equal(hasCombatImperative('come here and protect it'), false);
+});
+
+test('defend-me phrasing is combat even without a named hostile', () => {
+  assert.equal(hasCombatImperative('come here and defend me'), true);
+});

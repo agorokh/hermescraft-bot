@@ -102,6 +102,18 @@ test('deterministic combat keeps explicit get-hostile phrasing', async () => {
   assert.equal(r.action, 'fight');
 });
 
+test('deterministic combat ignores casual save-it movement phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and save it', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'goto');
+});
+
+test('deterministic combat keeps defend-me movement phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and defend me', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
 test('standalone no before build intent does not force movement fast path', async () => {
   const r = await tryRoute(stubBot(), 'come here, no, build a tower', 'Adalynn');
   assert.notEqual(r.action, 'goto');

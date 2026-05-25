@@ -322,6 +322,11 @@ const GENERIC_MEMORY_ANCHOR_LABELS = new Set([
 ]);
 
 function isGenericMemoryAnchorLabel(label) {
+  const raw = String(label || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (/^[a-z0-9][^()]{0,60}\s+\([a-z0-9_ -]{1,80}\)$/.test(raw)
+    && !/\(\s*\d+\s*\/\s*\d+/.test(raw)) {
+    return false;
+  }
   const normalized = String(label || '')
     .toLowerCase()
     .replace(/\s*\([^)]*\)\s*/g, ' ')
@@ -711,7 +716,10 @@ function isBrainVisibleChatMessage(entry) {
 }
 
 function publicRouterResult(route, result) {
-  if (route.action === 'build_tower' && route.body?.kid_name) {
+  if (
+    route.body?.kid_name
+    && ['build_tower', 'build_schematic', 'build_schematic_advanced'].includes(route.action)
+  ) {
     const named = publicNamedBuildResult(route.body.kid_name, result);
     if (named) return named;
   }
@@ -794,10 +802,11 @@ async function handleChat(username, message) {
   const routing = parseMessageRouting(message, { knownNames });
   let forMe = isMessageForMe(routing, getMyName());
   const senderIsCompanion = isCompanionSpeaker(username, getMyName());
+  const addressedCommand = !routing.isBroadcast || Boolean(broadcastMentionsMe(routing.body, getMyName()));
 
-  // Proximity filter: broadcasts from other known agents only heard when nearby.
-  // Human players are not in CURRENT_CAST so they always pass through.
-  if (forMe && routing.isBroadcast && bot && botReady) {
+  // Proximity filter: casual broadcasts from other known agents only count when
+  // nearby. Direct or mention-style commands must still reach the router.
+  if (forMe && routing.isBroadcast && !addressedCommand && bot && botReady) {
     const senderLower = username.toLowerCase();
     const isOtherAgent = senderIsCompanion && senderLower !== getMyName().toLowerCase();
     if (isOtherAgent) {
@@ -814,7 +823,7 @@ async function handleChat(username, message) {
     }
   }
 
-  if (forMe && senderIsCompanion) {
+  if (forMe && senderIsCompanion && !addressedCommand) {
     const chatEntry = {
       time: Date.now(),
       from: username,

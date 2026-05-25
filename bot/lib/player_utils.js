@@ -105,7 +105,7 @@ function isValidRequestedBuildBase(bot, x, z, y) {
   const ground = bot.blockAt(new Vec3(x, y - 1, z));
   const foot = bot.blockAt(new Vec3(x, y, z));
   const head = bot.blockAt(new Vec3(x, y + 1, z));
-  return isSolidGround(ground)
+  return isAcceptableGround(bot, x, y - 1, z, ground)
     && (!foot || CLEAR_FOOT_BLOCKS.has(foot.name))
     && (!head || CLEAR_FOOT_BLOCKS.has(head.name));
 }

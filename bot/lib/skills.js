@@ -106,8 +106,17 @@ function sendServerCommand(command) {
   }
 }
 
+function safeSetblockCommand(x, y, z, block) {
+  const coords = [x, y, z].map((value) => Number(value));
+  const blockName = String(block || '').trim();
+  if (!coords.every(Number.isInteger) || !/^[a-z0-9_:-]+$/i.test(blockName)) {
+    throw new Error('Unsafe setblock command arguments');
+  }
+  return `setblock ${coords[0]} ${coords[1]} ${coords[2]} ${blockName}`;
+}
+
 function sendSetblockCommand(bot, x, y, z, block) {
-  const command = `setblock ${x} ${y} ${z} ${block}`;
+  const command = safeSetblockCommand(x, y, z, block);
   const sent = sendServerCommand(command);
   if (sent === true) return 'console_fifo';
   if (process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1'

@@ -63,7 +63,7 @@ const PUBLIC_SUCCESS_ACTIONS = new Set([
   'fish_for_food', 'farm_food', 'cook_food',
   'return_home', 'feed_player', 'build_shelter_for_night',
   'follow_player_v2', 'light_area', 'give_to_player', 'place_near_player',
-  'build_tower',
+  'build_tower', 'list_schematics',
 ]);
 const COMMAND_LEAK_RE = /(?:^|\s)\/(?:setblock|fill|tp|teleport|give|effect|gamemode|op|deop)\b|via\s+\/setblock|\bchanged block\b/i;
 
@@ -73,12 +73,19 @@ function safePublicText(text, maxLen = 140) {
   return clean.length > maxLen ? `${clean.slice(0, maxLen - 1).trim()}...` : clean;
 }
 
+function partialBuildText(text) {
+  const partial = String(text || '').match(/\bBuilt \d+\/\d+ of "([^"]+)"/i);
+  return partial ? `I started "${partial[1]}" but could not finish it yet.` : null;
+}
+
 export function publicActionResult(action, result, opts = {}) {
   if (!result?.result || action === 'chat') return null;
   const text = String(result.result);
   const failed = Boolean(opts.failed);
 
   if (BUILD_ACTIONS.has(action)) {
+    const partial = partialBuildText(text);
+    if (partial) return partial;
     if (failed) {
       if (/foreman rejected/i.test(text) && /missing materials/i.test(text)) {
         return "I can't build that yet - I'm missing materials.";
@@ -92,8 +99,6 @@ export function publicActionResult(action, result, opts = {}) {
     if (built) return `Built schematic "${built[1]}" at ${built[2]},${built[3]},${built[4]}.`;
     const complete = text.match(/\bBuild "([^"]+)" at (-?\d+),\s*(-?\d+),\s*(-?\d+) is already complete/i);
     if (complete) return `"${complete[1]}" is already complete at ${complete[2]},${complete[3]},${complete[4]}.`;
-    const partial = text.match(/\bBuilt \d+\/\d+ of "([^"]+)"/i);
-    if (partial) return `I started "${partial[1]}" but could not finish it yet.`;
     return null;
   }
 

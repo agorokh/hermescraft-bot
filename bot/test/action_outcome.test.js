@@ -39,6 +39,18 @@ test('already-complete advanced builds produce bounded public feedback', () => {
   );
 });
 
+test('partial schematic failures produce kid-safe progress feedback', () => {
+  const result = {
+    result: 'Built 3/10 of "well" at 10,65,10 before setblock failed.',
+  };
+
+  assert.equal(actionOutcomeFailed(result), true);
+  assert.equal(
+    publicActionResult('build_schematic', result, { failed: true }),
+    'I started "well" but could not finish it yet.',
+  );
+});
+
 test('clean survival and movement successes reach the kid', () => {
   assert.equal(
     publicActionResult('fish_for_food', { result: 'Caught 2 fish! Fresh food ready.' }),
@@ -55,6 +67,10 @@ test('clean survival and movement successes reach the kid', () => {
   assert.equal(
     publicActionResult('build_tower', { result: 'Built 5-tall oak_log tower at 1702,63,1722.' }),
     'Built 5-tall oak_log tower at 1702,63,1722.',
+  );
+  assert.equal(
+    publicActionResult('list_schematics', { result: 'well (3x3x3: stone well); small_house (5x5x4: cozy house)' }),
+    'well (3x3x3: stone well); small_house (5x5x4: cozy house)',
   );
 });
 

@@ -56,6 +56,7 @@ test('mention parsing strips prefix cleanly', () => {
   assert.equal(broadcastMentionsMe('Rosie build a wizard tower', 'Rosie'), 'rosie');
   assert.equal(broadcastMentionsMe('Rosie? can you build a market square', 'Rosie'), 'rosie');
   assert.equal(stripMentionPrefix('Rosie? can you build a market square', 'rosie'), 'can you build a market square');
+  assert.equal(stripMentionPrefix('Rosie; build a tower', 'rosie'), 'build a tower');
 });
 
 test('isMessageForMe respects direct targets and bot aliases', () => {

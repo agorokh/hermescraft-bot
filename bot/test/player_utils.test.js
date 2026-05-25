@@ -52,6 +52,19 @@ test('schematicBuildBaseY honors clear requested gallery floor below stale eleva
   assert.equal(schematicBuildBaseY(bot, 'market_square', 'set up a market square here', 290, 288, 65), 65);
 });
 
+test('schematicBuildBaseY skips requested tree-canopy footing', () => {
+  const bot = mockBot((pos) => {
+    if (pos.y === 68) return { name: 'oak_log', boundingBox: 'block' };
+    if (pos.y === 69 && pos.x === 10 && pos.z === 10) return { name: 'air' };
+    if (pos.y === 70 && Math.abs(pos.x - 10) <= 1 && Math.abs(pos.z - 10) <= 1) {
+      return { name: 'oak_leaves', boundingBox: 'block' };
+    }
+    if (pos.y === 64) return { name: 'grass_block', boundingBox: 'block' };
+    return { name: 'air' };
+  });
+  assert.equal(schematicBuildBaseY(bot, 'well', 'build a well here', 10, 10, 69), 65);
+});
+
 test('explicit schematic base Y overrides terrain normalization for prepared gallery prompts', () => {
   const bot = mockBot((pos) => {
     if (pos.y === 70) return { name: 'oak_planks', boundingBox: 'block' };

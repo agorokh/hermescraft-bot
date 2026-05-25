@@ -78,7 +78,7 @@ export function stripMentionPrefix(messageBody, matchedName) {
   // Strip the same leading annotation broadcastMentionsMe ignored, so
   // the downstream router sees just "can you build..." not "[as Adalynn] can you build...".
   const noAnno = trimmed.replace(/^\s*\[[^\]]{1,40}\]\s*/, '');
-  return noAnno.slice(String(matchedName || '').length).replace(/^[,!.?:\s]+/, '').trim();
+  return noAnno.slice(String(matchedName || '').length).replace(/^[,!.?:;\s]+/, '').trim();
 }
 
 export function ensureSocialNode(graph, name) {

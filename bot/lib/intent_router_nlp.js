@@ -35,6 +35,7 @@ import { dockStart } from '@nlpjs/basic';
 import { findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 import {
+  hasCombatImperative,
   hasFollowRequest,
   hasNegativeMovementRequest,
   hasPositiveMovementRequest,
@@ -575,8 +576,32 @@ export async function tryRoute(bot, body, sender, opts = {}) {
       anaphora_rule: anaphora.anaphora,
     };
   }
+  if (hasPositiveMovementRequest(body) && hasCombatImperative(body)) {
+    const combatIntent = /\b(kill|attack|fight|get|hit|punch|smack)\b/i.test(String(body || ''))
+      ? 'attack_mob'
+      : 'defend_me';
+    const decision = DISPATCHERS[combatIntent]?.(bot, ctx);
+    if (decision) {
+      return {
+        matched: true,
+        intent_name: combatIntent,
+        action: decision.action,
+        body: decision.body,
+        skill_id: opts.dryRun ? null : recordLastSkill(
+          bot,
+          combatIntent,
+          decision.action,
+          decision.body,
+          body,
+        ),
+        nlp_score: null,
+        nlp_zone: 'deterministic_combat',
+      };
+    }
+  }
   if (hasPositiveMovementRequest(body)
     && !hasNegativeMovementRequest(body)
+    && !hasCombatImperative(body)
     && !hasWorldMutationImperative(body)
     && ctx.senderEntity?.position) {
     if (hasFollowRequest(body)) {

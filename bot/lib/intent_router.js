@@ -28,7 +28,7 @@ import { extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, schematicBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
-import { hasNegativeMovementRequest, hasPositiveMovementRequest } from './movement_requests.js';
+import { hasCombatImperative, hasNegativeMovementRequest, hasPositiveMovementRequest } from './movement_requests.js';
 
 function extractKidName(body) {
   const kidNameMatch = String(body).match(
@@ -74,7 +74,11 @@ const INTENTS = [
       /\bro+sie\s+stop\b/i,
     ],
     async handler(bot, ctx) {
-      if (hasPositiveMovementRequest(ctx.body) && !hasNegativeMovementRequest(ctx.body)) return null;
+      if (hasPositiveMovementRequest(ctx.body)
+        && !hasNegativeMovementRequest(ctx.body)
+        && /\b(?:do not|don'?t|dont|no)\s+(?:build|mine|place)\b/i.test(String(ctx.body || ''))) {
+        return null;
+      }
       return { action: 'stop', body: {} };
     },
   },
@@ -289,6 +293,7 @@ const INTENTS = [
     ],
     async handler(bot, ctx) {
       if (!ctx.senderEntity) return null;
+      if (hasCombatImperative(ctx.body)) return null;
       const p = ctx.senderEntity.position;
       return {
         action: 'goto',
@@ -324,6 +329,7 @@ const INTENTS = [
       /\bcome with me\b/i,
     ],
     async handler(bot, ctx) {
+      if (hasCombatImperative(ctx.body)) return null;
       return {
         action: 'follow_player_v2',
         body: { player: ctx.sender, distance: 3 },

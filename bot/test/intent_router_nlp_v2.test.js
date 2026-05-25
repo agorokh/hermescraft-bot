@@ -73,6 +73,28 @@ for (const body of NEGATIONS) {
   });
 }
 
+test('regex stop hot path wins over explicit stop plus movement', async () => {
+  const r = await tryStopRoute(stubBot(), 'stop building and come here', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'stop');
+});
+
+test('negative build plus movement can still bypass regex stop hot path', async () => {
+  const r = await tryStopRoute(stubBot(), "don't build a tower, come here", 'Adalynn');
+  assert.equal(r.matched, false);
+});
+
+test('deterministic movement does not swallow combat commands', async () => {
+  const r = await tryRoute(stubBot(), 'come here and kill the zombie', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
+test('standalone no before build intent does not force movement fast path', async () => {
+  const r = await tryRoute(stubBot(), 'come here, no, build a tower', 'Adalynn');
+  assert.notEqual(r.action, 'goto');
+});
+
 // ── OOV with skill keywords — must NOT fire skill (council Gemini priority #2) ─
 const OOV_WITH_KEYWORDS = [
   'i love building towers',

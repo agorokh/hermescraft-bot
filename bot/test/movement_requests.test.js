@@ -18,6 +18,11 @@ test('combat imperatives are detected in mixed movement requests', () => {
   assert.equal(hasCombatImperative('come here and kill this zombie'), true);
 });
 
+test('bare attack verbs are combat imperatives', () => {
+  assert.equal(hasCombatImperative('come here and fight'), true);
+  assert.equal(hasCombatImperative('come here and attack'), true);
+});
+
 test('casual get-it phrasing is not combat without a hostile target', () => {
   assert.equal(hasCombatImperative('come here and get it'), false);
 });

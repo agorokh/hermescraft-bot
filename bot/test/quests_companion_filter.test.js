@@ -11,7 +11,7 @@ test('quest trigger filter treats household companions as non-human speakers', (
   try {
     delete process.env.HERMESCRAFT_COMPANION_NAMES;
     assert.equal(isCompanionSpeaker('Rosie', 'Rosie'), true);
-    assert.equal(isCompanionSpeaker('Steve', 'Rosie'), true);
+    assert.equal(isCompanionSpeaker('Steve', 'Rosie'), false);
     assert.equal(isCompanionSpeaker('GalleryKid', 'Rosie'), false);
     assert.equal(isCompanionSpeaker('.DanceO3677', 'Rosie'), false);
   } finally {
@@ -28,6 +28,7 @@ test('quest trigger filter honors configured companion roster', () => {
   try {
     process.env.HERMESCRAFT_COMPANION_NAMES = 'Rosie, Steve, Natalie';
     assert.deepEqual([...configuredCompanionNames()].sort(), ['natalie', 'rosie', 'steve']);
+    assert.equal(isCompanionSpeaker('Steve', 'Rosie'), true);
     assert.equal(isCompanionSpeaker('Natalie', 'Rosie'), true);
     assert.equal(isCompanionSpeaker('SwimmerJay1995', 'Rosie'), false);
   } finally {

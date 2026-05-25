@@ -29,7 +29,7 @@ import { itemNameFromCollectEntity } from './player_utils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const QUESTS_DIR = join(__dirname, '..', 'quests');
-const DEFAULT_COMPANION_NAMES = ['rosie', 'steve'];
+const DEFAULT_COMPANION_NAMES = [];
 let _cachedCompanionNamesRaw = null;
 let _cachedCompanionNames = null;
 
@@ -87,6 +87,7 @@ export function isCompanionSpeaker(username, botName) {
   if (!username) return false;
   const normalized = String(username).toLowerCase();
   if (botName && normalized === String(botName).toLowerCase()) return true;
+  if (!process.env.HERMESCRAFT_COMPANION_NAMES) return false;
   return configuredCompanionNames().has(normalized);
 }
 

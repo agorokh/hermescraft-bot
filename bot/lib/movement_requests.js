@@ -27,9 +27,8 @@ export function hasCombatImperative(body) {
   const hostileTargetPattern = /\b(mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/;
   const hasAttackVerb = /\b(kill|attack|fight|hit|punch|smack)\b/.test(text);
   const hasProtectionVerb = /\b(defend|protect|save)\b/.test(text);
-  const hasAttackTarget = /\b(it|them)\b/.test(text) || hostileTargetPattern.test(text);
   const hasProtectionTarget = /\b(me|us)\b/.test(text) || hostileTargetPattern.test(text);
-  return (hasAttackVerb && hasAttackTarget)
+  return hasAttackVerb
     || (hasProtectionVerb && hasProtectionTarget)
     || (/\bget\b/.test(text) && hostileTargetPattern.test(text))
     || /\bhelp\b.*\b(zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin|mob|mobs)\b/.test(text);

@@ -90,6 +90,12 @@ test('deterministic movement does not swallow combat commands', async () => {
   assert.equal(r.action, 'fight');
 });
 
+test('deterministic combat keeps bare attack movement phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and fight', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
 test('deterministic combat ignores casual get-it movement phrasing', async () => {
   const r = await tryRoute(stubBot(), 'come here and get it', 'Adalynn');
   assert.equal(r.matched, true);

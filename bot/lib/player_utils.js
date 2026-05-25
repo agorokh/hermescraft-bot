@@ -47,9 +47,15 @@ function clampBuildBaseY(y) {
 
 
 function isSolidGround(block) {
+  const name = block?.name || '';
   return block
     && block.boundingBox === 'block'
-    && !NON_GROUND_BLOCKS.has(block.name);
+    && !NON_GROUND_BLOCKS.has(name)
+    && !name.endsWith('_leaves')
+    && !name.endsWith('_log')
+    && !name.endsWith('_wood')
+    && !name.endsWith('_stem')
+    && !name.endsWith('_hyphae');
 }
 
 function isValidTowerFooting(bot, footX, footY, footZ) {

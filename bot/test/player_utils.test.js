@@ -15,6 +15,16 @@ test('normalizeBuildBaseY does not return above world ceiling', () => {
   assert.equal(normalizeBuildBaseY(bot, 10, 10, 319), 319);
 });
 
+test('normalizeBuildBaseY skips canopy leaves and logs', () => {
+  const bot = mockBot((pos) => {
+    if (pos.y === 70) return { name: 'oak_leaves', boundingBox: 'block' };
+    if (pos.y === 68) return { name: 'oak_log', boundingBox: 'block' };
+    if (pos.y === 64) return { name: 'dirt', boundingBox: 'block' };
+    return { name: 'air' };
+  });
+  assert.equal(normalizeBuildBaseY(bot, 10, 10, 65), 65);
+});
+
 test('raised sky bridge base Y is clamped to world ceiling', () => {
   const bot = mockBot((pos) => {
     if (pos.y === 318) return { name: 'stone', boundingBox: 'block' };

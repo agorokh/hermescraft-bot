@@ -14,6 +14,11 @@ test('comma-separated do-not lists stay negated', () => {
   assert.equal(hasWorldMutationImperative('come here, but do not place, dig, fill, build, or use items'), false);
 });
 
+test('non-building task verbs block pure movement fast path', () => {
+  assert.equal(hasWorldMutationImperative('come here and cook food'), true);
+  assert.equal(hasWorldMutationImperative('follow me and feed me'), true);
+});
+
 test('combat imperatives are detected in mixed movement requests', () => {
   assert.equal(hasCombatImperative('come here and kill this zombie'), true);
 });
@@ -21,6 +26,11 @@ test('combat imperatives are detected in mixed movement requests', () => {
 test('bare attack verbs are combat imperatives', () => {
   assert.equal(hasCombatImperative('come here and fight'), true);
   assert.equal(hasCombatImperative('come here and attack'), true);
+});
+
+test('negated attack verbs are not combat imperatives', () => {
+  assert.equal(hasCombatImperative("come here and don't fight"), false);
+  assert.equal(hasCombatImperative('come here and no attack'), false);
 });
 
 test('casual get-it phrasing is not combat without a hostile target', () => {

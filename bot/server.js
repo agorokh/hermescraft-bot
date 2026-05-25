@@ -677,6 +677,11 @@ function intentRouterOutcomeFailed(actionName, result) {
   return actionOutcomeFailed(result, opts);
 }
 
+function intentRouterFailureWasInterrupted(result) {
+  const text = String(result?.error || result?.result || '');
+  return /\b(interrupted|cancelled|canceled|stopped)\b/i.test(text);
+}
+
 function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMention = false }) {
   const tag = viaMention ? ' via mention' : '';
   log(`[IntentRouter escalate${tag}] ${route.intent_name} blocked — "${String(outcomeText).slice(0, 80)}" → queuing for brain`);
@@ -766,23 +771,30 @@ async function tryNamedTowerFallback(route) {
 async function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
   const survivalBlock = isSurvivalBlock(route.action, result);
   if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
-    if (route.skill_id != null) {
-      try { markLastSkillFailed(bot, route.skill_id); } catch {}
-    }
     const failureText = result?.error || result?.result || 'action failed';
     if (survivalBlock) {
+      if (route.skill_id != null) {
+        try { markLastSkillFailed(bot, route.skill_id); } catch {}
+      }
       queueSurvivalEscalation({ username, route, outcomeText: failureText, channel, viaMention });
     } else {
       log(`[IntentRouter failure] ${route.intent_name}: ${String(failureText).slice(0, 160)}`);
-      const fallback = await tryNamedTowerFallback(route);
-      if (fallback?.ok) {
-        const publicFallback = fallback.publicText || publicActionResult('build_schematic', fallback.result);
-        if (publicFallback) {
-          try { bot.chat(publicFallback); } catch {}
+      if (!intentRouterFailureWasInterrupted(result)) {
+        const fallback = await tryNamedTowerFallback(route);
+        if (fallback?.ok) {
+          const publicFallback = fallback.publicText || publicActionResult('build_schematic', fallback.result);
+          if (publicFallback) {
+            try { bot.chat(publicFallback); } catch {}
+          }
+          return true;
         }
-        return true;
       }
-      const publicFailure = publicRouterFailure(route, result);
+      if (route.skill_id != null) {
+        try { markLastSkillFailed(bot, route.skill_id); } catch {}
+      }
+      const publicFailure = intentRouterFailureWasInterrupted(result)
+        ? 'ok, stopped.'
+        : publicRouterFailure(route, result);
       try { bot.chat(publicFailure || "hm, couldn't pull that off yet."); } catch {}
     }
     return false;

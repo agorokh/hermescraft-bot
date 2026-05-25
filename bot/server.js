@@ -619,6 +619,12 @@ function markChatEntryHandledByRouter(chatEntry, route) {
   chatEntry.routerAction = route.action;
 }
 
+function clearChatEntryRouterMark(chatEntry) {
+  delete chatEntry.handledByRouter;
+  delete chatEntry.routerIntent;
+  delete chatEntry.routerAction;
+}
+
 function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
   const survivalBlock = isSurvivalBlock(route.action, result);
   if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
@@ -696,15 +702,17 @@ async function handleChat(username, message) {
           log(`[IntentRouter] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(route.body)}`);
           if (ACTIONS[route.action]) {
             const actionBody = actionBodyForRoute(route);
+            markChatEntryHandledByRouter(chatEntry, route);
             // Fire-and-forget — long-running actions don't block chat thread.
             runIntentRoutedAction(route.action, actionBody).then((result) => {
               handleIntentRouterActionResult({
                 username, route, result, channel: routing.channel,
               });
-              if (routedActionSucceeded(route, result)) {
-                markChatEntryHandledByRouter(chatEntry, route);
+              if (!routedActionSucceeded(route, result)) {
+                clearChatEntryRouterMark(chatEntry);
               }
             }).catch((e) => {
+              clearChatEntryRouterMark(chatEntry);
               log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
               if (route.skill_id != null) {
                 try { markLastSkillFailed(bot, route.skill_id); } catch {}
@@ -762,14 +770,16 @@ async function handleChat(username, message) {
               if (ack) { try { bot.chat(ack); } catch {} }
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
+              markChatEntryHandledByRouter(chatEntry, route);
               runIntentRoutedAction(route.action, actionBody).then((result) => {
                 handleIntentRouterActionResult({
                   username, route, result, channel: 'public_mention', viaMention: true,
                 });
-                if (routedActionSucceeded(route, result)) {
-                  markChatEntryHandledByRouter(chatEntry, route);
+                if (!routedActionSucceeded(route, result)) {
+                  clearChatEntryRouterMark(chatEntry);
                 }
               }).catch((e) => {
+                clearChatEntryRouterMark(chatEntry);
                 log(`[IntentRouter] action ${route.action} failed: ${e.message}`);
               if (route.skill_id != null) {
                 try { markLastSkillFailed(bot, route.skill_id); } catch {}

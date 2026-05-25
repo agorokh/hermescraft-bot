@@ -692,13 +692,13 @@ async function waitForSetblockOutcome(bot, { x, y, z, block }, timeoutMs = SETBL
   let feedbackFail = false;
   const onMessage = (message, position) => {
     const text = extractMessageText(message).toLowerCase();
-    if (!messageMentionsCoords(text, x, y, z)) return;
     if (!isCommandFeedbackMessage(message, position)) return;
-    if (text.includes('changed the block') || text.includes('set block')) feedbackOk = true;
     if (text.includes('cannot') || text.includes('unknown block') || text.includes('failed')
       || text.includes('out of bounds') || text.includes('not allowed')) {
       feedbackFail = true;
     }
+    if (!messageMentionsCoords(text, x, y, z)) return;
+    if (text.includes('changed the block') || text.includes('set block')) feedbackOk = true;
   };
   try {
     try { bot.on?.('message', onMessage); } catch {}

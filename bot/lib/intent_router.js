@@ -28,6 +28,7 @@ import { extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, schematicBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
+import { hasNegativeMovementRequest, hasPositiveMovementRequest } from './movement_requests.js';
 
 function extractKidName(body) {
   const kidNameMatch = String(body).match(
@@ -36,17 +37,6 @@ function extractKidName(body) {
   return kidNameMatch
     ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
     : null;
-}
-
-function hasPositiveMovementRequest(body) {
-  const text = String(body || '');
-  return /\bcome\s+(?:look|see|check|watch)\b.*\b(?:with me|over here|here|at this|at it)\b/i.test(text)
-    || /\b(come|come over|come here|walk|run|head)\b.*\b(here|to me|over)\b/i.test(text)
-    || /\b(follow me|stay with me|come with me)\b/i.test(text);
-}
-
-function hasNegativeMovementRequest(body) {
-  return /\b(don'?t|do not)\s+(?:move|come|follow|walk|run|go|head)\b/i.test(String(body || ''));
 }
 
 // ── Pattern table ───────────────────────────────────────────────────

@@ -34,6 +34,12 @@ import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
 import { findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
+import {
+  hasFollowRequest,
+  hasNegativeMovementRequest,
+  hasPositiveMovementRequest,
+  hasWorldMutationImperative,
+} from './movement_requests.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, 'intent_corpus.json');
@@ -315,21 +321,6 @@ const SPECULATIVE_BUILD_INTENTS = new Set([
   'build_tower',
 ]);
 
-function hasPositiveMovementRequest(body) {
-  const text = String(body || '');
-  return /\bcome\s+(?:look|see|check|watch)\b.*\b(?:with me|over here|here|at this|at it)\b/i.test(text)
-    || /\b(come|come over|come here|walk|run|head)\b.*\b(here|to me|over)\b/i.test(text)
-    || /\b(follow me|stay with me|come with me)\b/i.test(text);
-}
-
-function hasNegativeMovementRequest(body) {
-  return /\b(don'?t|do not)\s+(?:move|come|follow|walk|run|go|head)\b/i.test(String(body || ''));
-}
-
-function hasFollowRequest(body) {
-  return /\b(follow me|stay with me|come with me)\b/i.test(String(body || ''));
-}
-
 const DISPATCHERS = {
   stop: () => ({ action: 'stop', body: {} }),
 
@@ -584,7 +575,10 @@ export async function tryRoute(bot, body, sender, opts = {}) {
       anaphora_rule: anaphora.anaphora,
     };
   }
-  if (hasPositiveMovementRequest(body) && !hasNegativeMovementRequest(body) && ctx.senderEntity?.position) {
+  if (hasPositiveMovementRequest(body)
+    && !hasNegativeMovementRequest(body)
+    && !hasWorldMutationImperative(body)
+    && ctx.senderEntity?.position) {
     if (hasFollowRequest(body)) {
       return {
         matched: true,

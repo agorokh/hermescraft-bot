@@ -30,6 +30,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const QUESTS_DIR = join(__dirname, '..', 'quests');
 const DEFAULT_COMPANION_NAMES = ['rosie', 'steve'];
+let _cachedCompanionNamesRaw = null;
+let _cachedCompanionNames = null;
 
 // In-memory state per quest per bot.
 // Map<bot_username, Map<quest_name, {currentStep, state, params}>>
@@ -70,10 +72,15 @@ function questItemNamesMatch(triggerItem, eventItem) {
 
 export function configuredCompanionNames() {
   const raw = process.env.HERMESCRAFT_COMPANION_NAMES || DEFAULT_COMPANION_NAMES.join(',');
-  return new Set(String(raw)
+  if (_cachedCompanionNames && raw === _cachedCompanionNamesRaw) {
+    return _cachedCompanionNames;
+  }
+  _cachedCompanionNamesRaw = raw;
+  _cachedCompanionNames = new Set(String(raw)
     .split(',')
     .map((name) => name.trim().toLowerCase())
     .filter(Boolean));
+  return _cachedCompanionNames;
 }
 
 export function isCompanionSpeaker(username, botName) {

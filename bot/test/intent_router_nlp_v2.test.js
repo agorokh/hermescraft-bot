@@ -384,3 +384,20 @@ test('stop hot-path yields to positive movement with no-build constraint', async
   assert.equal(routed.matched, true);
   assert.equal(routed.action, 'goto');
 });
+
+test('movement preprocessor does not swallow mixed build commands', async () => {
+  const body = 'come here and build a wizard tower';
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('regex and NLP movement helpers agree on come-to-my-place phrasing', async () => {
+  const body = 'come to my place';
+  const regex = await tryRouteRegex(stubBot(), body, 'Adalynn');
+  const nlp = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.equal(regex.matched, true);
+  assert.equal(regex.action, 'goto');
+  assert.equal(nlp.matched, true);
+  assert.equal(nlp.action, 'goto');
+});

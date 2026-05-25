@@ -19,6 +19,10 @@ test('non-building task verbs block pure movement fast path', () => {
   assert.equal(hasWorldMutationImperative('follow me and feed me'), true);
 });
 
+test('negated task clauses do not hide later positive task clauses', () => {
+  assert.equal(hasWorldMutationImperative("come here and don't build, then cook food"), true);
+});
+
 test('combat imperatives are detected in mixed movement requests', () => {
   assert.equal(hasCombatImperative('come here and kill this zombie'), true);
 });
@@ -31,6 +35,10 @@ test('bare attack verbs are combat imperatives', () => {
 test('negated attack verbs are not combat imperatives', () => {
   assert.equal(hasCombatImperative("come here and don't fight"), false);
   assert.equal(hasCombatImperative('come here and no attack'), false);
+});
+
+test('negated combat clauses do not hide later positive combat clauses', () => {
+  assert.equal(hasCombatImperative("come here and don't fight me, fight the zombie"), true);
 });
 
 test('casual get-it phrasing is not combat without a hostile target', () => {

@@ -102,6 +102,12 @@ test('deterministic combat ignores negated attack movement phrasing', async () =
   assert.equal(r.action, 'goto');
 });
 
+test('deterministic combat preserves later positive combat clause', async () => {
+  const r = await tryRoute(stubBot(), "come here and don't fight me, fight the zombie", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
 test('deterministic combat ignores casual get-it movement phrasing', async () => {
   const r = await tryRoute(stubBot(), 'come here and get it', 'Adalynn');
   assert.equal(r.matched, true);
@@ -452,6 +458,13 @@ test('movement preprocessor does not swallow mixed build commands', async () => 
 
 test('movement preprocessor does not swallow mixed task commands', async () => {
   const body = 'come here and cook food';
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('movement preprocessor preserves task after negated build clause', async () => {
+  const body = "come here and don't build, then cook food";
   const routed = await tryRoute(stubBot(), body, 'Adalynn');
   assert.notEqual(routed.nlp_zone, 'deterministic_movement');
   assert.notEqual(routed.action, 'goto');

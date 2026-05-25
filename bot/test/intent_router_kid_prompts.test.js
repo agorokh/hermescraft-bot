@@ -213,6 +213,7 @@ test('prepared gallery prompt can pin base Y through regex router', async () => 
   assert.equal(route.action, 'build_schematic_advanced');
   assert.equal(route.body.name, 'market_square');
   assert.equal(route.body.y, 65);
+  assert.equal(route.body.respect_explicit_base_y, true);
 });
 
 for (const p of PROMPTS) {

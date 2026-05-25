@@ -26,8 +26,18 @@
 
 import { extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
-import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, pickTowerFootOffset } from './player_utils.js';
+import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, schematicBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
+import { hasCombatImperative, hasNegativeMovementRequest, hasPositiveMovementRequest } from './movement_requests.js';
+
+function hasExplicitStopRequest(body) {
+  const text = String(body || '');
+  return /\b(?:stop|wait|nevermind|never mind|cancel|halt|abort|pause)\b/i.test(text)
+    || /\b(?:quit it|knock it off|i changed my mind)\b/i.test(text)
+    || /\bstah+p+\b/i.test(text)
+    || /\bstapp+p*\b/i.test(text)
+    || /^\s*(?:freeze|hold (?:on|up))\b/i.test(text);
+}
 
 function extractKidName(body) {
   const kidNameMatch = String(body).match(
@@ -73,6 +83,12 @@ const INTENTS = [
       /\bro+sie\s+stop\b/i,
     ],
     async handler(bot, ctx) {
+      if (hasPositiveMovementRequest(ctx.body)
+        && !hasNegativeMovementRequest(ctx.body)
+        && !hasExplicitStopRequest(ctx.body)
+        && /\b(?:do not|don'?t|dont|no)\s+(?:build|mine|place)\b/i.test(String(ctx.body || ''))) {
+        return null;
+      }
       return { action: 'stop', body: {} };
     },
   },
@@ -234,7 +250,7 @@ const INTENTS = [
       const schemBody = {
         name,
         x: buildX,
-        y: normalizeBuildBaseY(bot, buildX, buildZ, p.y),
+        y: schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y),
         z: buildZ,
       };
       if (kidName) schemBody.kid_name = kidName;
@@ -281,11 +297,13 @@ const INTENTS = [
   {
     name: 'come_here',
     patterns: [
+      /\bcome\s+(?:look|see|check|watch)\b.*\b(?:with me|over here|here|at this|at it)\b/i,
       /\b(come|come over|come here|walk|run|head)\b.*\b(here|to me|over)\b/i,
       /\bcome to my (spot|position|place)\b/i,
     ],
     async handler(bot, ctx) {
       if (!ctx.senderEntity) return null;
+      if (hasCombatImperative(ctx.body)) return null;
       const p = ctx.senderEntity.position;
       return {
         action: 'goto',
@@ -321,6 +339,7 @@ const INTENTS = [
       /\bcome with me\b/i,
     ],
     async handler(bot, ctx) {
+      if (hasCombatImperative(ctx.body)) return null;
       return {
         action: 'follow_player_v2',
         body: { player: ctx.sender, distance: 3 },

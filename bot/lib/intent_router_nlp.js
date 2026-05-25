@@ -32,8 +32,16 @@ import { extractGatherBlockFromBody, extractOreFromBody } from './intent_slot_ex
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
-import { findPlayerEntity, normalizeBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
+import {
+  combatImperativeText,
+  hasCombatImperative,
+  hasFollowRequest,
+  hasNegativeMovementRequest,
+  hasPositiveMovementRequest,
+  hasWorldMutationImperative,
+} from './movement_requests.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(__dirname, 'intent_corpus.json');
@@ -381,7 +389,7 @@ const DISPATCHERS = {
       body: {
         name,
         x: buildX,
-        y: normalizeBuildBaseY(bot, buildX, buildZ, p.y),
+        y: schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y),
         z: buildZ,
       },
     };
@@ -567,6 +575,71 @@ export async function tryRoute(bot, body, sender, opts = {}) {
       nlp_score: null,
       nlp_zone: 'anaphora',
       anaphora_rule: anaphora.anaphora,
+    };
+  }
+  if (hasPositiveMovementRequest(body) && hasCombatImperative(body)) {
+    const combatText = combatImperativeText(body);
+    const explicitGetHostile = /\bget\b.*\b(?:mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i.test(combatText);
+    const explicitContactAttackHostile = /\b(hit|punch|smack)\b.*\b(?:mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i.test(combatText);
+    const combatIntent = (/\b(kill|attack|fight)\b/i.test(combatText) || explicitGetHostile || explicitContactAttackHostile)
+      ? 'attack_mob'
+      : 'defend_me';
+    const decision = DISPATCHERS[combatIntent]?.(bot, { ...ctx, body: combatText });
+    if (decision) {
+      return {
+        matched: true,
+        intent_name: combatIntent,
+        action: decision.action,
+        body: decision.body,
+        skill_id: opts.dryRun ? null : recordLastSkill(
+          bot,
+          combatIntent,
+          decision.action,
+          decision.body,
+          body,
+        ),
+        nlp_score: null,
+        nlp_zone: 'deterministic_combat',
+      };
+    }
+  }
+  if (hasPositiveMovementRequest(body)
+    && !hasNegativeMovementRequest(body)
+    && !hasCombatImperative(body)
+    && !hasWorldMutationImperative(body)
+    && ctx.senderEntity?.position) {
+    if (hasFollowRequest(body)) {
+      return {
+        matched: true,
+        intent_name: 'follow_me',
+        action: 'follow_player_v2',
+        body: { player: ctx.sender, distance: 3 },
+        skill_id: opts.dryRun ? null : recordLastSkill(
+          bot,
+          'follow_me',
+          'follow_player_v2',
+          { player: ctx.sender, distance: 3 },
+          body,
+        ),
+        nlp_score: null,
+        nlp_zone: 'deterministic_movement',
+      };
+    }
+    const p = ctx.senderEntity.position;
+    return {
+      matched: true,
+      intent_name: 'come_here',
+      action: 'goto',
+      body: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) },
+      skill_id: opts.dryRun ? null : recordLastSkill(
+        bot,
+        'come_here',
+        'goto',
+        { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) },
+        body,
+      ),
+      nlp_score: null,
+      nlp_zone: 'deterministic_movement',
     };
   }
   let nlp;

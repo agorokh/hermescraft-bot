@@ -44,18 +44,43 @@ function clampBuildBaseY(y) {
   return Math.min(MAX_BUILD_BASE_Y, Math.max(MIN_BUILD_BASE_Y, Math.floor(y)));
 }
 
-
+function isWoodLikeBlockName(name) {
+  return name.endsWith('_log')
+    || name.endsWith('_wood')
+    || name.endsWith('_stem')
+    || name.endsWith('_hyphae');
+}
 
 function isSolidGround(block) {
+  const name = block?.name || '';
   return block
     && block.boundingBox === 'block'
-    && !NON_GROUND_BLOCKS.has(block.name);
+    && !NON_GROUND_BLOCKS.has(name)
+    && !name.endsWith('_leaves');
+}
+
+function hasNearbyLeaves(bot, x, y, z) {
+  for (let dy = 0; dy <= 2; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const block = bot.blockAt(new Vec3(x + dx, y + dy, z + dz));
+        if ((block?.name || '').endsWith('_leaves')) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isAcceptableGround(bot, x, y, z, block) {
+  const name = block?.name || '';
+  return isSolidGround(block)
+    && (!isWoodLikeBlockName(name) || !hasNearbyLeaves(bot, x, y, z));
 }
 
 function isValidTowerFooting(bot, footX, footY, footZ) {
   const ground = bot.blockAt(new Vec3(footX, footY - 1, footZ));
   const space = bot.blockAt(new Vec3(footX, footY, footZ));
-  const groundSolid = isSolidGround(ground);
+  const groundSolid = isAcceptableGround(bot, footX, footY - 1, footZ, ground);
   const spaceClear = !space || CLEAR_FOOT_BLOCKS.has(space.name);
   return groundSolid && spaceClear;
 }
@@ -82,7 +107,8 @@ export function normalizeBuildBaseY(bot, x, z, rawY) {
     const centerSpace = bot.blockAt(new Vec3(centerX, y + 1, centerZ));
     const centerFootY = y + 1;
     if (centerFootY <= MAX_BUILD_BASE_Y
-      && isSolidGround(centerGround) && (!centerSpace || CLEAR_FOOT_BLOCKS.has(centerSpace.name))) {
+      && isAcceptableGround(bot, centerX, y, centerZ, centerGround)
+      && (!centerSpace || CLEAR_FOOT_BLOCKS.has(centerSpace.name))) {
       return centerFootY;
     }
     for (let i = 1; i < columns.length; i++) {
@@ -91,13 +117,27 @@ export function normalizeBuildBaseY(bot, x, z, rawY) {
       const space = bot.blockAt(new Vec3(cx, y + 1, cz));
       const footY = y + 1;
       if (footY <= MAX_BUILD_BASE_Y
-        && isSolidGround(ground) && (!space || CLEAR_FOOT_BLOCKS.has(space.name))) {
+        && isAcceptableGround(bot, cx, y, cz, ground) && (!space || CLEAR_FOOT_BLOCKS.has(space.name))) {
         return footY;
       }
     }
   }
   if (baseY >= 0 && baseY < 64) return clampBuildBaseY(baseY + 2);
   return clampBuildBaseY(baseY);
+}
+
+export function schematicBuildBaseY(bot, name, body, x, z, rawY) {
+  const normalizedY = normalizeBuildBaseY(bot, x, z, rawY);
+  const requestedY = Math.floor(rawY);
+  const wantsRaisedBridge = (
+    name === 'sky_bridge'
+    && /\b(raised|sky|high|overhead|air)\b/i.test(String(body || ''))
+  );
+  if (wantsRaisedBridge) {
+    const raisedY = normalizedY + 4;
+    return clampBuildBaseY(Math.max(requestedY, raisedY));
+  }
+  return normalizedY;
 }
 
 // Pick a tower footprint offset: solid ground at footY-1 and buildable air at footY.

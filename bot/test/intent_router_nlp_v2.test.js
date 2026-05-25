@@ -73,6 +73,121 @@ for (const body of NEGATIONS) {
   });
 }
 
+test('regex stop hot path wins over explicit stop plus movement', async () => {
+  const r = await tryStopRoute(stubBot(), 'stop building and come here', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'stop');
+});
+
+test('regex stop hot path preserves explicit stop with movement and no-build constraint', async () => {
+  const r = await tryStopRoute(stubBot(), "just stop building and come here, don't build", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'stop');
+});
+
+test('negative build plus movement can still bypass regex stop hot path', async () => {
+  const r = await tryStopRoute(stubBot(), "don't build a tower, come here", 'Adalynn');
+  assert.equal(r.matched, false);
+});
+
+test('deterministic movement does not swallow combat commands', async () => {
+  const r = await tryRoute(stubBot(), 'come here and kill the zombie', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat keeps bare attack movement phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and fight', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat ignores negated attack movement phrasing', async () => {
+  const r = await tryRoute(stubBot(), "come here and don't fight", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'goto');
+});
+
+test('deterministic combat preserves later positive combat clause', async () => {
+  const r = await tryRoute(stubBot(), "come here and don't fight me, fight the zombie", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat preserves semicolon-separated combat clause', async () => {
+  const r = await tryRoute(stubBot(), "come here and don't fight me; fight the zombie", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat preserves conjunction combat clause', async () => {
+  const r = await tryRoute(stubBot(), "come here and don't fight me but kill the zombie", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat ignores casual get-it movement phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and get it', 'Adalynn');
+  assert.notEqual(r.nlp_zone, 'deterministic_combat');
+  assert.notEqual(r.intent_name, 'attack_mob');
+});
+
+test('deterministic combat keeps explicit get-hostile phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and get the zombie', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat targets surviving hostile after negation', async () => {
+  const r = await tryRoute(stubBot(), "come here and don't fight skeleton, attack zombie", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.intent_name, 'attack_mob');
+  assert.equal(r.action, 'fight');
+  assert.equal(r.body.target, 'zombie');
+});
+
+test('deterministic combat ignores casual save-it movement phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and save it', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'goto');
+});
+
+test('deterministic combat keeps defend-me movement phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and defend me', 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat uses negation-stripped text for intent mode', async () => {
+  const r = await tryRoute(stubBot(), "come here, don't fight, defend me", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.intent_name, 'defend_me');
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat ignores incidental for-me protection phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and save this for me', 'Adalynn');
+  assert.notEqual(r.nlp_zone, 'deterministic_combat');
+  assert.notEqual(r.intent_name, 'defend_me');
+});
+
+test('deterministic combat ignores non-hostile contact verbs', async () => {
+  const r = await tryRoute(stubBot(), 'come here and hit the button', 'Adalynn');
+  assert.notEqual(r.nlp_zone, 'deterministic_combat');
+  assert.notEqual(r.intent_name, 'attack_mob');
+});
+
+test('deterministic combat ignores hostile nouns in task help context', async () => {
+  const r = await tryRoute(stubBot(), 'come here and help me with zombie farm', 'Adalynn');
+  assert.notEqual(r.nlp_zone, 'deterministic_combat');
+  assert.notEqual(r.intent_name, 'defend_me');
+});
+
+test('standalone no before build intent does not force movement fast path', async () => {
+  const r = await tryRoute(stubBot(), 'come here, no, build a tower', 'Adalynn');
+  assert.notEqual(r.action, 'goto');
+});
+
 // ── OOV with skill keywords — must NOT fire skill (council Gemini priority #2) ─
 const OOV_WITH_KEYWORDS = [
   'i love building towers',
@@ -374,4 +489,65 @@ for (const body of STOP_CORPUS) {
 test('stop hot-path: does not match gameplay phrasing', async () => {
   const r = await tryStopRoute(stubBot(), 'freeze the water', 'Adalynn');
   assert.equal(r.matched, false);
+});
+
+test('stop hot-path yields to positive movement with no-build constraint', async () => {
+  const body = 'Steve come look at the sky bridge with me, but do not place, dig, fill, build, or use items.';
+  const stop = await tryStopRoute(stubBot(), body, 'Adalynn');
+  assert.equal(stop.matched, false);
+  const routed = await tryRouteRegex(stubBot(), body, 'Adalynn');
+  assert.equal(routed.matched, true);
+  assert.equal(routed.action, 'goto');
+});
+
+test('movement preprocessor does not swallow mixed build commands', async () => {
+  const body = 'come here and build a wizard tower';
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('movement preprocessor does not swallow mixed task commands', async () => {
+  const body = 'come here and cook food';
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('movement preprocessor does not swallow fetch task commands', async () => {
+  const body = 'come here and get wood';
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('movement preprocessor preserves task after negated build clause', async () => {
+  const body = "come here and don't build, then cook food";
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('movement preprocessor preserves sentence-separated task clause', async () => {
+  const body = "come here and don't build. then cook food";
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('movement preprocessor preserves unpunctuated task tail', async () => {
+  const body = "come here and don't build and cook food";
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('regex and NLP movement helpers agree on come-to-my-place phrasing', async () => {
+  const body = 'come to my place';
+  const regex = await tryRouteRegex(stubBot(), body, 'Adalynn');
+  const nlp = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.equal(regex.matched, true);
+  assert.equal(regex.action, 'goto');
+  assert.equal(nlp.matched, true);
+  assert.equal(nlp.action, 'goto');
 });

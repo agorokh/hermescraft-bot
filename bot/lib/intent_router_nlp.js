@@ -577,7 +577,9 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     };
   }
   if (hasPositiveMovementRequest(body) && hasCombatImperative(body)) {
-    const combatIntent = /\b(kill|attack|fight|get|hit|punch|smack)\b/i.test(String(body || ''))
+    const combatText = String(body || '');
+    const explicitGetHostile = /\bget\b.*\b(?:mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i.test(combatText);
+    const combatIntent = (/\b(kill|attack|fight|hit|punch|smack)\b/i.test(combatText) || explicitGetHostile)
       ? 'attack_mob'
       : 'defend_me';
     const decision = DISPATCHERS[combatIntent]?.(bot, ctx);

@@ -17,3 +17,11 @@ test('comma-separated do-not lists stay negated', () => {
 test('combat imperatives are detected in mixed movement requests', () => {
   assert.equal(hasCombatImperative('come here and kill this zombie'), true);
 });
+
+test('casual get-it phrasing is not combat without a hostile target', () => {
+  assert.equal(hasCombatImperative('come here and get it'), false);
+});
+
+test('get phrasing is combat when it names a hostile target', () => {
+  assert.equal(hasCombatImperative('come here and get the zombie'), true);
+});

@@ -107,7 +107,11 @@ function sendServerCommand(command) {
 }
 
 function safeSetblockCommand(x, y, z, block) {
-  const coords = [x, y, z].map((value) => Number(value));
+  const rawCoords = [x, y, z];
+  if (rawCoords.some((value) => value == null || value === '' || typeof value === 'boolean')) {
+    throw new Error('Unsafe setblock command arguments');
+  }
+  const coords = rawCoords.map((value) => Number(value));
   const blockName = String(block || '').trim();
   if (!coords.every(Number.isInteger) || !/^[a-z0-9_:-]+$/i.test(blockName)) {
     throw new Error('Unsafe setblock command arguments');

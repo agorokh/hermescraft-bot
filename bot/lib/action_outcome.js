@@ -74,8 +74,13 @@ function safePublicText(text, maxLen = 140) {
 }
 
 function partialBuildText(text) {
-  const partial = String(text || '').match(/\bBuilt \d+\/\d+ of "([^"]+)"/i);
-  return partial ? `I started "${partial[1]}" but could not finish it yet.` : null;
+  const partial = String(text || '').match(/\bBuilt (\d+)\/(\d+) of "([^"]+)"/i);
+  if (!partial) return null;
+  const placed = parseInt(partial[1], 10);
+  const total = parseInt(partial[2], 10);
+  return total > 0 && placed < total
+    ? `I started "${partial[3]}" but could not finish it yet.`
+    : null;
 }
 
 export function publicActionResult(action, result, opts = {}) {
@@ -99,6 +104,8 @@ export function publicActionResult(action, result, opts = {}) {
     if (built) return `Built schematic "${built[1]}" at ${built[2]},${built[3]},${built[4]}.`;
     const complete = text.match(/\bBuild "([^"]+)" at (-?\d+),\s*(-?\d+),\s*(-?\d+) is already complete/i);
     if (complete) return `"${complete[1]}" is already complete at ${complete[2]},${complete[3]},${complete[4]}.`;
+    const builtRatio = text.match(/\bBuilt \d+\/\d+ of "([^"]+)" at (-?\d+),\s*(-?\d+),\s*(-?\d+)/i);
+    if (builtRatio) return `Built schematic "${builtRatio[1]}" at ${builtRatio[2]},${builtRatio[3]},${builtRatio[4]}.`;
     return null;
   }
 

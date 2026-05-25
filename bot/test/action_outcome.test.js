@@ -51,6 +51,18 @@ test('partial schematic failures produce kid-safe progress feedback', () => {
   );
 });
 
+test('complete ratio schematic builds produce success feedback', () => {
+  const result = {
+    result: 'Built 42/42 of "castle" at 10,65,10 via /setblock (op).',
+  };
+
+  assert.equal(actionOutcomeFailed(result), false);
+  assert.equal(
+    publicActionResult('build_schematic_advanced', result),
+    'Built schematic "castle" at 10,65,10.',
+  );
+});
+
 test('clean survival and movement successes reach the kid', () => {
   assert.equal(
     publicActionResult('fish_for_food', { result: 'Caught 2 fish! Fresh food ready.' }),

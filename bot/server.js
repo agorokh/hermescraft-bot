@@ -623,6 +623,7 @@ function isActionEpochCurrent(epoch) {
 }
 
 const TASK_VISIBLE_INTENT_ACTIONS = new Set(['build_schematic_advanced']);
+const BUILD_TASK_ACTIONS = new Set(['build_schematic', 'build_schematic_advanced']);
 
 function runTaskVisibleIntentAction(actionName, actionBody) {
   if (currentTask && currentTask.status === 'running') {
@@ -748,7 +749,7 @@ function publicNamedBuildResult(kidName, result) {
 
 async function tryNamedTowerFallback(route) {
   if (route.action !== 'build_tower' || !ACTIONS.build_schematic) return null;
-  if (currentTask && currentTask.status === 'running') {
+  if (currentTask && currentTask.status === 'running' && BUILD_TASK_ACTIONS.has(currentTask.action)) {
     log(`[IntentRouter fallback skipped] currentTask=${currentTask.action} is already running`);
     return null;
   }
@@ -834,7 +835,8 @@ async function handleChat(username, message) {
   // nearby. Direct or mention-style commands must still reach the router.
   if (forMe && routing.isBroadcast && !addressedCommand && bot && botReady) {
     const senderLower = username.toLowerCase();
-    const isOtherAgent = senderIsCompanion && senderLower !== getMyName().toLowerCase();
+    const isCastSpeaker = CURRENT_CAST.includes(senderLower.replace(/^\./, ''));
+    const isOtherAgent = (senderIsCompanion || isCastSpeaker) && senderLower !== getMyName().toLowerCase();
     if (isOtherAgent) {
       const senderEntity = Object.values(bot.entities || {}).find(
         e => e.username && e.username.toLowerCase() === senderLower

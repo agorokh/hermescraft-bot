@@ -14,7 +14,7 @@ function wantsSchematicList(body) {
   if (/\b(?:talked about|remember|recall|from memory|from today|later chat|landmarks?)\b/i.test(b)) {
     return false;
   }
-  return /\bwhat\s+(?:can|could)\s+(?:u|you)\s+build\b/i.test(b)
+  return /\bwhat\s+(?:can|could)\s+(?:u|you|we)\s+build\b/i.test(b)
     || /\bshow me\b.*\b(builds?|schematics?|templates?)\b/i.test(b)
     || /\blist\b.*\b(builds?|schematics?|templates?|build\s+options?)\b/i.test(b)
     || /\b(builds?|schematics?|templates?)\b.*\blist\b/i.test(b)

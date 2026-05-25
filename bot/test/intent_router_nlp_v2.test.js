@@ -515,6 +515,11 @@ test('gallery recall list wording does not trigger schematic catalog', async () 
   assert.equal(list.action, 'list_schematics');
   assert.equal(list.skill_id, null);
 
+  assert.equal(resolveSchematicName('what can we build'), 'list');
+  const weList = await tryRoute(bot, 'what can we build', 'Adalynn');
+  assert.equal(weList.action, 'list_schematics');
+  assert.equal(weList.skill_id, null);
+
   const recall = await tryRoute(bot, 'answer in chat only: what are the five gallery landmarks from today?', 'Adalynn');
   assert.equal(recall.matched, false, `recall question replayed ${recall.action || recall.nlp_intent}`);
   assert.equal(recall.nlp_zone, 'repeat_guard');

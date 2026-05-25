@@ -626,6 +626,9 @@ const TASK_VISIBLE_INTENT_ACTIONS = new Set(['build_schematic_advanced']);
 
 function runTaskVisibleIntentAction(actionName, actionBody) {
   if (currentTask && currentTask.status === 'running') {
+    if (currentTask.source !== 'intent_router') {
+      return ACTIONS[actionName](actionBody);
+    }
     return Promise.resolve({
       error: `Task "${currentTask.action}" is already running. Ask me to stop first.`,
     });
@@ -748,6 +751,10 @@ function publicNamedBuildResult(kidName, result) {
 
 async function tryNamedTowerFallback(route) {
   if (route.action !== 'build_tower' || !ACTIONS.build_schematic) return null;
+  if (currentTask && currentTask.status === 'running') {
+    log(`[IntentRouter fallback skipped] currentTask=${currentTask.action} is already running`);
+    return null;
+  }
   const body = route.body || {};
   const kidName = cleanKidBuildName(body.kid_name);
   if (!kidName) return null;

@@ -132,6 +132,138 @@ export function computeFootprint(blocks) {
   return { minDx, maxDx, minDz, maxDz, width: maxDx - minDx + 1, length: maxDz - minDz + 1 };
 }
 
+/**
+ * Compute the "floor cells" of a schematic — the (dx,dz) cells that have at
+ * least one block at dy=0. These are the cells that must touch ground;
+ * everything above must rest on them. Used by the foundation generator and
+ * by terrain-aware origin Y selection.
+ */
+export function computeFloorCells(blocks) {
+  const normalized = normalizeSchematicBlocks(blocks);
+  const cells = new Map(); // "dx,dz" -> { dx, dz, block }
+  for (const b of normalized) {
+    if (b.dy !== 0) continue;
+    if (!b.block || AIR_BLOCKS.has(b.block)) continue;
+    const key = `${b.dx},${b.dz}`;
+    if (!cells.has(key)) cells.set(key, { dx: b.dx, dz: b.dz, block: b.block });
+  }
+  return [...cells.values()];
+}
+
+/**
+ * Sample the world ground Y beneath each (dx,dz) floor cell of a schematic.
+ * For each cell, scan downward from `searchTopY` to find the highest solid
+ * block (skipping leaves, water, air). Returns:
+ *   - groundMap:    Map "dx,dz" -> groundY (the Y of the highest solid block)
+ *   - maxGroundY:   the highest of all sampled groundY values
+ *   - minGroundY:   the lowest of all sampled groundY values
+ *   - missingCells: array of "dx,dz" cells where no ground found in scan range
+ *
+ * Caller decides what to do with the spread: a 1-block delta is normal, a
+ * 5-block delta means the build will straddle a slope (foundation fills it),
+ * a 12+ delta might mean the operator should reject the placement.
+ *
+ * `isSolidGroundBlock` is injected so tests can pass a stub.
+ */
+export function sampleFootprintGround({
+  blockAt,
+  floorCells,
+  baseX,
+  baseZ,
+  searchTopY,
+  searchBottomY = -64,
+  isSolidGroundBlock,
+}) {
+  if (typeof blockAt !== 'function') {
+    throw new Error('sampleFootprintGround needs blockAt(x,y,z) callback');
+  }
+  if (typeof isSolidGroundBlock !== 'function') {
+    throw new Error('sampleFootprintGround needs isSolidGroundBlock(block) callback');
+  }
+  const groundMap = new Map();
+  const missingCells = [];
+  let maxGroundY = -Infinity;
+  let minGroundY = Infinity;
+  for (const cell of floorCells) {
+    const wx = baseX + cell.dx;
+    const wz = baseZ + cell.dz;
+    let groundY = null;
+    for (let y = searchTopY; y >= searchBottomY; y--) {
+      const block = blockAt(wx, y, wz);
+      if (isSolidGroundBlock(block)) { groundY = y; break; }
+    }
+    if (groundY === null) {
+      missingCells.push(`${cell.dx},${cell.dz}`);
+      continue;
+    }
+    groundMap.set(`${cell.dx},${cell.dz}`, groundY);
+    if (groundY > maxGroundY) maxGroundY = groundY;
+    if (groundY < minGroundY) minGroundY = groundY;
+  }
+  if (groundMap.size === 0) {
+    return { groundMap, maxGroundY: null, minGroundY: null, missingCells, sampledCells: 0 };
+  }
+  return { groundMap, maxGroundY, minGroundY, missingCells, sampledCells: groundMap.size };
+}
+
+/**
+ * Generate the foundation placement list for a schematic. For every floor
+ * cell where the world ground is below the schematic floor (baseY-1), fill
+ * the gap with `fillBlock`. This is what grounds the build to terrain so it
+ * doesn't float and doesn't split on slopes.
+ *
+ * Cap the per-cell fill depth at `maxFillDepth` (default 16) so a schematic
+ * placed over a deep cave doesn't generate thousands of foundation cells.
+ *
+ * Returns placements compatible with createLayeredPlan's placement schema:
+ *   { id, x, y, z, dx, dy, dz, block, foundation: true }
+ */
+export function generateFoundation({
+  floorCells,
+  groundMap,
+  baseX,
+  baseY,
+  baseZ,
+  fillBlock = 'stone',
+  maxFillDepth = 16,
+}) {
+  const placements = [];
+  const stats = { cellsFilled: 0, blocksAdded: 0, maxDepth: 0, capped: 0 };
+  for (const cell of floorCells) {
+    const key = `${cell.dx},${cell.dz}`;
+    const groundY = groundMap.get(key);
+    if (groundY === undefined || groundY === null) continue;
+    const targetTop = baseY - 1;
+    if (groundY >= targetTop) continue; // already supported
+    const wx = baseX + cell.dx;
+    const wz = baseZ + cell.dz;
+    let fillFrom = groundY + 1;
+    const requestedDepth = targetTop - groundY;
+    if (requestedDepth > maxFillDepth) {
+      stats.capped++;
+      fillFrom = targetTop - maxFillDepth + 1;
+    }
+    for (let y = fillFrom; y <= targetTop; y++) {
+      placements.push({
+        id: `${wx},${y},${wz}:foundation:${fillBlock}`,
+        x: wx,
+        y,
+        z: wz,
+        dx: cell.dx,
+        dy: y - baseY,
+        dz: cell.dz,
+        block: fillBlock,
+        foundation: true,
+      });
+      stats.blocksAdded++;
+    }
+    stats.cellsFilled++;
+    const actualDepth = targetTop - fillFrom + 1;
+    if (actualDepth > stats.maxDepth) stats.maxDepth = actualDepth;
+  }
+  return { placements, stats };
+}
+
 export function scaffoldRingForFootprint(footprint, origin, block = 'dirt') {
   const baseX = Math.floor(origin.x);
   const baseY = Math.floor(origin.y);

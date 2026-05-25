@@ -24,7 +24,7 @@ const COMBAT_LIST_CONTINUATION_PATTERN = new RegExp(`^(?:(?:and|or)\\s+(?:${COMB
 
 function stripNegatedClauses(text, negatedPattern, continuationPattern) {
   let inNegatedList = false;
-  return String(text || '').split(',').map((part) => {
+  return String(text || '').split(/[,.!?;:]/).map((part) => {
     const trimmed = part.trim();
     if (negatedPattern.test(trimmed)) {
       inNegatedList = true;

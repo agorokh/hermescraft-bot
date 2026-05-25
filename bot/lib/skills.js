@@ -31,7 +31,7 @@ import fs from 'fs';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
+import { findPlayerEntity, hasNearbyLeaves, isWoodLikeBlockName, itemNameFromCollectEntity } from './player_utils.js';
 import {
   buildStateFileForId,
   buildBillOfMaterials,
@@ -61,7 +61,17 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 
 // Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
 const SETBLOCK_CHAT_INTERVAL_MS = 150;
-const CLEAR_GROUND_SPACE_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'short_grass', 'tall_grass', 'grass', 'snow']);
+const CLEAR_GROUND_SPACE_BLOCKS = new Set([
+  'air', 'cave_air', 'void_air', 'short_grass', 'tall_grass', 'grass', 'snow',
+  'fern', 'large_fern', 'dead_bush', 'dandelion', 'poppy', 'blue_orchid',
+  'allium', 'azure_bluet', 'red_tulip', 'orange_tulip', 'white_tulip',
+  'pink_tulip', 'oxeye_daisy', 'cornflower', 'lily_of_the_valley',
+  'wither_rose', 'sunflower', 'lilac', 'rose_bush', 'peony', 'brown_mushroom',
+  'red_mushroom', 'oak_sapling', 'spruce_sapling', 'birch_sapling',
+  'jungle_sapling', 'acacia_sapling', 'dark_oak_sapling', 'mangrove_propagule',
+  'cherry_sapling', 'bamboo_sapling', 'nether_sprouts', 'crimson_roots',
+  'warped_roots', 'torchflower', 'pitcher_plant',
+]);
 const NON_GROUND_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava']);
 
 function captureStopGen(bot) {
@@ -83,31 +93,19 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function isWoodLikeBlockName(name) {
-  return name.endsWith('_log')
-    || name.endsWith('_wood')
-    || name.endsWith('_stem')
-    || name.endsWith('_hyphae');
-}
-
-function hasNearbyLeaves(bot, x, y, z) {
-  for (let dy = 0; dy <= 2; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dz = -1; dz <= 1; dz++) {
-        const block = bot.blockAt(new Vec3(x + dx, y + dy, z + dz));
-        if ((block?.name || '').endsWith('_leaves')) return true;
-      }
-    }
-  }
-  return false;
+function isClearGroundSpaceBlock(block) {
+  if (!block) return true;
+  const name = block.name || '';
+  if (['water', 'lava', 'flowing_water', 'flowing_lava'].includes(name)) return false;
+  return CLEAR_GROUND_SPACE_BLOCKS.has(name) || block.boundingBox !== 'block';
 }
 
 function isFoundationGroundBlock(bot, block, x, y, z) {
   const name = block?.name || '';
   if (!block || block.boundingBox !== 'block') return false;
-  if (NON_GROUND_BLOCKS.has(name) || name.endsWith('_leaves')) return false;
+  if (NON_GROUND_BLOCKS.has(name) || CLEAR_GROUND_SPACE_BLOCKS.has(name) || name.endsWith('_leaves')) return false;
   const above = bot.blockAt(new Vec3(x, y + 1, z));
-  if (above && !CLEAR_GROUND_SPACE_BLOCKS.has(above.name)) return false;
+  if (!isClearGroundSpaceBlock(above)) return false;
   return !isWoodLikeBlockName(name) || !hasNearbyLeaves(bot, x, y, z);
 }
 

@@ -157,6 +157,7 @@ test('build_schematic grounds uneven terrain with foundation before schematic bl
       const placed = blocks.get(`${pos.x},${pos.y},${pos.z}`);
       if (placed) return { name: placed, boundingBox: 'block' };
       const groundY = terrainGroundY(pos.x, pos.z);
+      if (pos.y === groundY + 1) return { name: 'poppy', boundingBox: 'block' };
       if (pos.y <= groundY) return { name: 'grass_block', boundingBox: 'block' };
       return { name: 'air', boundingBox: 'empty' };
     }

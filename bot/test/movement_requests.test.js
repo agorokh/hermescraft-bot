@@ -19,6 +19,8 @@ test('comma-separated do-not lists stay negated', () => {
 test('non-building task verbs block pure movement fast path', () => {
   assert.equal(hasWorldMutationImperative('come here and cook food'), true);
   assert.equal(hasWorldMutationImperative('follow me and feed me'), true);
+  assert.equal(hasWorldMutationImperative('come here and get wood'), true);
+  assert.equal(hasWorldMutationImperative('follow me and grab logs'), true);
 });
 
 test('negated task clauses do not hide later positive task clauses', () => {
@@ -26,6 +28,7 @@ test('negated task clauses do not hide later positive task clauses', () => {
   assert.equal(hasWorldMutationImperative("come here and don't build. then cook food"), true);
   assert.equal(hasWorldMutationImperative("come here and don't build and cook food"), true);
   assert.equal(hasWorldMutationImperative("come here and don't build but cook food"), true);
+  assert.equal(hasWorldMutationImperative("come here and don't build but grab logs"), true);
 });
 
 test('combat imperatives are detected in mixed movement requests', () => {
@@ -35,6 +38,12 @@ test('combat imperatives are detected in mixed movement requests', () => {
 test('bare attack verbs are combat imperatives', () => {
   assert.equal(hasCombatImperative('come here and fight'), true);
   assert.equal(hasCombatImperative('come here and attack'), true);
+});
+
+test('contact attack verbs require hostile context', () => {
+  assert.equal(hasCombatImperative('come here and hit the button'), false);
+  assert.equal(hasCombatImperative('come here and punch this tree'), false);
+  assert.equal(hasCombatImperative('come here and hit the zombie'), true);
 });
 
 test('negated attack verbs are not combat imperatives', () => {
@@ -66,4 +75,9 @@ test('save-it phrasing is not combat without a hostile or player target', () => 
 
 test('defend-me phrasing is combat even without a named hostile', () => {
   assert.equal(hasCombatImperative('come here and defend me'), true);
+});
+
+test('help hostile phrasing distinguishes panic from task context', () => {
+  assert.equal(hasCombatImperative('help theres a zombie'), true);
+  assert.equal(hasCombatImperative('come here and help me with zombie farm'), false);
 });

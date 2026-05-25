@@ -580,7 +580,8 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   if (hasPositiveMovementRequest(body) && hasCombatImperative(body)) {
     const combatText = combatImperativeText(body);
     const explicitGetHostile = /\bget\b.*\b(?:mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i.test(combatText);
-    const combatIntent = (/\b(kill|attack|fight|hit|punch|smack)\b/i.test(combatText) || explicitGetHostile)
+    const explicitContactAttackHostile = /\b(hit|punch|smack)\b.*\b(?:mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i.test(combatText);
+    const combatIntent = (/\b(kill|attack|fight)\b/i.test(combatText) || explicitGetHostile || explicitContactAttackHostile)
       ? 'attack_mob'
       : 'defend_me';
     const decision = DISPATCHERS[combatIntent]?.(bot, ctx);

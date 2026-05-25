@@ -14,9 +14,9 @@ export function hasFollowRequest(body) {
   return /\b(follow me|stay with me|come with me)\b/i.test(String(body || ''));
 }
 
-const TASK_VERBS = 'build|make|construct|design|create|set up|place|put|dig|mine|fill|use|break|chop|plant|harvest|craft|cook|smelt|feed|give|bring|fetch|collect|gather|find|search|farm|fish|eat|equip|wear|open|close|tame|ride|throw|shoot';
+const TASK_VERBS = 'build|make|construct|design|create|set up|place|put|dig|mine|fill|use|break|chop|plant|harvest|craft|cook|smelt|feed|give|bring|fetch|get|grab|collect|gather|find|search|farm|fish|eat|equip|wear|open|close|tame|ride|throw|shoot';
 const COMBAT_VERBS = 'kill|attack|fight|hit|punch|smack|defend|protect|save|get';
-const POST_NEGATION_TASK_VERBS = 'break|chop|plant|harvest|craft|cook|smelt|feed|give|bring|fetch|collect|gather|find|search|farm|fish|eat|equip|wear|open|close|tame|ride|throw|shoot';
+const POST_NEGATION_TASK_VERBS = 'break|chop|plant|harvest|craft|cook|smelt|feed|give|bring|fetch|get|grab|collect|gather|find|search|farm|fish|eat|equip|wear|open|close|tame|ride|throw|shoot';
 const TASK_VERB_PATTERN = new RegExp(`\\b(?:${TASK_VERBS})\\b`);
 const NEGATED_TASK_PATTERN = new RegExp(`(?:\\b(?:do not|don'?t|dont)\\s+|\\b(?:and|or)\\s+no\\s+|^\\s*no\\s+)(?:${TASK_VERBS})\\b`, 'i');
 const NEGATED_COMBAT_PATTERN = new RegExp(`(?:\\b(?:do not|don'?t|dont)\\s+|\\b(?:and|or)\\s+no\\s+|^\\s*no\\s+)(?:${COMBAT_VERBS})\\b`, 'i');
@@ -67,12 +67,15 @@ export function combatImperativeText(body) {
 export function hasCombatImperative(body) {
   const text = combatImperativeText(body);
   const hostileTargetPattern = /\b(mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/;
-  const hasAttackVerb = /\b(kill|attack|fight|hit|punch|smack)\b/.test(text);
+  const hasDirectAttackVerb = /\b(kill|attack|fight)\b/.test(text);
+  const hasContactAttackVerb = /\b(hit|punch|smack)\b/.test(text) && hostileTargetPattern.test(text);
   const hasProtectionVerb = /\b(defend|protect|save)\b/.test(text);
   const hasProtectionTarget = /\b(defend|protect|save)\s+(me|us)\b/.test(text)
     || hostileTargetPattern.test(text);
-  return hasAttackVerb
+  const hasHelpHostilePanic = /\bhelp\b(?:(?!\bwith\b).)*\b(zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin|mob|mobs)\b(?!\s+(farm|spawner|grinder))/.test(text);
+  return hasDirectAttackVerb
+    || hasContactAttackVerb
     || (hasProtectionVerb && hasProtectionTarget)
     || (/\bget\b/.test(text) && hostileTargetPattern.test(text))
-    || /\bhelp\b.*\b(zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin|mob|mobs)\b/.test(text);
+    || hasHelpHostilePanic;
 }

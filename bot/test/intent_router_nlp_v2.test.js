@@ -128,8 +128,8 @@ test('deterministic combat preserves conjunction combat clause', async () => {
 
 test('deterministic combat ignores casual get-it movement phrasing', async () => {
   const r = await tryRoute(stubBot(), 'come here and get it', 'Adalynn');
-  assert.equal(r.matched, true);
-  assert.equal(r.action, 'goto');
+  assert.notEqual(r.nlp_zone, 'deterministic_combat');
+  assert.notEqual(r.intent_name, 'attack_mob');
 });
 
 test('deterministic combat keeps explicit get-hostile phrasing', async () => {
@@ -159,6 +159,18 @@ test('deterministic combat uses negation-stripped text for intent mode', async (
 
 test('deterministic combat ignores incidental for-me protection phrasing', async () => {
   const r = await tryRoute(stubBot(), 'come here and save this for me', 'Adalynn');
+  assert.notEqual(r.nlp_zone, 'deterministic_combat');
+  assert.notEqual(r.intent_name, 'defend_me');
+});
+
+test('deterministic combat ignores non-hostile contact verbs', async () => {
+  const r = await tryRoute(stubBot(), 'come here and hit the button', 'Adalynn');
+  assert.notEqual(r.nlp_zone, 'deterministic_combat');
+  assert.notEqual(r.intent_name, 'attack_mob');
+});
+
+test('deterministic combat ignores hostile nouns in task help context', async () => {
+  const r = await tryRoute(stubBot(), 'come here and help me with zombie farm', 'Adalynn');
   assert.notEqual(r.nlp_zone, 'deterministic_combat');
   assert.notEqual(r.intent_name, 'defend_me');
 });
@@ -489,6 +501,13 @@ test('movement preprocessor does not swallow mixed build commands', async () => 
 
 test('movement preprocessor does not swallow mixed task commands', async () => {
   const body = 'come here and cook food';
+  const routed = await tryRoute(stubBot(), body, 'Adalynn');
+  assert.notEqual(routed.nlp_zone, 'deterministic_movement');
+  assert.notEqual(routed.action, 'goto');
+});
+
+test('movement preprocessor does not swallow fetch task commands', async () => {
+  const body = 'come here and get wood';
   const routed = await tryRoute(stubBot(), body, 'Adalynn');
   assert.notEqual(routed.nlp_zone, 'deterministic_movement');
   assert.notEqual(routed.action, 'goto');

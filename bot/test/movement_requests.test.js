@@ -4,6 +4,7 @@ import { hasCombatImperative, hasWorldMutationImperative } from '../lib/movement
 
 test('standalone no does not strip later build intent after comma', () => {
   assert.equal(hasWorldMutationImperative('come here, no, build a tower'), true);
+  assert.equal(hasWorldMutationImperative('come here no build a tower'), true);
 });
 
 test('negated build clauses are still ignored for movement requests', () => {
@@ -12,6 +13,7 @@ test('negated build clauses are still ignored for movement requests', () => {
 
 test('comma-separated do-not lists stay negated', () => {
   assert.equal(hasWorldMutationImperative('come here, but do not place, dig, fill, build, or use items'), false);
+  assert.equal(hasWorldMutationImperative("come here and don't build, or place blocks"), false);
 });
 
 test('non-building task verbs block pure movement fast path', () => {
@@ -38,6 +40,7 @@ test('bare attack verbs are combat imperatives', () => {
 test('negated attack verbs are not combat imperatives', () => {
   assert.equal(hasCombatImperative("come here and don't fight"), false);
   assert.equal(hasCombatImperative('come here and no attack'), false);
+  assert.equal(hasCombatImperative("come here and don't fight, or defend me"), false);
 });
 
 test('negated combat clauses do not hide later positive combat clauses', () => {
@@ -52,6 +55,7 @@ test('casual get-it phrasing is not combat without a hostile target', () => {
 
 test('get phrasing is combat when it names a hostile target', () => {
   assert.equal(hasCombatImperative('come here and get the zombie'), true);
+  assert.equal(hasCombatImperative('come here no fight the zombie'), true);
 });
 
 test('save-it phrasing is not combat without a hostile or player target', () => {

@@ -18,10 +18,10 @@ const TASK_VERBS = 'build|make|construct|design|create|set up|place|put|dig|mine
 const COMBAT_VERBS = 'kill|attack|fight|hit|punch|smack|defend|protect|save|get';
 const POST_NEGATION_TASK_VERBS = 'break|chop|plant|harvest|craft|cook|smelt|feed|give|bring|fetch|collect|gather|find|search|farm|fish|eat|equip|wear|open|close|tame|ride|throw|shoot';
 const TASK_VERB_PATTERN = new RegExp(`\\b(?:${TASK_VERBS})\\b`);
-const NEGATED_TASK_PATTERN = new RegExp(`\\b(?:do not|don'?t|dont|no)\\s+(?:${TASK_VERBS})\\b`, 'i');
-const NEGATED_COMBAT_PATTERN = new RegExp(`\\b(?:do not|don'?t|dont|no)\\s+(?:${COMBAT_VERBS})\\b`, 'i');
-const TASK_LIST_CONTINUATION_PATTERN = new RegExp(`^(?:(?:and|or)\\s+)?(?:${TASK_VERBS})\\b(?:\\s+items?)?[.!?;:]?$`, 'i');
-const COMBAT_LIST_CONTINUATION_PATTERN = new RegExp(`^(?:(?:and|or)\\s+(?:${COMBAT_VERBS})|(?:${COMBAT_VERBS}))\\b[.!?;:]?$`, 'i');
+const NEGATED_TASK_PATTERN = new RegExp(`(?:\\b(?:do not|don'?t|dont)\\s+|\\b(?:and|or)\\s+no\\s+|^\\s*no\\s+)(?:${TASK_VERBS})\\b`, 'i');
+const NEGATED_COMBAT_PATTERN = new RegExp(`(?:\\b(?:do not|don'?t|dont)\\s+|\\b(?:and|or)\\s+no\\s+|^\\s*no\\s+)(?:${COMBAT_VERBS})\\b`, 'i');
+const TASK_LIST_CONTINUATION_PATTERN = new RegExp(`^(?:(?:and|or)\\s+)?(?:${TASK_VERBS})\\b(?:\\s+items?)?$|^or\\s+(?:${TASK_VERBS})\\b(?:\\s+[^,.!?;:]*)?$`, 'i');
+const COMBAT_LIST_CONTINUATION_PATTERN = new RegExp(`^(?:(?:and|or)\\s+(?:${COMBAT_VERBS})|(?:${COMBAT_VERBS}))\\b$|^or\\s+(?:${COMBAT_VERBS})\\b(?:\\s+[^,.!?;:]*)?$`, 'i');
 const POST_NEGATION_TASK_TAIL_PATTERN = new RegExp(`\\b(?:then|but)\\s+.*\\b(?:${TASK_VERBS})\\b|\\band\\s+(?:${POST_NEGATION_TASK_VERBS})\\b`, 'i');
 const POST_NEGATION_COMBAT_TAIL_PATTERN = new RegExp(`\\b(?:then|but|and)\\s+.*\\b(?:${COMBAT_VERBS})\\b`, 'i');
 

@@ -24,13 +24,11 @@ import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { actionOutcomeFailed } from './action_outcome.js';
-import { CURRENT_CAST } from './chat.js';
 import { itemNameFromCollectEntity } from './player_utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const QUESTS_DIR = join(__dirname, '..', 'quests');
-const DEFAULT_COMPANION_NAMES = CURRENT_CAST;
 let _cachedCompanionNamesRaw = null;
 let _cachedCompanionNames = null;
 
@@ -72,7 +70,7 @@ function questItemNamesMatch(triggerItem, eventItem) {
 }
 
 export function configuredCompanionNames() {
-  const raw = process.env.HERMESCRAFT_COMPANION_NAMES || DEFAULT_COMPANION_NAMES.join(',');
+  const raw = process.env.HERMESCRAFT_COMPANION_NAMES || '';
   if (_cachedCompanionNames && raw === _cachedCompanionNamesRaw) {
     return _cachedCompanionNames;
   }

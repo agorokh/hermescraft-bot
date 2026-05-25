@@ -584,7 +584,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     const combatIntent = (/\b(kill|attack|fight)\b/i.test(combatText) || explicitGetHostile || explicitContactAttackHostile)
       ? 'attack_mob'
       : 'defend_me';
-    const decision = DISPATCHERS[combatIntent]?.(bot, ctx);
+    const decision = DISPATCHERS[combatIntent]?.(bot, { ...ctx, body: combatText });
     if (decision) {
       return {
         matched: true,

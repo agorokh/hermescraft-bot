@@ -138,6 +138,14 @@ test('deterministic combat keeps explicit get-hostile phrasing', async () => {
   assert.equal(r.action, 'fight');
 });
 
+test('deterministic combat targets surviving hostile after negation', async () => {
+  const r = await tryRoute(stubBot(), "come here and don't fight skeleton, attack zombie", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.intent_name, 'attack_mob');
+  assert.equal(r.action, 'fight');
+  assert.equal(r.body.target, 'zombie');
+});
+
 test('deterministic combat ignores casual save-it movement phrasing', async () => {
   const r = await tryRoute(stubBot(), 'come here and save it', 'Adalynn');
   assert.equal(r.matched, true);

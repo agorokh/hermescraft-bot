@@ -150,6 +150,19 @@ test('deterministic combat keeps defend-me movement phrasing', async () => {
   assert.equal(r.action, 'fight');
 });
 
+test('deterministic combat uses negation-stripped text for intent mode', async () => {
+  const r = await tryRoute(stubBot(), "come here, don't fight, defend me", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.intent_name, 'defend_me');
+  assert.equal(r.action, 'fight');
+});
+
+test('deterministic combat ignores incidental for-me protection phrasing', async () => {
+  const r = await tryRoute(stubBot(), 'come here and save this for me', 'Adalynn');
+  assert.notEqual(r.nlp_zone, 'deterministic_combat');
+  assert.notEqual(r.intent_name, 'defend_me');
+});
+
 test('standalone no before build intent does not force movement fast path', async () => {
   const r = await tryRoute(stubBot(), 'come here, no, build a tower', 'Adalynn');
   assert.notEqual(r.action, 'goto');

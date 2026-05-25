@@ -35,6 +35,7 @@ import { dockStart } from '@nlpjs/basic';
 import { findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 import {
+  combatImperativeText,
   hasCombatImperative,
   hasFollowRequest,
   hasNegativeMovementRequest,
@@ -577,7 +578,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     };
   }
   if (hasPositiveMovementRequest(body) && hasCombatImperative(body)) {
-    const combatText = String(body || '');
+    const combatText = combatImperativeText(body);
     const explicitGetHostile = /\bget\b.*\b(?:mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i.test(combatText);
     const combatIntent = (/\b(kill|attack|fight|hit|punch|smack)\b/i.test(combatText) || explicitGetHostile)
       ? 'attack_mob'

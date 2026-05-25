@@ -55,17 +55,22 @@ export function hasWorldMutationImperative(body) {
   return TASK_VERB_PATTERN.test(stripped);
 }
 
-export function hasCombatImperative(body) {
-  const text = stripNegatedClauses(
+export function combatImperativeText(body) {
+  return stripNegatedClauses(
     String(body || '').toLowerCase(),
     NEGATED_COMBAT_PATTERN,
     COMBAT_LIST_CONTINUATION_PATTERN,
     POST_NEGATION_COMBAT_TAIL_PATTERN,
   );
+}
+
+export function hasCombatImperative(body) {
+  const text = combatImperativeText(body);
   const hostileTargetPattern = /\b(mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/;
   const hasAttackVerb = /\b(kill|attack|fight|hit|punch|smack)\b/.test(text);
   const hasProtectionVerb = /\b(defend|protect|save)\b/.test(text);
-  const hasProtectionTarget = /\b(me|us)\b/.test(text) || hostileTargetPattern.test(text);
+  const hasProtectionTarget = /\b(defend|protect|save)\s+(me|us)\b/.test(text)
+    || hostileTargetPattern.test(text);
   return hasAttackVerb
     || (hasProtectionVerb && hasProtectionTarget)
     || (/\bget\b/.test(text) && hostileTargetPattern.test(text))

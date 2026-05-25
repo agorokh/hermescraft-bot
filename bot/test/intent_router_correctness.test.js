@@ -48,6 +48,7 @@ const LABELED = [
   // movement
   ['come here rosie', ['goto']],
   ['come over to me', ['goto']],
+  ['come look at the sky bridge with me, but do not place, dig, fill, build, or use items.', ['goto']],
   ['follow me steve lets go adventure', ['follow_player_v2']],
   ['walk over here', ['goto']],
   // info

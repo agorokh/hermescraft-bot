@@ -29,6 +29,7 @@ import { itemNameFromCollectEntity } from './player_utils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const QUESTS_DIR = join(__dirname, '..', 'quests');
+const DEFAULT_COMPANION_NAMES = ['rosie', 'steve'];
 
 // In-memory state per quest per bot.
 // Map<bot_username, Map<quest_name, {currentStep, state, params}>>
@@ -65,6 +66,21 @@ function questItemNamesMatch(triggerItem, eventItem) {
   const got = normalizeQuestItemName(eventItem);
   if (!want || !got) return false;
   return got === want || got.endsWith(`/${want}`) || want.endsWith(`/${got}`);
+}
+
+export function configuredCompanionNames() {
+  const raw = process.env.HERMESCRAFT_COMPANION_NAMES || DEFAULT_COMPANION_NAMES.join(',');
+  return new Set(String(raw)
+    .split(',')
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean));
+}
+
+export function isCompanionSpeaker(username, botName) {
+  if (!username) return false;
+  const normalized = String(username).toLowerCase();
+  if (botName && normalized === String(botName).toLowerCase()) return true;
+  return configuredCompanionNames().has(normalized);
 }
 
 function resolvePosBox(trigger, qs) {
@@ -292,15 +308,15 @@ export async function installQuestEngine(bot, ACTIONS, log) {
   }
 
   const onJoin = async (player) => {
-    if (player.username === bot.username) return;
+    if (isCompanionSpeaker(player.username, bot.username)) return;
     for (const q of myQuests) await advance(q, { kind: 'player_join', player: player.username });
   };
   const onChat = async (username, message) => {
-    if (username === bot.username) return;
+    if (isCompanionSpeaker(username, bot.username)) return;
     for (const q of myQuests) await advance(q, { kind: 'player_chat', player: username, message });
   };
   const onCollect = async (collector, collected) => {
-    if (!collector || collector.username === bot.username) return;
+    if (!collector || isCompanionSpeaker(collector.username, bot.username)) return;
     const itemName = itemNameFromCollectEntity(collected);
     for (const q of myQuests) await advance(q, { kind: 'player_collected', player: collector.username, item: itemName });
   };

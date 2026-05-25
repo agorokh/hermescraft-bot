@@ -375,3 +375,12 @@ test('stop hot-path: does not match gameplay phrasing', async () => {
   const r = await tryStopRoute(stubBot(), 'freeze the water', 'Adalynn');
   assert.equal(r.matched, false);
 });
+
+test('stop hot-path yields to positive movement with no-build constraint', async () => {
+  const body = 'Steve come look at the sky bridge with me, but do not place, dig, fill, build, or use items.';
+  const stop = await tryStopRoute(stubBot(), body, 'Adalynn');
+  assert.equal(stop.matched, false);
+  const routed = await tryRouteRegex(stubBot(), body, 'Adalynn');
+  assert.equal(routed.matched, true);
+  assert.equal(routed.action, 'goto');
+});

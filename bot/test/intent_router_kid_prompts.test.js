@@ -165,7 +165,7 @@ test('gallery build prompts route to advanced Foreman pipeline', async () => {
   }
 });
 
-test('schematic routes normalize stale low player Y to nearby solid ground', async () => {
+test('raised/sky bridge routes lift stale low player Y above nearby solid ground', async () => {
   const bot = stubBot('Adalynn', { x: 260, y: 63, z: 286 });
   bot.blockAt = (pos) => {
     if (pos.x === 262 && pos.z === 286 && pos.y === 64) return { name: 'grass_block', boundingBox: 'block' };
@@ -175,17 +175,30 @@ test('schematic routes normalize stale low player Y to nearby solid ground', asy
   assert.ok(route.matched, 'sky bridge prompt must route');
   assert.equal(route.action, 'build_schematic_advanced');
   assert.equal(route.body.name, 'sky_bridge');
-  assert.equal(route.body.y, 65);
+  assert.equal(route.body.y, 69);
 });
 
-test('schematic routes lift low surface Y when target chunk readback is missing', async () => {
+test('raised/sky bridge routes lift low surface Y when target chunk readback is missing', async () => {
   const bot = stubBot('Adalynn', { x: 260, y: 63, z: 286 });
   bot.blockAt = () => null;
   const route = await tryRoute(bot, 'Rosie build a sky bridge here', 'Adalynn');
   assert.ok(route.matched, 'sky bridge prompt must route');
   assert.equal(route.action, 'build_schematic_advanced');
   assert.equal(route.body.name, 'sky_bridge');
-  assert.equal(route.body.y, 65);
+  assert.equal(route.body.y, 69);
+});
+
+test('raised sky bridge preserves high player Y instead of snapping to ground', async () => {
+  const bot = stubBot('Adalynn', { x: 260, y: 69, z: 286 });
+  bot.blockAt = (pos) => {
+    if (pos.x === 262 && pos.z === 286 && pos.y === 64) return { name: 'grass_block', boundingBox: 'block' };
+    return { name: 'air', boundingBox: 'empty' };
+  };
+  const route = await tryRoute(bot, 'Steve build a raised sky bridge here', 'Adalynn');
+  assert.ok(route.matched, 'raised sky bridge prompt must route');
+  assert.equal(route.action, 'build_schematic_advanced');
+  assert.equal(route.body.name, 'sky_bridge');
+  assert.equal(route.body.y, 69);
 });
 
 for (const p of PROMPTS) {

@@ -100,6 +100,20 @@ export function normalizeBuildBaseY(bot, x, z, rawY) {
   return clampBuildBaseY(baseY);
 }
 
+export function schematicBuildBaseY(bot, name, body, x, z, rawY) {
+  const normalizedY = normalizeBuildBaseY(bot, x, z, rawY);
+  const requestedY = Math.floor(rawY);
+  const wantsRaisedBridge = (
+    name === 'sky_bridge'
+    && /\b(raised|sky|high|overhead|air)\b/i.test(String(body || ''))
+  );
+  if (wantsRaisedBridge) {
+    const raisedY = normalizedY + 4;
+    return Math.max(requestedY, raisedY);
+  }
+  return normalizedY;
+}
+
 // Pick a tower footprint offset: solid ground at footY-1 and buildable air at footY.
 export function pickTowerFootOffset(bot, anchorPos) {
   const baseY = Math.floor(anchorPos.y);

@@ -26,7 +26,7 @@
 
 import { extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
-import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, pickTowerFootOffset } from './player_utils.js';
+import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, schematicBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
 function extractKidName(body) {
@@ -36,6 +36,17 @@ function extractKidName(body) {
   return kidNameMatch
     ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
     : null;
+}
+
+function hasPositiveMovementRequest(body) {
+  const text = String(body || '');
+  return /\bcome\s+(?:look|see|check|watch)\b.*\b(?:with me|over here|here|at this|at it)\b/i.test(text)
+    || /\b(come|come over|come here|walk|run|head)\b.*\b(here|to me|over)\b/i.test(text)
+    || /\b(follow me|stay with me|come with me)\b/i.test(text);
+}
+
+function hasNegativeMovementRequest(body) {
+  return /\b(don'?t|do not)\s+(?:move|come|follow|walk|run|go|head)\b/i.test(String(body || ''));
 }
 
 // ── Pattern table ───────────────────────────────────────────────────
@@ -73,6 +84,7 @@ const INTENTS = [
       /\bro+sie\s+stop\b/i,
     ],
     async handler(bot, ctx) {
+      if (hasPositiveMovementRequest(ctx.body) && !hasNegativeMovementRequest(ctx.body)) return null;
       return { action: 'stop', body: {} };
     },
   },
@@ -234,7 +246,7 @@ const INTENTS = [
       const schemBody = {
         name,
         x: buildX,
-        y: normalizeBuildBaseY(bot, buildX, buildZ, p.y),
+        y: schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y),
         z: buildZ,
       };
       if (kidName) schemBody.kid_name = kidName;
@@ -281,6 +293,7 @@ const INTENTS = [
   {
     name: 'come_here',
     patterns: [
+      /\bcome\s+(?:look|see|check|watch)\b.*\b(?:with me|over here|here|at this|at it)\b/i,
       /\b(come|come over|come here|walk|run|head)\b.*\b(here|to me|over)\b/i,
       /\bcome to my (spot|position|place)\b/i,
     ],

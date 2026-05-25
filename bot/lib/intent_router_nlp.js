@@ -32,7 +32,7 @@ import { extractGatherBlockFromBody, extractOreFromBody } from './intent_slot_ex
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
-import { findPlayerEntity, normalizeBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -315,6 +315,21 @@ const SPECULATIVE_BUILD_INTENTS = new Set([
   'build_tower',
 ]);
 
+function hasPositiveMovementRequest(body) {
+  const text = String(body || '');
+  return /\bcome\s+(?:look|see|check|watch)\b.*\b(?:with me|over here|here|at this|at it)\b/i.test(text)
+    || /\b(come|come over|come here|walk|run|head)\b.*\b(here|to me|over)\b/i.test(text)
+    || /\b(follow me|stay with me|come with me)\b/i.test(text);
+}
+
+function hasNegativeMovementRequest(body) {
+  return /\b(don'?t|do not)\s+(?:move|come|follow|walk|run|go|head)\b/i.test(String(body || ''));
+}
+
+function hasFollowRequest(body) {
+  return /\b(follow me|stay with me|come with me)\b/i.test(String(body || ''));
+}
+
 const DISPATCHERS = {
   stop: () => ({ action: 'stop', body: {} }),
 
@@ -381,7 +396,7 @@ const DISPATCHERS = {
       body: {
         name,
         x: buildX,
-        y: normalizeBuildBaseY(bot, buildX, buildZ, p.y),
+        y: schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y),
         z: buildZ,
       },
     };
@@ -567,6 +582,41 @@ export async function tryRoute(bot, body, sender, opts = {}) {
       nlp_score: null,
       nlp_zone: 'anaphora',
       anaphora_rule: anaphora.anaphora,
+    };
+  }
+  if (hasPositiveMovementRequest(body) && !hasNegativeMovementRequest(body) && ctx.senderEntity?.position) {
+    if (hasFollowRequest(body)) {
+      return {
+        matched: true,
+        intent_name: 'follow_me',
+        action: 'follow_player_v2',
+        body: { player: ctx.sender, distance: 3 },
+        skill_id: opts.dryRun ? null : recordLastSkill(
+          bot,
+          'follow_me',
+          'follow_player_v2',
+          { player: ctx.sender, distance: 3 },
+          body,
+        ),
+        nlp_score: null,
+        nlp_zone: 'deterministic_movement',
+      };
+    }
+    const p = ctx.senderEntity.position;
+    return {
+      matched: true,
+      intent_name: 'come_here',
+      action: 'goto',
+      body: { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) },
+      skill_id: opts.dryRun ? null : recordLastSkill(
+        bot,
+        'come_here',
+        'goto',
+        { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) },
+        body,
+      ),
+      nlp_score: null,
+      nlp_zone: 'deterministic_movement',
     };
   }
   let nlp;

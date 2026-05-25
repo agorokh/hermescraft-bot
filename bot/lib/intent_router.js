@@ -30,6 +30,15 @@ import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, 
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 import { hasCombatImperative, hasNegativeMovementRequest, hasPositiveMovementRequest } from './movement_requests.js';
 
+function hasExplicitStopRequest(body) {
+  const text = String(body || '');
+  return /\b(?:stop|wait|nevermind|never mind|cancel|halt|abort|pause)\b/i.test(text)
+    || /\b(?:quit it|knock it off|i changed my mind)\b/i.test(text)
+    || /\bstah+p+\b/i.test(text)
+    || /\bstapp+p*\b/i.test(text)
+    || /^\s*(?:freeze|hold (?:on|up))\b/i.test(text);
+}
+
 function extractKidName(body) {
   const kidNameMatch = String(body).match(
     /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
@@ -76,6 +85,7 @@ const INTENTS = [
     async handler(bot, ctx) {
       if (hasPositiveMovementRequest(ctx.body)
         && !hasNegativeMovementRequest(ctx.body)
+        && !hasExplicitStopRequest(ctx.body)
         && /\b(?:do not|don'?t|dont|no)\s+(?:build|mine|place)\b/i.test(String(ctx.body || ''))) {
         return null;
       }

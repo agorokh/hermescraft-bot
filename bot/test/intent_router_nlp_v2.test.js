@@ -79,6 +79,12 @@ test('regex stop hot path wins over explicit stop plus movement', async () => {
   assert.equal(r.action, 'stop');
 });
 
+test('regex stop hot path preserves explicit stop with movement and no-build constraint', async () => {
+  const r = await tryStopRoute(stubBot(), "just stop building and come here, don't build", 'Adalynn');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'stop');
+});
+
 test('negative build plus movement can still bypass regex stop hot path', async () => {
   const r = await tryStopRoute(stubBot(), "don't build a tower, come here", 'Adalynn');
   assert.equal(r.matched, false);

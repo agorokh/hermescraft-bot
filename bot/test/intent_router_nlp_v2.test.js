@@ -369,12 +369,14 @@ test('gallery prompts can pin explicit base Y for visual acceptance runs', async
   assert.equal(r.action, 'build_schematic_advanced');
   assert.equal(r.body.name, 'market_square');
   assert.equal(r.body.y, 65);
+  assert.equal(r.body.respect_explicit_base_y, true);
 
   const bridge = await tryRoute(stubBot(), 'build a raised sky bridge at base y 69', 'Adalynn');
   assert.equal(bridge.matched, true, `expected sky bridge route: zone=${bridge.nlp_zone} intent=${bridge.nlp_intent}`);
   assert.equal(bridge.action, 'build_schematic_advanced');
   assert.equal(bridge.body.name, 'sky_bridge');
   assert.equal(bridge.body.y, 69);
+  assert.equal(bridge.body.respect_explicit_base_y, true);
 });
 
 test('NLP base-Y sanitizer removes only explicit coordinate clauses', () => {

@@ -61,6 +61,8 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 
 // Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
 const SETBLOCK_CHAT_INTERVAL_MS = 150;
+const CLEAR_GROUND_SPACE_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'short_grass', 'tall_grass', 'grass', 'snow']);
+const NON_GROUND_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava']);
 
 function captureStopGen(bot) {
   return bot._stopGeneration || 0;
@@ -79,6 +81,34 @@ function findInventoryItem(bot, itemName) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function isWoodLikeBlockName(name) {
+  return name.endsWith('_log')
+    || name.endsWith('_wood')
+    || name.endsWith('_stem')
+    || name.endsWith('_hyphae');
+}
+
+function hasNearbyLeaves(bot, x, y, z) {
+  for (let dy = 0; dy <= 2; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const block = bot.blockAt(new Vec3(x + dx, y + dy, z + dz));
+        if ((block?.name || '').endsWith('_leaves')) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isFoundationGroundBlock(bot, block, x, y, z) {
+  const name = block?.name || '';
+  if (!block || block.boundingBox !== 'block') return false;
+  if (NON_GROUND_BLOCKS.has(name) || name.endsWith('_leaves')) return false;
+  const above = bot.blockAt(new Vec3(x, y + 1, z));
+  if (above && !CLEAR_GROUND_SPACE_BLOCKS.has(above.name)) return false;
+  return !isWoodLikeBlockName(name) || !hasNearbyLeaves(bot, x, y, z);
 }
 
 function paperConsoleFifo() {
@@ -795,9 +825,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (blocks.length === 0) return { result: `Schematic ${name} is empty.` };
 
   const baseX = Math.floor(x), baseZ = Math.floor(z);
+  const requestedBaseY = Math.floor(y);
   // baseY is `let` because terrain-aware grounding may adjust it below to
   // sit on the highest sampled ground under the schematic footprint.
-  let baseY = Math.floor(y);
+  let baseY = requestedBaseY;
   const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
   const centerX = baseX + Math.floor(fw / 2);
   const centerZ = baseZ + Math.floor(fl / 2);
@@ -812,6 +843,15 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
   const useChatCommand = await detectSetblockAuth(bot);
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
+  const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
+  const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
+  const respectExplicitBaseY = bodyFlagEnabled(bodyArgs.respect_explicit_base_y, false);
+  const buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
+  const stateFile = buildStateFileForId(buildId);
+  let savedState = null;
+  if (resumeEnabled) {
+    savedState = await loadBuildState(stateFile);
+  }
 
   // ── GROUNDING & FOUNDATION ────────────────────────────────────────────────
   // The schematic's floor (dy=0) cells must sit on solid ground or the build
@@ -821,13 +861,21 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   //   (2) generate foundation cells filling the gap from terrain to baseY-1
   //       for every floor cell where the ground is below the build floor
   // This grounds builds on real landscape — hills, valleys, slopes.
-  // Skipped only when the brain explicitly sets `skip_foundation: true`
-  // (e.g. sky_bridge intentionally floats).
+  // Skipped for physical placement, explicit skip requests, aerial schematics,
+  // and resume attempts that already have a saved origin/foundation plan.
   let foundationPlacements = [];
   let foundationStats = null;
-  const skipFoundation = bodyFlagEnabled(bodyArgs.skip_foundation, false)
+  const skipFoundation = !useChatCommand
+    || bodyFlagEnabled(bodyArgs.skip_foundation, false)
     || name === 'sky_bridge';   // sky_bridge is the canonical aerial schematic
-  if (!skipFoundation) {
+  const resumingBuildState = savedState?.build_id === buildId && Number.isFinite(savedState?.origin?.y);
+  if (resumingBuildState) {
+    baseY = Math.floor(savedState.origin.y);
+    foundationPlacements = Array.isArray(savedState.foundation_placements)
+      ? savedState.foundation_placements
+      : [];
+    foundationStats = savedState.foundation_stats || null;
+  } else if (!skipFoundation) {
     try {
       const floorCells = computeFloorCells(blocks);
       const sample = sampleFootprintGround({
@@ -835,22 +883,15 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         floorCells,
         baseX,
         baseZ,
-        searchTopY: Math.min(319, baseY + 4),
+        searchTopY: Math.min(319, baseY + 32),
         searchBottomY: Math.max(-64, baseY - 32),
-        isSolidGroundBlock: (block) => {
-          if (!block) return false;
-          const bn = block.name || '';
-          if (block.boundingBox !== 'block') return false;
-          if (['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava'].includes(bn)) return false;
-          if (bn.endsWith('_leaves')) return false;
-          return true;
-        },
+        isSolidGroundBlock: (block, pos) => isFoundationGroundBlock(bot, block, pos.x, pos.y, pos.z),
       });
       // If we found ground under most cells, retarget baseY to the highest
       // ground +1. This prevents the schematic from being buried into a hill.
       // Tolerate up to half the footprint having no ground (e.g. cliff edges)
       // before falling back to the caller's baseY.
-      if (sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
+      if (!respectExplicitBaseY && sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
         const adjustedBaseY = sample.maxGroundY + 1;
         if (adjustedBaseY !== baseY) {
           console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
@@ -881,11 +922,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     }
   }
 
-  // buildId uses the FINAL (terrain-adjusted) baseY so resume state files match
-  // actual placement, not the kid's pre-adjustment position.
-  const buildId = `${name}-${baseX}-${baseY}-${baseZ}`;
-  const stateFile = buildStateFileForId(buildId);
-
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
   let buildState = null;
   let placementsSinceSave = 0;
@@ -896,12 +932,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     await saveBuildState(buildState, stateFile);
     placementsSinceSave = 0;
   };
-  const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
-  const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
-  let savedState = null;
-  if (resumeEnabled) {
-    savedState = await loadBuildState(stateFile);
-  }
   if (resumeEnabled && savedState?.build_id === buildId && savedState?.status === 'done') {
     const verifiedState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
       const block = bot.blockAt(new Vec3(wx, wy, wz));
@@ -941,7 +971,13 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         return block?.name || null;
       });
     } else {
-      buildState = createBuildState(buildPlan);
+      buildState = {
+        ...createBuildState(buildPlan),
+        build_id: buildId,
+        requested_origin: { x: baseX, y: requestedBaseY, z: baseZ },
+        foundation_placements: foundationPlacements,
+        foundation_stats: foundationStats,
+      };
     }
     await persistBuildState(true);
   }

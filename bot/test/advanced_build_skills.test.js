@@ -259,3 +259,101 @@ test('trusted setblock FIFO fails closed without bot chat fallback when no reade
     }
   }
 });
+
+async function withTrustedSetblockChatFallback(fn) {
+  const priorTrust = process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH;
+  const priorFallback = process.env.HERMESCRAFT_ALLOW_SETBLOCK_CHAT_FALLBACK;
+  process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH = '1';
+  process.env.HERMESCRAFT_ALLOW_SETBLOCK_CHAT_FALLBACK = '1';
+  try {
+    return await fn();
+  } finally {
+    if (priorTrust == null) {
+      delete process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH;
+    } else {
+      process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH = priorTrust;
+    }
+    if (priorFallback == null) {
+      delete process.env.HERMESCRAFT_ALLOW_SETBLOCK_CHAT_FALLBACK;
+    } else {
+      process.env.HERMESCRAFT_ALLOW_SETBLOCK_CHAT_FALLBACK = priorFallback;
+    }
+  }
+}
+
+function makeSlopedSetblockBot({ baseX = 10, lowGroundY = 63, highGroundY = 66 } = {}) {
+  const blocks = new Map();
+  const commands = [];
+  class FakeBot extends EventEmitter {
+    constructor() {
+      super();
+      this.inventory = { items: () => [] };
+      this.entity = { position: { x: 0, y: 64, z: 0 } };
+      this.username = 'Hermes';
+      this._stopGeneration = 0;
+    }
+
+    chat(command) {
+      commands.push(command);
+      const match = command.match(/^\/setblock\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(\S+)/);
+      if (!match) return;
+      const [, x, y, z, block] = match;
+      setTimeout(() => {
+        blocks.set(`${x},${y},${z}`, block);
+        this.emit('message', { toString: () => `Changed the block at ${x}, ${y}, ${z}` }, 'system');
+      }, 1);
+    }
+
+    blockAt(pos) {
+      const key = `${pos.x},${pos.y},${pos.z}`;
+      const placed = blocks.get(key);
+      if (placed) return { name: placed, boundingBox: 'block' };
+      const groundY = pos.x >= baseX + 2 ? highGroundY : lowGroundY;
+      if (pos.y <= groundY) return { name: 'grass_block', boundingBox: 'block' };
+      return { name: 'air', boundingBox: 'empty' };
+    }
+  }
+  return { fakeBot: new FakeBot(), commands };
+}
+
+test('build_schematic places terrain foundation before schematic blocks', async () => {
+  await withTrustedSetblockChatFallback(async () => {
+    const { fakeBot, commands } = makeSlopedSetblockBot();
+    const actions = registerHighLevelSkills({}, () => fakeBot);
+
+    const result = await actions.build_schematic({ name: 'well', x: 10, y: 64, z: 10 });
+
+    assert.match(result.result, /Built schematic "well" at 10,67,10/);
+    const firstFoundation = commands.findIndex((line) => line.endsWith(' stone'));
+    const firstSchematic = commands.findIndex((line) => line.endsWith(' cobblestone'));
+    assert.ok(firstFoundation >= 0, `expected foundation commands, saw: ${commands.join(', ')}`);
+    assert.ok(firstSchematic > firstFoundation, `expected foundation before schematic, saw: ${commands.join(', ')}`);
+  });
+});
+
+test('build_schematic preserves pinned baseY and skip_foundation bypasses grounding', async () => {
+  await withTrustedSetblockChatFallback(async () => {
+    const pinned = makeSlopedSetblockBot();
+    const pinnedActions = registerHighLevelSkills({}, () => pinned.fakeBot);
+    const pinnedResult = await pinnedActions.build_schematic({
+      name: 'well',
+      x: 10,
+      y: 70,
+      z: 10,
+      respect_explicit_base_y: true,
+    });
+    assert.match(pinnedResult.result, /Built schematic "well" at 10,70,10/);
+
+    const skipped = makeSlopedSetblockBot();
+    const skippedActions = registerHighLevelSkills({}, () => skipped.fakeBot);
+    const skippedResult = await skippedActions.build_schematic({
+      name: 'well',
+      x: 10,
+      y: 64,
+      z: 10,
+      skip_foundation: true,
+    });
+    assert.match(skippedResult.result, /Built schematic "well" at 10,64,10/);
+    assert.equal(skipped.commands.some((line) => line.endsWith(' stone')), false);
+  });
+});

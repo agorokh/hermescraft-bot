@@ -39,6 +39,13 @@ const NON_GROUND_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava
 
 const MIN_BUILD_BASE_Y = -64;
 const MAX_BUILD_BASE_Y = 319;
+const EXPLICIT_BASE_Y_SCHEMATICS = new Set([
+  'crystal_observatory',
+  'wizard_tower',
+  'sky_bridge',
+  'market_square',
+  'beacon_plaza',
+]);
 
 function clampBuildBaseY(y) {
   return Math.min(MAX_BUILD_BASE_Y, Math.max(MIN_BUILD_BASE_Y, Math.floor(y)));
@@ -49,6 +56,15 @@ function isWoodLikeBlockName(name) {
     || name.endsWith('_wood')
     || name.endsWith('_stem')
     || name.endsWith('_hyphae');
+}
+
+export function explicitSchematicBaseY(body) {
+  const match = String(body || '').match(/\bbase\s*y\s*[:=]?\s*(-?\d{1,3})\b/i);
+  if (!match) return null;
+  const value = parseInt(match[1], 10);
+  if (!Number.isFinite(value)) return null;
+  if (value < MIN_BUILD_BASE_Y || value > MAX_BUILD_BASE_Y) return null;
+  return Math.floor(value);
 }
 
 function isSolidGround(block) {
@@ -83,6 +99,15 @@ function isValidTowerFooting(bot, footX, footY, footZ) {
   const groundSolid = isAcceptableGround(bot, footX, footY - 1, footZ, ground);
   const spaceClear = !space || CLEAR_FOOT_BLOCKS.has(space.name);
   return groundSolid && spaceClear;
+}
+
+function isValidRequestedBuildBase(bot, x, z, y) {
+  const ground = bot.blockAt(new Vec3(x, y - 1, z));
+  const foot = bot.blockAt(new Vec3(x, y, z));
+  const head = bot.blockAt(new Vec3(x, y + 1, z));
+  return isSolidGround(ground)
+    && (!foot || CLEAR_FOOT_BLOCKS.has(foot.name))
+    && (!head || CLEAR_FOOT_BLOCKS.has(head.name));
 }
 
 // Entity Y can lag after teleports or come through as a low/feet coordinate
@@ -127,12 +152,17 @@ export function normalizeBuildBaseY(bot, x, z, rawY) {
 }
 
 export function schematicBuildBaseY(bot, name, body, x, z, rawY) {
-  const normalizedY = normalizeBuildBaseY(bot, x, z, rawY);
+  const explicitY = explicitSchematicBaseY(body);
+  if (explicitY !== null && EXPLICIT_BASE_Y_SCHEMATICS.has(name)) return explicitY;
   const requestedY = Math.floor(rawY);
   const wantsRaisedBridge = (
     name === 'sky_bridge'
     && /\b(raised|sky|high|overhead|air)\b/i.test(String(body || ''))
   );
+  if (!wantsRaisedBridge && isValidRequestedBuildBase(bot, x, z, requestedY)) {
+    return clampBuildBaseY(requestedY);
+  }
+  const normalizedY = normalizeBuildBaseY(bot, x, z, rawY);
   if (wantsRaisedBridge) {
     const raisedY = normalizedY + 4;
     return clampBuildBaseY(Math.max(requestedY, raisedY));

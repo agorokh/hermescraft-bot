@@ -201,6 +201,20 @@ test('raised sky bridge preserves high player Y instead of snapping to ground', 
   assert.equal(route.body.y, 69);
 });
 
+test('prepared gallery prompt can pin base Y through regex router', async () => {
+  const bot = stubBot('Adalynn', { x: 288, y: 65, z: 288 });
+  bot.blockAt = (pos) => {
+    if (pos.y === 70) return { name: 'oak_planks', boundingBox: 'block' };
+    if (pos.y === 64) return { name: 'grass_block', boundingBox: 'block' };
+    return { name: 'air', boundingBox: 'empty' };
+  };
+  const route = await tryRoute(bot, 'Rosie set up a market square for us at base y 65', 'Adalynn');
+  assert.ok(route.matched, 'prepared market prompt must route');
+  assert.equal(route.action, 'build_schematic_advanced');
+  assert.equal(route.body.name, 'market_square');
+  assert.equal(route.body.y, 65);
+});
+
 for (const p of PROMPTS) {
   test(`kid prompt "${p.id}" — full pipeline (mention + strip + route)`, async () => {
     const target = p.expect_actions.includes('collect') ? 'Steve' : 'Rosie';

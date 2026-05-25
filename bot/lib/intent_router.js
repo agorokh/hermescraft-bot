@@ -24,7 +24,7 @@
 //
 // ctx = { sender, senderEntity, message, body }
 
-import { extractOreFromBody } from './intent_slot_extract.js';
+import { extractKidName, extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, schematicBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
@@ -37,15 +37,6 @@ function hasExplicitStopRequest(body) {
     || /\bstah+p+\b/i.test(text)
     || /\bstapp+p*\b/i.test(text)
     || /^\s*(?:freeze|hold (?:on|up))\b/i.test(text);
-}
-
-function extractKidName(body) {
-  const kidNameMatch = String(body).match(
-    /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
-  );
-  return kidNameMatch
-    ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
-    : null;
 }
 
 // ── Pattern table ───────────────────────────────────────────────────
@@ -236,7 +227,7 @@ const INTENTS = [
     ],
     async handler(bot, ctx) {
       const resolvedName = resolveSchematicName(ctx.body);
-      if (resolvedName !== 'list' && isSpeculativeBuildDiscussion(ctx.body)) return null;
+      if (isSpeculativeBuildDiscussion(ctx.body)) return null;
       const p = resolveAnchorPos(bot, ctx);
       if (!p) return null;
       const body = ctx.body.toLowerCase();

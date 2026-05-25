@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tryRoute, recordLastSkill, resetContextBuffer } from '../lib/intent_router_nlp.js';
+import { tryRoute, recordLastSkill, resetContextBuffer, stripExplicitBaseYForNlp } from '../lib/intent_router_nlp.js';
 import { isSpeculativeBuildDiscussion, resolveSchematicName } from '../lib/schematic_resolve.js';
 import { tryStopRoute, tryRoute as tryRouteRegex } from '../lib/intent_router.js';
 
@@ -318,6 +318,29 @@ test('house of ice → ice_castle schematic (keyword order)', async () => {
   assert.equal(r.body.name, 'ice_castle');
 });
 
+test('NLP schematic routes preserve kid-facing build names for durable memory', async () => {
+  const r = await tryRoute(
+    stubBot(),
+    'can you build a small house for me here and name it Issue 104 Crystal Beacon, save it to memory',
+    'Adalynn',
+  );
+  assert.equal(r.matched, true, `expected named schematic route: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
+  assert.equal(r.action, 'build_schematic');
+  assert.equal(r.body.name, 'small_house');
+  assert.equal(r.body.kid_name, 'Issue 104 Crystal Beacon');
+});
+
+test('NLP tower routes preserve kid-facing build names for durable memory', async () => {
+  const r = await tryRoute(
+    stubBot(),
+    'can you build a small tower right here and name it Issue 104 Crystal Beacon, save it to memory',
+    'Adalynn',
+  );
+  assert.equal(r.matched, true, `expected named tower route: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
+  assert.equal(r.action, 'build_tower');
+  assert.equal(r.body.kid_name, 'Issue 104 Crystal Beacon');
+});
+
 test('hotel prompts route to advanced build schematic action', async () => {
   const r = await tryRoute(stubBot(), 'build me a huge fancy hotel right here', 'Adalynn');
   assert.equal(r.matched, true, `expected hotel route: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
@@ -338,6 +361,40 @@ test('gallery prompts route to advanced build schematic action', async () => {
     assert.equal(r.action, 'build_schematic_advanced');
     assert.equal(r.body.name, expected);
   }
+});
+
+test('gallery prompts can pin explicit base Y for visual acceptance runs', async () => {
+  const r = await tryRoute(stubBot(), 'build a market square at base y 65', 'Adalynn');
+  assert.equal(r.matched, true, `expected gallery route: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
+  assert.equal(r.action, 'build_schematic_advanced');
+  assert.equal(r.body.name, 'market_square');
+  assert.equal(r.body.y, 65);
+
+  const bridge = await tryRoute(stubBot(), 'build a raised sky bridge at base y 69', 'Adalynn');
+  assert.equal(bridge.matched, true, `expected sky bridge route: zone=${bridge.nlp_zone} intent=${bridge.nlp_intent}`);
+  assert.equal(bridge.action, 'build_schematic_advanced');
+  assert.equal(bridge.body.name, 'sky_bridge');
+  assert.equal(bridge.body.y, 69);
+});
+
+test('NLP base-Y sanitizer removes only explicit coordinate clauses', () => {
+  assert.equal(
+    stripExplicitBaseYForNlp('build a market square at base y 65 please'),
+    'build a market square please',
+  );
+  assert.equal(
+    stripExplicitBaseYForNlp('build a raised sky bridge base y=69'),
+    'build a raised sky bridge',
+  );
+  assert.equal(
+    stripExplicitBaseYForNlp('build a base with yellow glass'),
+    'build a base with yellow glass',
+  );
+});
+
+test('non-gallery base wording does not get misrouted by the base-Y sanitizer', async () => {
+  const r = await tryRoute(stubBot(), 'build a base with yellow glass', 'Adalynn');
+  assert.notEqual(r.action, 'build_shelter_for_night');
 });
 
 
@@ -435,9 +492,49 @@ test('market alias does not hijack house builds near a market', () => {
   assert.equal(resolveSchematicName('make market news'), null);
 });
 
-test('list schematic prompts bypass speculative recall guard', () => {
-  assert.equal(resolveSchematicName('show me your schematics we talked about'), 'list');
+test('recall-flavored schematic list prompts are blocked before catalog listing', async () => {
+  const bot = stubBot('Adalynn', { bot: 'RecallListGuardBot' });
+  resetContextBuffer(bot);
+  assert.equal(resolveSchematicName('show me your schematics we talked about'), null);
   assert.equal(isSpeculativeBuildDiscussion('show me your schematics we talked about'), true);
+  const route = await tryRoute(bot, 'show me your schematics we talked about', 'Adalynn');
+  assert.equal(route.matched, false, `recall-flavored list prompt routed to ${route.action || route.nlp_intent}`);
+});
+
+test('gallery recall list wording does not trigger schematic catalog', async () => {
+  const bot = stubBot('Adalynn', { bot: 'RecallListBot' });
+  resetContextBuffer(bot);
+  const remember = 'please remember this gallery plaza list for later chat: observatory, wizard tower, sky bridge, market, and beacon plaza.';
+  assert.notEqual(resolveSchematicName(remember), 'list');
+  assert.equal(isSpeculativeBuildDiscussion(remember), true);
+
+  const first = await tryRoute(bot, remember, 'Adalynn');
+  assert.equal(first.matched, false, `memory prompt routed to ${first.action || first.nlp_intent}`);
+
+  const list = await tryRoute(bot, 'show me your schematics', 'Adalynn');
+  assert.equal(list.action, 'list_schematics');
+  assert.equal(list.skill_id, null);
+
+  const recall = await tryRoute(bot, 'answer in chat only: what are the five gallery landmarks from today?', 'Adalynn');
+  assert.equal(recall.matched, false, `recall question replayed ${recall.action || recall.nlp_intent}`);
+  assert.equal(recall.nlp_zone, 'repeat_guard');
+});
+
+test('memory phrasing with another does not replay the last build', async () => {
+  const bot = stubBot('Adalynn', { bot: 'RepeatMemoryBot' });
+  resetContextBuffer(bot);
+
+  const build = await tryRoute(bot, 'build a treehouse', 'Adalynn');
+  assert.equal(build.action, 'build_schematic');
+
+  for (const prompt of [
+    'another memory about the gallery please',
+    'answer in chat only: tell me another one from memory',
+  ]) {
+    const route = await tryRoute(bot, prompt, 'Adalynn');
+    assert.equal(route.matched, false, `${prompt} replayed ${route.action || route.nlp_intent}`);
+    assert.equal(route.nlp_zone, 'repeat_guard');
+  }
 });
 
 test('where-is recall for legacy schematics is speculative', () => {

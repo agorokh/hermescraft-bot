@@ -13,6 +13,7 @@ import {
 test('known names include current cast and nearby names', () => {
   const known = buildKnownNames('HermesBot', ['Alex', 'Elena']);
   assert.ok(known.includes('elena'));
+  assert.ok(known.includes('rosie'));
   assert.ok(known.includes('marcus'));
   assert.ok(known.includes('alex'));
   assert.ok(known.includes('hermesbot'));
@@ -51,6 +52,10 @@ test('parseMessageRouting falls back to public when prefix is not a valid name',
 test('mention parsing strips prefix cleanly', () => {
   assert.equal(broadcastMentionsMe('Hermes, build a house', 'HermesBot'), 'hermes');
   assert.equal(stripMentionPrefix('Hermes, build a house', 'hermes'), 'build a house');
+  assert.equal(broadcastMentionsMe("Rosie's right: market square and wizard tower", 'Rosie'), null);
+  assert.equal(broadcastMentionsMe('Rosie build a wizard tower', 'Rosie'), 'rosie');
+  assert.equal(broadcastMentionsMe('Rosie? can you build a market square', 'Rosie'), 'rosie');
+  assert.equal(stripMentionPrefix('Rosie? can you build a market square', 'rosie'), 'can you build a market square');
 });
 
 test('isMessageForMe respects direct targets and bot aliases', () => {

@@ -58,7 +58,7 @@ import {
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
-import { actionOutcomeFailed, isSurvivalBlock } from './lib/action_outcome.js';
+import { actionOutcomeFailed, isSurvivalBlock, publicActionResult } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
 // NLP.js router (council-led migration, 3 rounds of Gemini+Mistral review).
@@ -144,6 +144,14 @@ function actionBodyForRoute(route) {
   return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true };
 }
 
+function cleanKidBuildName(value) {
+  const clean = String(value || '')
+    .replace(/[`"'<>/\\{}[\]|$;]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.length > 80 ? clean.slice(0, 80).trim() : clean;
+}
+
 async function shadowRoute(bot, body, sender, primaryResult) {
   if (!SHADOW_NLP) return;
   try {
@@ -169,7 +177,7 @@ async function shadowRoute(bot, body, sender, primaryResult) {
     log(`[NLPshadow] error: ${e.message}`);
   }
 }
-import { installQuestEngine } from './lib/quests.js';
+import { installQuestEngine, isCompanionSpeaker } from './lib/quests.js';
 import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
@@ -308,7 +316,35 @@ function _companionMemoryFile() {
 //
 // Defensive: caps at LIMIT entries, ignores malformed lines, fail-silent.
 const MEMORY_ANCHOR_LINE_LIMIT = 500; // scan at most N lines for cost control
-function readMemoryAnchorsNear(pos, radius = 200, limit = 6) {
+const GENERIC_MEMORY_ANCHOR_LABELS = new Set([
+  'small_tower', 'small tower', 'small_house', 'small house', 'well',
+  'treehouse', 'flower_garden', 'flower garden', 'dirt_shelter', 'dirt shelter',
+]);
+
+function isGenericMemoryAnchorLabel(label) {
+  const normalized = String(label || '')
+    .toLowerCase()
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return GENERIC_MEMORY_ANCHOR_LABELS.has(normalized)
+    || GENERIC_MEMORY_ANCHOR_LABELS.has(normalized.replace(/\s+/g, '_'));
+}
+
+function preferKidNamedMemoryAnchors(anchors) {
+  const named = anchors.filter((a) => !isGenericMemoryAnchorLabel(a.label));
+  if (named.length === 0) return anchors;
+  return anchors.filter((anchor) => {
+    if (!isGenericMemoryAnchorLabel(anchor.label)) return true;
+    return !named.some((candidate) => (
+      Math.abs(candidate.x - anchor.x) <= 3
+      && Math.abs(candidate.y - anchor.y) <= 3
+      && Math.abs(candidate.z - anchor.z) <= 3
+    ));
+  });
+}
+
+function readMemoryAnchorsNear(pos, radius = 200, limit = 6, options = {}) {
   const memFile = _companionMemoryFile();
   if (!memFile) return [];
   let raw;
@@ -323,7 +359,8 @@ function readMemoryAnchorsNear(pos, radius = 200, limit = 6) {
   // name; fallback to "<name>: X,Y,Z".
   const verbRe = /\b(?:Built|Placed|Found|Mined|Lit|Gave)\s+(.+?)\s+(?:at|near|around)\s+(-?\d{1,5})\s*,\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})/i;
   const colonRe = /^([A-Za-z][^:\n]{2,60}):\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})\s*,\s*(-?\d{1,5})/;
-  for (const line of lines) {
+  for (let seq = 0; seq < lines.length; seq++) {
+    const line = lines[seq];
     if (!line || line.trim().length === 0) continue;
     let m = line.match(verbRe);
     let label, x, y, z;
@@ -343,7 +380,7 @@ function readMemoryAnchorsNear(pos, radius = 200, limit = 6) {
     const distance = Math.round(Math.sqrt(dx * dx + dz * dz));
     if (distance > radius) continue;
     // Cap label length for prompt budget
-    out.push({ label: label.slice(0, 60), x, y, z, distance });
+    out.push({ label: label.slice(0, 60), x, y, z, distance, seq });
   }
   // Sort nearest first; dedup by label+coords (latest entry wins so the most
   // recent fact about a named place is shown, not the earliest)
@@ -352,7 +389,14 @@ function readMemoryAnchorsNear(pos, radius = 200, limit = 6) {
     const key = `${a.label.toLowerCase()}|${a.x},${a.y},${a.z}`;
     seen.set(key, a);
   }
-  return Array.from(seen.values()).sort((a, b) => a.distance - b.distance).slice(0, limit);
+  const sortMode = options.sort || 'nearest';
+  return preferKidNamedMemoryAnchors(Array.from(seen.values()))
+    .sort((a, b) => (
+      sortMode === 'recent'
+        ? (b.seq - a.seq) || (a.distance - b.distance)
+        : (a.distance - b.distance) || (b.seq - a.seq)
+    ))
+    .slice(0, limit);
 }
 
 function autoRememberFact(line) {
@@ -573,10 +617,52 @@ function isActionEpochCurrent(epoch) {
   return !bot?.interrupt_code && bot._actionEpoch === epoch;
 }
 
+const TASK_VISIBLE_INTENT_ACTIONS = new Set(['build_schematic_advanced']);
+
+function runTaskVisibleIntentAction(actionName, actionBody) {
+  if (currentTask && currentTask.status === 'running') {
+    return Promise.resolve({
+      error: `Task "${currentTask.action}" is already running. Ask me to stop first.`,
+    });
+  }
+  const actionFn = ACTIONS[actionName];
+  const taskId = `${actionName}_${Date.now()}`;
+  currentTask = {
+    id: taskId,
+    action: actionName,
+    status: 'running',
+    started: Date.now(),
+    result: null,
+    error: null,
+    params: actionBody,
+    source: 'intent_router',
+  };
+  return actionFn(actionBody).then((result) => {
+    if (currentTask && currentTask.id === taskId && currentTask.status === 'running') {
+      currentTask.status = 'done';
+      currentTask.result = result;
+    }
+    actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
+    if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();
+    return result;
+  }).catch((err) => {
+    if (currentTask && currentTask.id === taskId && currentTask.status === 'running') {
+      currentTask.status = 'error';
+      currentTask.error = err.message;
+    }
+    actionHistory.push({ action: actionName, status: 'error', time: Date.now() });
+    if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();
+    return { error: err.message };
+  });
+}
+
 function runIntentRoutedAction(actionName, actionBody) {
   armIntentRoutedAction(actionName);
   bot._hc_intent_action_depth = (bot._hc_intent_action_depth || 0) + 1;
-  return ACTIONS[actionName](actionBody).finally(() => {
+  const runner = TASK_VISIBLE_INTENT_ACTIONS.has(actionName)
+    ? runTaskVisibleIntentAction(actionName, actionBody)
+    : ACTIONS[actionName](actionBody);
+  return runner.finally(() => {
     bot._hc_intent_action_depth = Math.max(0, (bot._hc_intent_action_depth || 1) - 1);
   });
 }
@@ -608,11 +694,6 @@ function queueSurvivalEscalation({ username, route, outcomeText, channel, viaMen
   trimCommandQueue();
 }
 
-
-function routedActionSucceeded(route, result) {
-  return !intentRouterOutcomeFailed(route.action, result) && !isSurvivalBlock(route.action, result);
-}
-
 function markChatEntryHandledByRouter(chatEntry, route) {
   chatEntry.handledByRouter = true;
   chatEntry.routerIntent = route.intent_name;
@@ -625,7 +706,56 @@ function clearChatEntryRouterMark(chatEntry) {
   delete chatEntry.routerAction;
 }
 
-function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
+function isBrainVisibleChatMessage(entry) {
+  return !entry.handledByRouter && !entry.companion_peer;
+}
+
+function publicRouterResult(route, result) {
+  if (route.action === 'build_tower' && route.body?.kid_name) {
+    const named = publicNamedBuildResult(route.body.kid_name, result);
+    if (named) return named;
+  }
+  return publicActionResult(route.action, result);
+}
+
+function publicRouterFailure(route, result) {
+  return publicActionResult(route.action, result, { failed: true });
+}
+
+function publicNamedBuildResult(kidName, result) {
+  const name = cleanKidBuildName(kidName);
+  if (!name) return null;
+  const text = String(result?.result || '');
+  const coords = text.match(/\bat\s+(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)/i);
+  if (coords) return `${name} is up at ${coords[1]} ${coords[2]} ${coords[3]}.`;
+  return `${name} is up.`;
+}
+
+async function tryNamedTowerFallback(route) {
+  if (route.action !== 'build_tower' || !ACTIONS.build_schematic) return null;
+  const body = route.body || {};
+  const kidName = cleanKidBuildName(body.kid_name);
+  if (!kidName) return null;
+  if (body.x == null || body.y == null || body.z == null) return null;
+  const fallbackBody = {
+    name: 'small_tower',
+    x: body.x,
+    y: body.y,
+    z: body.z,
+    kid_name: kidName,
+  };
+  log(`[IntentRouter fallback] build_tower -> build_schematic small_tower preserving kid_name="${kidName}"`);
+  const fallbackResult = await runIntentRoutedAction('build_schematic', fallbackBody);
+  const failed = intentRouterOutcomeFailed('build_schematic', fallbackResult);
+  if (failed) {
+    log(`[IntentRouter fallback failure] build_schematic small_tower: ${String(fallbackResult?.result || fallbackResult?.error || 'failed').slice(0, 160)}`);
+    return { ok: false, result: fallbackResult };
+  }
+  log(`[IntentRouter fallback result] build_schematic small_tower: ${String(fallbackResult?.result || '').slice(0, 120)}`);
+  return { ok: true, result: fallbackResult, publicText: publicNamedBuildResult(kidName, fallbackResult) };
+}
+
+async function handleIntentRouterActionResult({ username, route, result, channel, viaMention = false }) {
   const survivalBlock = isSurvivalBlock(route.action, result);
   if (intentRouterOutcomeFailed(route.action, result) || survivalBlock) {
     if (route.skill_id != null) {
@@ -635,26 +765,41 @@ function handleIntentRouterActionResult({ username, route, result, channel, viaM
     if (survivalBlock) {
       queueSurvivalEscalation({ username, route, outcomeText: failureText, channel, viaMention });
     } else {
-      try { bot.chat(`hm, couldn't pull that off — ${String(failureText).slice(0, 50)}`); } catch {}
+      log(`[IntentRouter failure] ${route.intent_name}: ${String(failureText).slice(0, 160)}`);
+      const fallback = await tryNamedTowerFallback(route);
+      if (fallback?.ok) {
+        const publicFallback = fallback.publicText || publicActionResult('build_schematic', fallback.result);
+        if (publicFallback) {
+          try { bot.chat(publicFallback); } catch {}
+        }
+        return true;
+      }
+      const publicFailure = publicRouterFailure(route, result);
+      try { bot.chat(publicFailure || "hm, couldn't pull that off yet."); } catch {}
     }
-    return;
+    return false;
   }
   if (result && result.result && route.action !== 'chat') {
     log(`[IntentRouter result] ${route.intent_name}: ${String(result.result).slice(0, 120)}`);
-    try { bot.chat(String(result.result).slice(0, 80)); } catch {}
+    const publicResult = publicRouterResult(route, result);
+    if (publicResult) {
+      try { bot.chat(publicResult); } catch {}
+    }
   }
+  return true;
 }
 
 async function handleChat(username, message) {
   const knownNames = buildKnownNames(getMyName(), getNearbyPlayerNames());
   const routing = parseMessageRouting(message, { knownNames });
   let forMe = isMessageForMe(routing, getMyName());
+  const senderIsCompanion = isCompanionSpeaker(username, getMyName());
 
   // Proximity filter: broadcasts from other known agents only heard when nearby.
   // Human players are not in CURRENT_CAST so they always pass through.
   if (forMe && routing.isBroadcast && bot && botReady) {
     const senderLower = username.toLowerCase();
-    const isOtherAgent = CURRENT_CAST.includes(senderLower) && senderLower !== getMyName().toLowerCase();
+    const isOtherAgent = senderIsCompanion && senderLower !== getMyName().toLowerCase();
     if (isOtherAgent) {
       const senderEntity = Object.values(bot.entities || {}).find(
         e => e.username && e.username.toLowerCase() === senderLower
@@ -667,6 +812,24 @@ async function handleChat(username, message) {
         return;
       }
     }
+  }
+
+  if (forMe && senderIsCompanion) {
+    const chatEntry = {
+      time: Date.now(),
+      from: username,
+      message: routing.body,
+      private: !routing.isBroadcast,
+      channel: routing.channel,
+      companion_peer: true,
+      handledByRouter: true,
+      targets: routing.targets.length > 0 ? routing.targets : undefined,
+    };
+    chatLog.push(chatEntry);
+    if (chatLog.length > MAX_LOG) chatLog.shift();
+    rememberSocialEvent({ actor: username, kind: 'heard', channel: `companion_${routing.channel}`, message: routing.body });
+    log(`[CompanionChat] <${username}> ${routing.body}`);
+    return;
   }
 
   if (forMe) {
@@ -704,11 +867,11 @@ async function handleChat(username, message) {
             const actionBody = actionBodyForRoute(route);
             markChatEntryHandledByRouter(chatEntry, route);
             // Fire-and-forget — long-running actions don't block chat thread.
-            runIntentRoutedAction(route.action, actionBody).then((result) => {
-              handleIntentRouterActionResult({
+            runIntentRoutedAction(route.action, actionBody).then(async (result) => {
+              const handledSuccessfully = await handleIntentRouterActionResult({
                 username, route, result, channel: routing.channel,
               });
-              if (!routedActionSucceeded(route, result)) {
+              if (!handledSuccessfully) {
                 clearChatEntryRouterMark(chatEntry);
               }
             }).catch((e) => {
@@ -717,7 +880,7 @@ async function handleChat(username, message) {
               if (route.skill_id != null) {
                 try { markLastSkillFailed(bot, route.skill_id); } catch {}
               }
-              try { bot.chat(`hm, couldn't pull that off — ${e.message.slice(0, 50)}`); } catch {}
+              try { bot.chat("hm, couldn't pull that off yet."); } catch {}
             });
             // Skip the queue for the initial directive: the ACK + ACTION
             // already took care of it. Survival blocks escalate separately above.
@@ -771,11 +934,11 @@ async function handleChat(username, message) {
               const actionBody = actionBodyForRoute(route);
               log(`[IntentRouter via mention] ${username} → ${route.intent_name} → mc ${route.action} ${JSON.stringify(actionBody)}`);
               markChatEntryHandledByRouter(chatEntry, route);
-              runIntentRoutedAction(route.action, actionBody).then((result) => {
-                handleIntentRouterActionResult({
+              runIntentRoutedAction(route.action, actionBody).then(async (result) => {
+                const handledSuccessfully = await handleIntentRouterActionResult({
                   username, route, result, channel: 'public_mention', viaMention: true,
                 });
-                if (!routedActionSucceeded(route, result)) {
+                if (!handledSuccessfully) {
                   clearChatEntryRouterMark(chatEntry);
                 }
               }).catch((e) => {
@@ -909,13 +1072,13 @@ async function createBot() {
               const m = r.match(/Built (?:schematic )?"?([\w_-]+)"? at ([-\d]+),([-\d]+),([-\d]+) — (\d+)\/(\d+)/);
               if (m) {
                 const [, schemName, x, y, z, placed, total] = m;
-                if (Number(placed) > 0) {
+                if (Number(placed) === Number(total)) {
                   // If body carries `kid_name` (kid said "name it X"), record
                   // it FIRST so the object-permanence gate (issue #68) can
                   // recover the kid-facing name next session. body.name is the
                   // schematic id; not the kid's name.
                   const kidName = body && typeof body.kid_name === 'string' && body.kid_name.trim()
-                    ? body.kid_name.trim()
+                    ? cleanKidBuildName(body.kid_name)
                     : null;
                   const label = kidName ? `${kidName} (${schemName})` : schemName;
                   autoRememberFact(`Built ${label} for kid at ${x},${y},${z} (${placed}/${total} blocks). Schematic build.`);
@@ -941,9 +1104,9 @@ async function createBot() {
                 m = r.match(/Built (\d+)\/(\d+) of "([\w_-]+)" at ([-\d]+),([-\d]+),([-\d]+)/);
                 if (m) [, placed, total, schemName, x, y, z] = m;
               }
-              if (m && Number(placed) > 0) {
+              if (m && Number(placed) === Number(total)) {
                 const kidName = body && typeof body.kid_name === 'string' && body.kid_name.trim()
-                  ? body.kid_name.trim()
+                  ? cleanKidBuildName(body.kid_name)
                   : null;
                 const label = kidName ? `${kidName} (${schemName})` : schemName;
                 autoRememberFact(`Built ${label} for kid at ${x},${y},${z} (${placed}/${total} blocks). Schematic build.`);
@@ -959,15 +1122,21 @@ async function createBot() {
           const _wrapBuildTower = async (body) => {
             const result = await _origBuildTower(body);
             try {
-              const x = body.x, y = body.y, z = body.z, mat = body.material;
               const r = result?.result || '';
-              const m = r.match(/(\d+)\/(\d+)/);
-              if (m && Number(m[1]) > 0) {
+              const full = r.match(/\bBuilt\s+(\d+)-tall\s+([\w:-]+)\s+tower\s+at\s+(-?\d+),\s*(-?\d+),\s*(-?\d+)/i);
+              const ratio = r.match(/\b(\d+)\s*\/\s*(\d+)\b/);
+              if (full || (ratio && Number(ratio[1]) === Number(ratio[2]))) {
+                const x = full ? full[3] : body.x;
+                const y = full ? full[4] : body.y;
+                const z = full ? full[5] : body.z;
+                const mat = full ? full[2] : body.material;
+                const placed = full ? full[1] : ratio[1];
+                const total = full ? full[1] : ratio[2];
                 const kidName = body && typeof body.kid_name === 'string' && body.kid_name.trim()
-                  ? body.kid_name.trim()
+                  ? cleanKidBuildName(body.kid_name)
                   : null;
                 const label = kidName ? `${kidName} (${mat || 'block'} tower)` : `${mat || 'block'} tower`;
-                autoRememberFact(`Built ${label} at ${x},${y},${z} (${m[1]}/${m[2]} blocks). Kid build.`);
+                autoRememberFact(`Built ${label} at ${x},${y},${z} (${placed}/${total} blocks). Kid build.`);
               }
             } catch { /* swallow */ }
             return result;
@@ -1124,6 +1293,23 @@ async function createBot() {
 
       bot.on('whisper', (username, message) => {
         if (username === bot.username) return;
+        if (isCompanionSpeaker(username, getMyName())) {
+          const chatEntry = {
+            time: Date.now(),
+            from: username,
+            message,
+            whisper: true,
+            private: true,
+            channel: 'whisper',
+            companion_peer: true,
+            handledByRouter: true,
+          };
+          chatLog.push(chatEntry);
+          if (chatLog.length > MAX_LOG) chatLog.shift();
+          rememberSocialEvent({ actor: username, kind: 'heard', channel: 'companion_whisper', message });
+          log(`[CompanionWhisper] <${username}> ${message}`);
+          return;
+        }
         // Whispers are always for us — add directly to chatLog + commandQueue
         chatLog.push({ time: Date.now(), from: username, message, whisper: true });
         if (chatLog.length > MAX_LOG) chatLog.shift();
@@ -1494,7 +1680,7 @@ function briefState() {
   // Nearby broadcasts are capped at 2 most recent to reduce cascade noise.
   const now = Date.now();
   const recentAll = chatLog
-    .filter(m => now - m.time < 30000 && m.from !== bot.username && !m.handledByRouter);
+    .filter(m => now - m.time < 30000 && m.from !== bot.username && isBrainVisibleChatMessage(m));
   const directMsgs = recentAll.filter(m => m.private || m.whisper);
   const broadcastMsgs = recentAll.filter(m => !m.private && !m.whisper).slice(-2);
   const recentChat = [...directMsgs, ...broadcastMsgs]
@@ -1616,7 +1802,7 @@ function getFullState() {
   const biome = b.blockAt(pos)?.biome?.name || 'unknown';
 
   // Unread chat
-  const unreadChatSource = chatLog.filter(m => !m.handledByRouter).slice(-5);
+  const unreadChatSource = chatLog.filter(isBrainVisibleChatMessage).slice(-5);
   const unreadChat = unreadChatSource.length > 0 ? unreadChatSource.map(m => ({
     from: m.from, message: m.message,
     ago: Math.round((Date.now() - m.time) / 1000) + 's',
@@ -3928,10 +4114,13 @@ const httpServer = http.createServer(async (req, res) => {
             const body = entry.command || entry.originalMessage || '';
             if (!recallRe.test(body)) continue;
             const pos = bot && bot.entity ? bot.entity.position : { x: 0, y: 64, z: 0 };
-            const anchors = readMemoryAnchorsNear(pos, 300, 6);
+            const wantsLatest = /\b(?:last|latest|recent|newest|just built|built together last|last build)\b/i.test(body);
+            const anchors = readMemoryAnchorsNear(pos, 300, 6, { sort: wantsLatest ? 'recent' : 'nearest' });
             if (anchors.length > 0) {
               entry.memory_context = {
-                hint: "the kid asked something recall-shaped; here's what's near you from your MEMORY.md — reply with the name + coords + a personal aside in YOUR voice. This IS the world-change.",
+                hint: wantsLatest
+                  ? "the kid asked what was last/latest; nearby_remembered_builds is newest-first. Reply with the first name + coords + a personal aside in YOUR voice. This IS the world-change."
+                  : "the kid asked something recall-shaped; here's what's near you from your MEMORY.md — reply with the name + coords + a personal aside in YOUR voice. This IS the world-change.",
                 nearby_remembered_builds: anchors,
               };
             }

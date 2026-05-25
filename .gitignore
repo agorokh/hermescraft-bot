@@ -38,6 +38,9 @@ data/locations-*.json
 # NLP.js trained model (generated locally by bot)
 bot/model.nlp
 
+# Schematic build progress checkpoints (generated locally by bot)
+bot/build_states/
+
 # Cursor / editor local state
 .cursor/
 

@@ -28,7 +28,7 @@
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { extractGatherBlockFromBody, extractOreFromBody } from './intent_slot_extract.js';
+import { extractGatherBlockFromBody, extractKidName, extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
@@ -63,6 +63,20 @@ const CLARIFY_THRESHOLD = parseFloat(process.env.HERMES_NLP_CLARIFY_THRESHOLD ||
 // Back-compat alias for existing tests that imported MATCH_THRESHOLD.
 const MATCH_THRESHOLD = ACT_THRESHOLD;
 
+export function stripExplicitBaseYForNlp(body) {
+  return String(body || '')
+    .replace(/\s+\bat\s+base\s*y\s*[:=]?\s*-?\d{1,3}\b/ig, '')
+    .replace(/\s+\bbase\s*y\s*[:=]?\s*-?\d{1,3}\b/ig, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function isCreativeBaseBuildRequest(body) {
+  const text = String(body || '').toLowerCase();
+  return /\b(build|make|create|design|set up)\b.*\bbase\b/.test(text)
+    && !/\b(night|dark|mobs?|monster|scared|shelter|safe|emergency|quick|rn|right now|survive|protect)\b/.test(text);
+}
+
 // CONTEXT BUFFER (council round 2 unanimous #1 next ask: Gemini's
 // "anaphora resolution" + Mistral's "action FIFO"). Per-bot rolling FIFO
 // of the last N fired skills + a 5-min expiry. Two consumers:
@@ -91,9 +105,19 @@ const CHAT_BUFFER_INTENTS = new Set([
   'emote_wave', 'emote_jump', 'emote_dance', 'emote_sit',
 ]);
 
+function isRepeatLastActionRequest(body) {
+  const text = String(body || '').toLowerCase().trim();
+  if (!text) return false;
+  if (/^(?:[\w']+\s+){0,4}(?:what|where|when|who|why|how)\b/.test(text)) return false;
+  if (/^(?:answer|tell|name|list|remember|recall)\b/.test(text)) return false;
+  if (/\b(?:memory|remember|recall|landmarks?|from today|chat only|answer in chat|story)\b/.test(text)) return false;
+  return /\b(?:again|another(?: one)?|one more|same thing|same as before|like before|like the last one|repeat that|keep going|do what you just did|do that one more time|more pls|more more)\b/.test(text);
+}
+
 export function recordLastSkill(bot, intent_name, action, body, message) {
   // Stop is a safety primitive — never pollute the repeat/anaphora buffer.
   if (!bot || !bot.username || !intent_name || intent_name === 'repeat_last_action' || intent_name === 'stop' || action === 'stop') return null;
+  if (action === 'list_schematics') return null;
   if (action === 'chat' && !CHAT_BUFFER_INTENTS.has(intent_name)) return null;
   const entry = {
     id: ++_skillSeq,
@@ -375,24 +399,24 @@ const DISPATCHERS = {
 
   build_schematic: (bot, ctx) => {
     const resolvedName = resolveSchematicName(ctx.body);
-    if (resolvedName !== 'list' && isSpeculativeBuildDiscussion(ctx.body)) return null;
+    if (isSpeculativeBuildDiscussion(ctx.body)) return null;
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
     const name = resolvedName;
     if (name === 'list') return { action: 'list_schematics', body: {} };
     if (!name) return null;
+    const kidName = extractKidName(ctx.body);
     const buildX = Math.floor(p.x) + 2;
     const buildZ = Math.floor(p.z);
     const action = isAdvancedSchematicName(name) ? 'build_schematic_advanced' : 'build_schematic';
-    return {
-      action,
-      body: {
-        name,
-        x: buildX,
-        y: schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y),
-        z: buildZ,
-      },
+    const body = {
+      name,
+      x: buildX,
+      y: schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y),
+      z: buildZ,
     };
+    if (kidName) body.kid_name = kidName;
+    return { action, body };
   },
 
   build_tower: (bot, ctx) => {
@@ -407,9 +431,12 @@ const DISPATCHERS = {
     const footX = Math.floor(p.x) + dx;
     const footZ = Math.floor(p.z) + dz;
     const baseY = normalizeBuildBaseY(bot, footX, footZ, p.y);
+    const kidName = extractKidName(ctx.body);
+    const body = { x: footX, y: baseY, z: footZ, height, material };
+    if (kidName) body.kid_name = kidName;
     return {
       action: 'build_tower',
-      body: { x: footX, y: baseY, z: footZ, height, material },
+      body,
     };
   },
 
@@ -653,7 +680,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   }
   let result;
   try {
-    result = await nlp.process('en', body);
+    result = await nlp.process('en', stripExplicitBaseYForNlp(body) || body);
   } catch (e) {
     return { matched: false, error: e.message, nlp_zone: 'process_error' };
   }
@@ -670,6 +697,12 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   }
   if (score < ACT_THRESHOLD) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'clarify' };
+  }
+  if (intent === 'build_shelter_for_night' && isCreativeBaseBuildRequest(body)) {
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'ambiguous_base_build' };
+  }
+  if (intent === 'repeat_last_action' && !isRepeatLastActionRequest(body)) {
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'repeat_guard' };
   }
   const dispatch = DISPATCHERS[intent];
   if (!dispatch) {

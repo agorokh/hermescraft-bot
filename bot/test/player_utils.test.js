@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeBuildBaseY, schematicBuildBaseY } from '../lib/player_utils.js';
+import { explicitSchematicBaseY, normalizeBuildBaseY, schematicBuildBaseY } from '../lib/player_utils.js';
 
 function mockBot(blockAtFn) {
   return { blockAt: blockAtFn };
@@ -41,4 +41,37 @@ test('raised sky bridge base Y is clamped to world ceiling', () => {
     return { name: 'air' };
   });
   assert.equal(schematicBuildBaseY(bot, 'sky_bridge', 'raised sky bridge', 10, 10, 319), 319);
+});
+
+test('schematicBuildBaseY honors clear requested gallery floor below stale elevated blocks', () => {
+  const bot = mockBot((pos) => {
+    if (pos.y === 69) return { name: 'oak_planks', boundingBox: 'block' };
+    if (pos.y === 64) return { name: 'grass_block', boundingBox: 'block' };
+    return { name: 'air' };
+  });
+  assert.equal(schematicBuildBaseY(bot, 'market_square', 'set up a market square here', 290, 288, 65), 65);
+});
+
+test('explicit schematic base Y overrides terrain normalization for prepared gallery prompts', () => {
+  const bot = mockBot((pos) => {
+    if (pos.y === 70) return { name: 'oak_planks', boundingBox: 'block' };
+    if (pos.y === 64) return { name: 'grass_block', boundingBox: 'block' };
+    return { name: 'air' };
+  });
+  assert.equal(explicitSchematicBaseY('set up a market square at base y 65'), 65);
+  assert.equal(schematicBuildBaseY(bot, 'market_square', 'set up a market square at base y 65', 290, 288, 65), 65);
+  assert.equal(schematicBuildBaseY(bot, 'sky_bridge', 'build a raised sky bridge at base y 69', 262, 286, 65), 69);
+});
+
+test('explicit schematic base Y rejects out-of-world values instead of clamping', () => {
+  assert.equal(explicitSchematicBaseY('build a market square at base y 999'), null);
+  assert.equal(explicitSchematicBaseY('build a market square at base y -99'), null);
+});
+
+test('explicit schematic base Y is ignored for non-gallery schematics', () => {
+  const bot = mockBot((pos) => {
+    if (pos.y === 64) return { name: 'grass_block', boundingBox: 'block' };
+    return { name: 'air' };
+  });
+  assert.equal(schematicBuildBaseY(bot, 'small_house', 'build a small house at base y 70', 10, 10, 65), 65);
 });

@@ -75,3 +75,12 @@ export function extractGatherBlockFromBody(body) {
   }
   return null;
 }
+
+export function extractKidName(body) {
+  const kidNameMatch = String(body).match(
+    /\b(?:name(?:d)?\s+it|call(?:ed)?\s+it|called|named)\s+([A-Za-z][\w '-]{0,40}?)(?:\s*[,.!?;:]|\s+(?:and|save|please|then|so|with|to)\b|$)/i,
+  );
+  return kidNameMatch
+    ? kidNameMatch[1].trim().replace(/\s+/g, ' ').slice(0, 60)
+    : null;
+}

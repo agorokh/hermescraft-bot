@@ -27,6 +27,7 @@ const { goals } = pathfinderPkg;
 import schematicPkg from 'prismarine-schematic';
 const { Schematic } = schematicPkg;
 import { Vec3 } from 'vec3';
+import fs from 'fs';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -75,6 +76,46 @@ function findInventoryItem(bot, itemName) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function paperConsoleFifo() {
+  const fifo = process.env.PAPER_CONSOLE_FIFO;
+  if (!fifo || process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH !== '1') return null;
+  try {
+    const st = fs.statSync(fifo);
+    return st.isFIFO() ? fifo : null;
+  } catch {
+    return null;
+  }
+}
+
+function sendServerCommand(command) {
+  const fifo = paperConsoleFifo();
+  if (!fifo) return null;
+  let fd = null;
+  try {
+    fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+    fs.writeSync(fd, `${command}\n`);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (fd != null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+function sendSetblockCommand(bot, x, y, z, block) {
+  const command = `setblock ${x} ${y} ${z} ${block}`;
+  const sent = sendServerCommand(command);
+  if (sent === true) return 'console_fifo';
+  if (process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1'
+    && process.env.HERMESCRAFT_ALLOW_SETBLOCK_CHAT_FALLBACK !== '1') {
+    throw new Error('Paper console FIFO unavailable for trusted setblock');
+  }
+  bot.chat(`/${command}`);
+  return 'bot_chat';
 }
 
 function bodyFlagEnabled(value, defaultEnabled = true) {
@@ -181,17 +222,19 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
       return { ok: true, reason: `already ${itemName} at ${tx},${ty},${tz}` };
     }
     try {
-      bot.chat(`/setblock ${tx} ${ty} ${tz} ${itemName}`);
+      const transport = sendSetblockCommand(bot, tx, ty, tz, itemName);
+      const outcome = await waitForSetblockOutcome(
+        bot,
+        { x: tx, y: ty, z: tz, block: itemName },
+        transport === 'console_fifo' ? 900 : SETBLOCK_CHAT_INTERVAL_MS + 150,
+      );
+      if (outcome.ok === true) {
+        return { ok: true };
+      }
     } catch (e) {
       // /setblock chat failed for an unexpected reason — fall through to
       // physical path. Cache flip not done here to avoid permanent
       // downgrade if it was transient.
-    }
-    // Give the chunk update a moment to round-trip; verify before claiming success.
-    await sleep(40);
-    const placed = bot.blockAt(new Vec3(tx, ty, tz));
-    if (placed && placed.name === itemName) {
-      return { ok: true };
     }
     // /setblock rejected or chunk not updated — fall through to physical place.
   }
@@ -661,7 +704,7 @@ async function detectSetblockAuth(bot) {
   try { bot.on?.('message', onProbeMessage); } catch {}
   let afterName = 'air';
   try {
-    try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} ${sentinel}`); } catch (e) {}
+    try { sendSetblockCommand(bot, probeX, py, probeZ, sentinel); } catch (e) {}
     const deadline = Date.now() + 2500;
     while (Date.now() < deadline) {
       const after = bot.blockAt(new Vec3(probeX, py, probeZ));
@@ -680,7 +723,7 @@ async function detectSetblockAuth(bot) {
   // while the bot's chunk cache still reads stale air immediately after a TP.
   // Accept feedback as a secondary proof of op auth; never accept timeout alone.
   if (ok) {
-    try { bot.chat(`/setblock ${probeX} ${py} ${probeZ} air`); } catch (e) {}
+    try { sendSetblockCommand(bot, probeX, py, probeZ, 'air'); } catch (e) {}
     _setblockAuthByBot.set(bot, true);
   }
   return ok;
@@ -863,9 +906,13 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       // we don't need to wait between them — but a small rate limit keeps
       // the chat queue from tripping Paper's flood-protection.
       try {
-        bot.chat(`/setblock ${tx} ${ty} ${tz} ${block}`);
+        const transport = sendSetblockCommand(bot, tx, ty, tz, block);
         // Wait for server + world sync, then verify before counting success.
-        const outcome = await waitForSetblockOutcome(bot, { x: tx, y: ty, z: tz, block });
+        const outcome = await waitForSetblockOutcome(
+          bot,
+          { x: tx, y: ty, z: tz, block },
+          transport === 'console_fifo' ? 900 : SETBLOCK_CHAT_INTERVAL_MS + 150,
+        );
         if (outcome.ok === true) {
           placed++;
           if (buildState) {

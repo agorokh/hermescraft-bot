@@ -1,4 +1,4 @@
-export const CURRENT_CAST = ['steve', 'reed', 'moss', 'flint', 'ember'];
+export const CURRENT_CAST = ['rosie', 'steve', 'reed', 'moss', 'flint', 'ember'];
 export const LEGACY_CAST = ['marcus', 'sarah', 'jin', 'dave', 'lisa', 'tommy', 'elena', 'mia', 'genghis', 'cleopatra', 'tesla', 'pirate', 'monk', 'goblin'];
 
 export function buildKnownNames(myName = '', nearbyNames = []) {
@@ -62,9 +62,14 @@ function stripLeadingAnnotation(lower) {
 export function broadcastMentionsMe(messageBody, myName) {
   const lower = stripLeadingAnnotation(String(messageBody || '').toLowerCase().trim());
   const self = String(myName || '').toLowerCase();
-  if (self && lower.startsWith(self)) return self;
-  if (lower.startsWith('hermes')) return 'hermes';
-  if (lower.startsWith('bot')) return 'bot';
+  const startsWithAddress = (name) => {
+    if (!name || !lower.startsWith(name)) return false;
+    const next = lower[name.length] || '';
+    return next === '' || /[\s,!.?:;]/.test(next);
+  };
+  if (startsWithAddress(self)) return self;
+  if (startsWithAddress('hermes')) return 'hermes';
+  if (startsWithAddress('bot')) return 'bot';
   return null;
 }
 
@@ -73,7 +78,7 @@ export function stripMentionPrefix(messageBody, matchedName) {
   // Strip the same leading annotation broadcastMentionsMe ignored, so
   // the downstream router sees just "can you build..." not "[as Adalynn] can you build...".
   const noAnno = trimmed.replace(/^\s*\[[^\]]{1,40}\]\s*/, '');
-  return noAnno.slice(String(matchedName || '').length).replace(/^[,!.:\s]+/, '').trim();
+  return noAnno.slice(String(matchedName || '').length).replace(/^[,!.?:;\s]+/, '').trim();
 }
 
 export function ensureSocialNode(graph, name) {

@@ -6,12 +6,16 @@ import {
   isCompanionSpeaker,
 } from '../lib/quests.js';
 
-test('quest trigger filter treats household companions as non-human speakers', () => {
+test('quest trigger filter does not treat cast names as companions by default', () => {
   const previous = process.env.HERMESCRAFT_COMPANION_NAMES;
   try {
     delete process.env.HERMESCRAFT_COMPANION_NAMES;
     assert.equal(isCompanionSpeaker('Rosie', 'Rosie'), true);
     assert.equal(isCompanionSpeaker('Steve', 'Rosie'), false);
+    assert.equal(isCompanionSpeaker('Reed', 'Rosie'), false);
+    assert.equal(isCompanionSpeaker('Moss', 'Rosie'), false);
+    assert.equal(isCompanionSpeaker('Flint', 'Rosie'), false);
+    assert.equal(isCompanionSpeaker('Ember', 'Rosie'), false);
     assert.equal(isCompanionSpeaker('GalleryKid', 'Rosie'), false);
     assert.equal(isCompanionSpeaker('.DanceO3677', 'Rosie'), false);
   } finally {

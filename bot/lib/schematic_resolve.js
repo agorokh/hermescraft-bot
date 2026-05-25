@@ -11,7 +11,13 @@ const ADVANCED_SCHEMATICS = new Set([
 
 function wantsSchematicList(body) {
   const b = String(body).toLowerCase();
-  return /\b(what can|what could|show me|list)\b/i.test(b)
+  if (/\b(?:talked about|remember|recall|from memory|from today|later chat|landmarks?)\b/i.test(b)) {
+    return false;
+  }
+  return /\bwhat\s+(?:can|could)\s+(?:u|you|we)\s+build\b/i.test(b)
+    || /\bshow me\b.*\b(builds?|schematics?|templates?)\b/i.test(b)
+    || /\blist\b.*\b(builds?|schematics?|templates?|build\s+options?)\b/i.test(b)
+    || /\b(builds?|schematics?|templates?)\b.*\blist\b/i.test(b)
     || /\bwhat\s+builds?\b/i.test(b)
     || /\bbuilds?\s+(u|you)\s+got\b/i.test(b)
     || /\bwhat\s+r\s+ur\s+builds?\b/i.test(b);
@@ -63,7 +69,7 @@ function hasImperativeBuildCommand(text) {
 export function isSpeculativeBuildDiscussion(body) {
   const text = String(body || '').toLowerCase();
   const resolved = resolveSchematicName(text);
-  const mentionsBuildTopic = /\b(build|building|built|construct|design|schematic)\b/.test(text)
+  const mentionsBuildTopic = /\b(build|building|built|construct|design|schematics?)\b/.test(text)
     || resolved != null;
   if (!mentionsBuildTopic) return false;
   const whereRecall = /\bwhere (is|are)\b/.test(text)
@@ -76,4 +82,3 @@ export function isSpeculativeBuildDiscussion(body) {
   const imperativeBuild = hasImperativeBuildCommand(text);
   return hardRecall || (softRecall && !imperativeBuild) || whereRecall;
 }
-

@@ -29,7 +29,6 @@ import { itemNameFromCollectEntity } from './player_utils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const QUESTS_DIR = join(__dirname, '..', 'quests');
-const DEFAULT_COMPANION_NAMES = [];
 let _cachedCompanionNamesRaw = null;
 let _cachedCompanionNames = null;
 
@@ -71,7 +70,7 @@ function questItemNamesMatch(triggerItem, eventItem) {
 }
 
 export function configuredCompanionNames() {
-  const raw = process.env.HERMESCRAFT_COMPANION_NAMES || DEFAULT_COMPANION_NAMES.join(',');
+  const raw = process.env.HERMESCRAFT_COMPANION_NAMES || '';
   if (_cachedCompanionNames && raw === _cachedCompanionNamesRaw) {
     return _cachedCompanionNames;
   }
@@ -87,7 +86,6 @@ export function isCompanionSpeaker(username, botName) {
   if (!username) return false;
   const normalized = String(username).toLowerCase().replace(/^\./, '');
   if (botName && normalized === String(botName).toLowerCase().replace(/^\./, '')) return true;
-  if (!process.env.HERMESCRAFT_COMPANION_NAMES) return false;
   return configuredCompanionNames().has(normalized);
 }
 

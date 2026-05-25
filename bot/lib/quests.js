@@ -78,15 +78,15 @@ export function configuredCompanionNames() {
   _cachedCompanionNamesRaw = raw;
   _cachedCompanionNames = new Set(String(raw)
     .split(',')
-    .map((name) => name.trim().toLowerCase())
+    .map((name) => name.trim().toLowerCase().replace(/^\./, ''))
     .filter(Boolean));
   return _cachedCompanionNames;
 }
 
 export function isCompanionSpeaker(username, botName) {
   if (!username) return false;
-  const normalized = String(username).toLowerCase();
-  if (botName && normalized === String(botName).toLowerCase()) return true;
+  const normalized = String(username).toLowerCase().replace(/^\./, '');
+  if (botName && normalized === String(botName).toLowerCase().replace(/^\./, '')) return true;
   if (!process.env.HERMESCRAFT_COMPANION_NAMES) return false;
   return configuredCompanionNames().has(normalized);
 }

@@ -16,19 +16,26 @@ export function hasFollowRequest(body) {
 
 const TASK_VERBS = 'build|make|construct|design|create|set up|place|put|dig|mine|fill|use|break|chop|plant|harvest|craft|cook|smelt|feed|give|bring|fetch|collect|gather|find|search|farm|fish|eat|equip|wear|open|close|tame|ride|throw|shoot';
 const COMBAT_VERBS = 'kill|attack|fight|hit|punch|smack|defend|protect|save|get';
+const POST_NEGATION_TASK_VERBS = 'break|chop|plant|harvest|craft|cook|smelt|feed|give|bring|fetch|collect|gather|find|search|farm|fish|eat|equip|wear|open|close|tame|ride|throw|shoot';
 const TASK_VERB_PATTERN = new RegExp(`\\b(?:${TASK_VERBS})\\b`);
 const NEGATED_TASK_PATTERN = new RegExp(`\\b(?:do not|don'?t|dont|no)\\s+(?:${TASK_VERBS})\\b`, 'i');
 const NEGATED_COMBAT_PATTERN = new RegExp(`\\b(?:do not|don'?t|dont|no)\\s+(?:${COMBAT_VERBS})\\b`, 'i');
 const TASK_LIST_CONTINUATION_PATTERN = new RegExp(`^(?:(?:and|or)\\s+)?(?:${TASK_VERBS})\\b(?:\\s+items?)?[.!?;:]?$`, 'i');
 const COMBAT_LIST_CONTINUATION_PATTERN = new RegExp(`^(?:(?:and|or)\\s+(?:${COMBAT_VERBS})|(?:${COMBAT_VERBS}))\\b[.!?;:]?$`, 'i');
+const POST_NEGATION_TASK_TAIL_PATTERN = new RegExp(`\\b(?:then|but)\\s+.*\\b(?:${TASK_VERBS})\\b|\\band\\s+(?:${POST_NEGATION_TASK_VERBS})\\b`, 'i');
+const POST_NEGATION_COMBAT_TAIL_PATTERN = new RegExp(`\\b(?:then|but|and)\\s+.*\\b(?:${COMBAT_VERBS})\\b`, 'i');
 
-function stripNegatedClauses(text, negatedPattern, continuationPattern) {
+function stripNegatedClauses(text, negatedPattern, continuationPattern, positiveTailPattern) {
   let inNegatedList = false;
   return String(text || '').split(/[,.!?;:]/).map((part) => {
     const trimmed = part.trim();
-    if (negatedPattern.test(trimmed)) {
+    const match = negatedPattern.exec(trimmed);
+    if (match) {
       inNegatedList = true;
-      return '';
+      const before = trimmed.slice(0, match.index);
+      const after = trimmed.slice(match.index + match[0].length);
+      const tailMatch = positiveTailPattern?.exec(after);
+      return tailMatch ? `${before} ${after.slice(tailMatch.index).trim()}` : before;
     }
     if (inNegatedList && continuationPattern.test(trimmed)) {
       return '';
@@ -43,6 +50,7 @@ export function hasWorldMutationImperative(body) {
     String(body || '').toLowerCase(),
     NEGATED_TASK_PATTERN,
     TASK_LIST_CONTINUATION_PATTERN,
+    POST_NEGATION_TASK_TAIL_PATTERN,
   );
   return TASK_VERB_PATTERN.test(stripped);
 }
@@ -52,6 +60,7 @@ export function hasCombatImperative(body) {
     String(body || '').toLowerCase(),
     NEGATED_COMBAT_PATTERN,
     COMBAT_LIST_CONTINUATION_PATTERN,
+    POST_NEGATION_COMBAT_TAIL_PATTERN,
   );
   const hostileTargetPattern = /\b(mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/;
   const hasAttackVerb = /\b(kill|attack|fight|hit|punch|smack)\b/.test(text);

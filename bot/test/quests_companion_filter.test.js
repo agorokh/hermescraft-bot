@@ -29,6 +29,7 @@ test('quest trigger filter honors configured companion roster', () => {
     process.env.HERMESCRAFT_COMPANION_NAMES = 'Rosie, Steve, Natalie';
     assert.deepEqual([...configuredCompanionNames()].sort(), ['natalie', 'rosie', 'steve']);
     assert.equal(isCompanionSpeaker('Steve', 'Rosie'), true);
+    assert.equal(isCompanionSpeaker('.Steve', 'Rosie'), true);
     assert.equal(isCompanionSpeaker('Natalie', 'Rosie'), true);
     assert.equal(isCompanionSpeaker('SwimmerJay1995', 'Rosie'), false);
   } finally {

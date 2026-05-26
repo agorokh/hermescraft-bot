@@ -184,6 +184,28 @@ function blockAtMatches(bot, x, y, z, expected) {
   return blockReadbackMatches(expected, readback) === true;
 }
 
+async function findResumeStateForOrigin(name, baseX, requestedBaseY, baseZ) {
+  const candidates = new Set([requestedBaseY]);
+  for (let y = requestedBaseY - 32; y <= requestedBaseY + 48; y++) candidates.add(y);
+  let best = null;
+  for (const candidateY of candidates) {
+    const buildId = `${name}-${baseX}-${candidateY}-${baseZ}`;
+    const state = await loadBuildState(buildStateFileForId(buildId));
+    if (
+      !state
+      || state.name !== name
+      || Math.floor(Number(state.origin?.x)) !== baseX
+      || Math.floor(Number(state.origin?.z)) !== baseZ
+      || !['running', 'done', 'paused_sentry'].includes(state.status)
+    ) continue;
+    const updatedAt = Number(state.updated_at || state.started_at || 0);
+    if (!best || updatedAt > best.updatedAt) {
+      best = { state, baseY: Math.floor(Number(state.origin?.y ?? candidateY)), updatedAt };
+    }
+  }
+  return best;
+}
+
 // Pick an adjacent solid block we can place against. Mindcraft's 6-face scan.
 function findBuildOffBlock(bot, x, y, z) {
   const faces = [
@@ -840,6 +862,14 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
   const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
   const respectExplicitBaseY = bodyFlagEnabled(bodyArgs.respect_explicit_base_y, false);
+  const resumeMatch = resumeEnabled
+    ? await findResumeStateForOrigin(name, baseX, baseY, baseZ)
+    : null;
+  let savedState = resumeMatch?.state || null;
+  if (resumeMatch && resumeMatch.baseY !== baseY) {
+    console.log(`[build_schematic] resume state for "${name}" pins baseY: caller=${baseY} → saved=${resumeMatch.baseY}`);
+    baseY = resumeMatch.baseY;
+  }
 
   // ── GROUNDING & FOUNDATION ────────────────────────────────────────────────
   // The schematic's floor (dy=0) cells must sit on solid ground or the build
@@ -904,7 +934,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       // Tolerate up to half the footprint having no ground (e.g. cliff edges)
       // before falling back to the caller's baseY.
       let adjustedBaseY = baseY;
-      if (!respectExplicitBaseY && sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
+      if (!savedState && !respectExplicitBaseY && sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
         adjustedBaseY = sample.maxGroundY + 1;
       }
       // After potential Y adjustment, generate foundation under the schematic.
@@ -955,8 +985,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     placementsSinceSave = 0;
   };
   const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
-  let savedState = null;
-  if (resumeEnabled) {
+  if (resumeEnabled && !savedState) {
     savedState = await loadBuildState(stateFile);
   }
   if (resumeEnabled && savedState?.build_id === buildId && savedState?.status === 'done') {

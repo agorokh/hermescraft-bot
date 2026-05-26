@@ -58,6 +58,19 @@ test('validateBillOfMaterials rejects missing inventory deterministically', () =
   ]);
 });
 
+test('validateBillOfMaterials aggregates state variants before inventory comparison', () => {
+  const available = inventoryCounts([{ name: 'oak_stairs', count: 1 }]);
+  const result = validateBillOfMaterials({
+    'oak_stairs[facing=east]': 1,
+    'oak_stairs[facing=west]': 1,
+  }, available, false);
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.missing, [
+    { block: 'oak_stairs', need: 2, have: 1, missing: 1 },
+  ]);
+});
+
 test('createLayeredPlan sorts bottom-up and produces outside-footprint scaffold ring', () => {
   const plan = createLayeredPlan({ name: 'tiny', blocks, origin: { x: 10, y: 64, z: -5 } });
   assert.deepEqual(plan.layers.map((l) => l.y), [64, 65, 66]);

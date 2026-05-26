@@ -120,8 +120,12 @@ export function foremanBillOfMaterials(required, setblockCapable = true) {
 
 export function validateBillOfMaterials(required, available, setblockCapable = true) {
   const missing = [];
+  const normalizedRequired = Object.create(null);
   for (const [block, count] of Object.entries(required || {})) {
     const name = normalizeBlockBaseName(block);
+    normalizedRequired[name] = (normalizedRequired[name] || 0) + Number(count || 0);
+  }
+  for (const [name, count] of Object.entries(normalizedRequired)) {
     const have = setblockCapable
       ? inventoryBlockCount(available, name)
       : Number(available?.[name] || 0);

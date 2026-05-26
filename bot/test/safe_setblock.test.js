@@ -8,26 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-
-// `safeSetblockCommand` isn't exported — re-implement the surface inline
-// from skills.js so the test pins behavior independent of internal export
-// shape. Keep in sync with bot/lib/skills.js if BLOCK_NAME_RE changes.
-const BLOCK_NAME_RE = /^[a-z0-9_]+:[a-z0-9_./-]+(\[[a-z0-9_=,/-]*\])?$/;
-
-function safeSetblockCommand(x, y, z, block) {
-  const rawCoords = [x, y, z];
-  if (rawCoords.some((v) => v == null || v === '' || typeof v === 'boolean')) {
-    throw new Error('Unsafe setblock command arguments');
-  }
-  const coords = rawCoords.map(Number);
-  let blockName = String(block || '').trim();
-  if (blockName && !blockName.includes(':')) blockName = `minecraft:${blockName}`;
-  if (/[\x00-\x1f\x7f]/.test(blockName)) throw new Error('Unsafe setblock command arguments');
-  if (!coords.every(Number.isInteger) || !BLOCK_NAME_RE.test(blockName)) {
-    throw new Error('Unsafe setblock command arguments');
-  }
-  return `setblock ${coords[0]} ${coords[1]} ${coords[2]} ${blockName}`;
-}
+import { safeSetblockCommand } from '../lib/skills.js';
 
 test('accepts modern Minecraft block-state suffixes', () => {
   const cases = [
@@ -49,6 +30,13 @@ test('accepts modern Minecraft block-state suffixes', () => {
 
 test('auto-prefixes minecraft: on bare block names (legacy converter compat)', () => {
   assert.equal(safeSetblockCommand(1, 2, 3, 'oak_log'), 'setblock 1 2 3 minecraft:oak_log');
+});
+
+test('normalizes uppercase block names and states', () => {
+  assert.equal(
+    safeSetblockCommand(1, 2, 3, 'Minecraft:Oak_Log[Axis=Y]'),
+    'setblock 1 2 3 minecraft:oak_log[axis=y]',
+  );
 });
 
 test('rejects newline injection (op-level console FIFO would run injected line)', () => {

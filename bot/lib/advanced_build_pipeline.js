@@ -36,6 +36,10 @@ export function normalizeBlockName(name) {
   return String(name || '').toLowerCase().replace(/^minecraft:/, '');
 }
 
+export function normalizeBlockBaseName(name) {
+  return normalizeBlockName(name).replace(/\[.*\]$/, '');
+}
+
 export function normalizeSchematicBlocks(blocks) {
   return (blocks || [])
     .filter((b) => Array.isArray(b) && b.length >= 4)
@@ -50,7 +54,7 @@ export function normalizeSchematicBlocks(blocks) {
       && Number.isFinite(b.dy)
       && Number.isFinite(b.dz)
       && b.block
-      && !AIR_BLOCKS.has(b.block)
+      && !AIR_BLOCKS.has(normalizeBlockBaseName(b.block))
     );
 }
 
@@ -143,7 +147,7 @@ export function computeFloorCells(blocks) {
   const cells = new Map(); // "dx,dz" -> { dx, dz, block }
   for (const b of normalized) {
     if (b.dy !== 0) continue;
-    if (!b.block || AIR_BLOCKS.has(b.block)) continue;
+    if (!b.block || AIR_BLOCKS.has(normalizeBlockBaseName(b.block))) continue;
     const key = `${b.dx},${b.dz}`;
     if (!cells.has(key)) cells.set(key, { dx: b.dx, dz: b.dz, block: b.block });
   }

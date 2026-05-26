@@ -25,6 +25,7 @@ test('computeFloorCells extracts only dy=0 cells with non-air blocks', () => {
     [0, 1, 0, 'stone_bricks'],   // wall
     [2, 0, 0, 'air'],            // air at floor — should skip
     [0, 0, 1, 'cave_air'],       // air at floor — should skip
+    [4, 0, 0, 'minecraft:air[]'], // state-suffix air — should skip
     [3, 5, 0, 'glass_pane'],     // upper — not floor
     [1, 0, 0, 'oak_planks'],     // duplicate floor cell — should dedupe
   ];

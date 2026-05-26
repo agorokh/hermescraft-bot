@@ -33,6 +33,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
 import {
+  blockReadbackMatches,
   buildStateFileForId,
   buildBillOfMaterials,
   computeFloorCells,
@@ -178,46 +179,9 @@ function collectItemMatches(tossedItem, collectedEntity) {
   return got === want || got.endsWith(`/${want}`) || want.endsWith(`/${got}`);
 }
 
-function expectedBlockState(blockName) {
-  const normalized = normalizeBlockName(blockName);
-  const base = normalizeBlockBaseName(normalized);
-  const stateStart = normalized.lastIndexOf('[');
-  if (stateStart === -1) return { base, properties: null, invalid: false };
-  const stateText = normalized.slice(stateStart);
-  if (!STATE_SUFFIX_RE.test(stateText)) {
-    return { base, properties: null, invalid: true };
-  }
-  const body = stateText.slice(1, -1);
-  if (!body) return { base, properties: null, invalid: false };
-  const properties = Object.create(null);
-  for (const part of body.split(',')) {
-    const pair = part.split('=');
-    if (pair.length !== 2 || !pair[0] || !pair[1]) return { base, properties: null, invalid: true };
-    const [key, value] = pair;
-    properties[key] = value;
-  }
-  return { base, properties, invalid: false };
-}
-
-function readbackProperties(readback) {
-  if (typeof readback?.getProperties === 'function') {
-    try { return readback.getProperties(); } catch {}
-  }
-  return readback?.properties || readback?._properties || null;
-}
-
 function blockAtMatches(bot, x, y, z, expected) {
   const readback = bot.blockAt(new Vec3(x, y, z));
-  if (!readback) return false;
-  const expectedState = expectedBlockState(expected);
-  if (expectedState.invalid) return false;
-  if (normalizeBlockBaseName(readback.name) !== expectedState.base) return false;
-  if (!expectedState.properties) return true;
-  const actualProperties = readbackProperties(readback);
-  if (!actualProperties) return false;
-  return Object.entries(expectedState.properties).every(
-    ([key, value]) => String(actualProperties[key]) === value,
-  );
+  return blockReadbackMatches(expected, readback) === true;
 }
 
 // Pick an adjacent solid block we can place against. Mindcraft's 6-face scan.
@@ -903,10 +867,14 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
             normalizeBlockBaseName(block),
           ]),
       );
-      // Resume continuity matters more than discovering above-floor terrain:
-      // scanning above the requested floor can treat prior schematic blocks,
-      // trees, or structures as "ground" and shift buildId on retries.
-      const groundSearchTopY = resumeEnabled ? baseY - 1 : Math.min(319, baseY + 48);
+      const schematicBlocksByColumn = new Map();
+      for (const [key, block] of schematicBlocksByRelativePos.entries()) {
+        const [dx, , dz] = key.split(',');
+        const columnKey = `${dx},${dz}`;
+        if (!schematicBlocksByColumn.has(columnKey)) schematicBlocksByColumn.set(columnKey, new Set());
+        schematicBlocksByColumn.get(columnKey).add(block);
+      }
+      const groundSearchTopY = Math.min(319, baseY + 48);
       const sample = sampleFootprintGround({
         blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)),
         floorCells,
@@ -925,6 +893,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
             const dy = sampleCtx.y - baseY;
             const expected = schematicBlocksByRelativePos.get(`${sampleCtx.cell?.dx},${dy},${sampleCtx.cell?.dz}`);
             if (expected && normalizeBlockBaseName(bn) === expected) return false;
+            const columnBlocks = schematicBlocksByColumn.get(`${sampleCtx.cell?.dx},${sampleCtx.cell?.dz}`);
+            if (columnBlocks?.has(normalizeBlockBaseName(bn))) return false;
           }
           return true;
         },

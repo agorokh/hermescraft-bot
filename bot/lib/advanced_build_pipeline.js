@@ -81,7 +81,7 @@ function readbackProperties(readback) {
   return readback?.properties || readback?._properties || null;
 }
 
-function blockReadbackMatches(expected, readback) {
+export function blockReadbackMatches(expected, readback) {
   const actualName = readbackName(readback);
   if (actualName == null || actualName === '') return null;
   const expectedState = expectedBlockState(expected);

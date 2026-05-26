@@ -871,6 +871,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
   const useChatCommand = await detectSetblockAuth(bot);
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
+  const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
 
   // ── GROUNDING & FOUNDATION ────────────────────────────────────────────────
   // The schematic's floor (dy=0) cells must sit on solid ground or the build
@@ -898,7 +899,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
             normalizeBlockBaseName(block),
           ]),
       );
-      const groundSearchTopY = Math.min(319, baseY + 48);
+      // Resume continuity matters more than discovering above-floor terrain:
+      // scanning above the requested floor can treat prior schematic blocks,
+      // trees, or structures as "ground" and shift buildId on retries.
+      const groundSearchTopY = resumeEnabled ? baseY - 1 : Math.min(319, baseY + 48);
       const sample = sampleFootprintGround({
         blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)),
         floorCells,
@@ -975,7 +979,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     await saveBuildState(buildState, stateFile);
     placementsSinceSave = 0;
   };
-  const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
   const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
   let savedState = null;
   if (resumeEnabled) {

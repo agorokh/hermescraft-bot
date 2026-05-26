@@ -123,7 +123,7 @@ function sendServerCommand(command) {
 // Bracket body is `*` (zero-or-more) so `minecraft:air[]` and other empty
 // state-blocks from Sponge palettes are accepted. Paper accepts an empty
 // bracket pair the same as no bracket at all.
-const BLOCK_NAME_RE = /^[a-z0-9_]+:[a-z0-9_./-]+(\[[a-z0-9_=,/-]*\])?$/;
+const BLOCK_NAME_RE = /^[a-z0-9_.-]+:[a-z0-9_./-]+(\[]|\[[a-z0-9_/-]+=[a-z0-9_/-]+(,[a-z0-9_/-]+=[a-z0-9_/-]+)*\])?$/;
 
 export function safeSetblockCommand(x, y, z, block) {
   const rawCoords = [x, y, z];
@@ -179,17 +179,22 @@ function collectItemMatches(tossedItem, collectedEntity) {
 function expectedBlockState(blockName) {
   const normalized = normalizeBlockName(blockName);
   const base = normalizeBlockBaseName(normalized);
-  const stateText = normalized.slice(base.length);
-  if (!/^\[[a-z0-9_=,/-]*\]$/.test(stateText)) return { base, properties: null };
+  const stateStart = normalized.lastIndexOf('[');
+  if (stateStart === -1) return { base, properties: null, invalid: false };
+  const stateText = normalized.slice(stateStart);
+  if (!/^(\[]|\[[a-z0-9_/-]+=[a-z0-9_/-]+(,[a-z0-9_/-]+=[a-z0-9_/-]+)*\])$/.test(stateText)) {
+    return { base, properties: null, invalid: true };
+  }
   const body = stateText.slice(1, -1);
-  if (!body) return { base, properties: {} };
+  if (!body) return { base, properties: null, invalid: false };
   const properties = Object.create(null);
   for (const part of body.split(',')) {
-    const [key, value] = part.split('=');
-    if (!key || value == null) return { base, properties: null };
+    const pair = part.split('=');
+    if (pair.length !== 2 || !pair[0] || !pair[1]) return { base, properties: null, invalid: true };
+    const [key, value] = pair;
     properties[key] = value;
   }
-  return { base, properties };
+  return { base, properties, invalid: false };
 }
 
 function readbackProperties(readback) {
@@ -203,6 +208,7 @@ function blockAtMatches(bot, x, y, z, expected) {
   const readback = bot.blockAt(new Vec3(x, y, z));
   if (!readback) return false;
   const expectedState = expectedBlockState(expected);
+  if (expectedState.invalid) return false;
   if (normalizeBlockBaseName(readback.name) !== expectedState.base) return false;
   if (!expectedState.properties) return true;
   const actualProperties = readbackProperties(readback);
@@ -934,13 +940,13 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         fillBlock,
         maxFillDepth: 16,
       });
-      if (adjustedBaseY !== baseY) {
-        console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
-        baseY = adjustedBaseY;
-      }
       if (foundationResult.placements.length > MAX_FOUNDATION_PLACEMENTS) {
         console.log(`[build_schematic] foundation for "${name}" skipped: ${foundationResult.placements.length} blocks exceeds cap ${MAX_FOUNDATION_PLACEMENTS}`);
       } else {
+        if (adjustedBaseY !== baseY) {
+          console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
+          baseY = adjustedBaseY;
+        }
         foundationPlacements = foundationResult.placements;
         foundationStats = foundationResult.stats;
       }

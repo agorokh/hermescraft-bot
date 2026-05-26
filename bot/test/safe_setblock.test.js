@@ -32,6 +32,13 @@ test('auto-prefixes minecraft: on bare block names (legacy converter compat)', (
   assert.equal(safeSetblockCommand(1, 2, 3, 'oak_log'), 'setblock 1 2 3 minecraft:oak_log');
 });
 
+test('accepts legal namespace punctuation', () => {
+  assert.equal(
+    safeSetblockCommand(1, 2, 3, 'my-mod.example:custom_block'),
+    'setblock 1 2 3 my-mod.example:custom_block',
+  );
+});
+
 test('normalizes uppercase block names and states', () => {
   assert.equal(
     safeSetblockCommand(1, 2, 3, 'Minecraft:Oak_Log[Axis=Y]'),
@@ -49,6 +56,11 @@ test('rejects newline injection (op-level console FIFO would run injected line)'
 
 test('rejects NBT braces (escape complexity not handled)', () => {
   assert.throws(() => safeSetblockCommand(0, 64, 0, 'minecraft:chest{Items:[{}]}'));
+});
+
+test('rejects malformed block-state suffixes', () => {
+  assert.throws(() => safeSetblockCommand(0, 64, 0, 'minecraft:oak_log[axis]'));
+  assert.throws(() => safeSetblockCommand(0, 64, 0, 'minecraft:oak_log[axis=y=bad]'));
 });
 
 test('rejects shell metacharacters and spaces', () => {

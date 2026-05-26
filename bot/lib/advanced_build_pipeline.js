@@ -42,7 +42,10 @@ export function normalizeBlockBaseName(name) {
   if (stateStart === -1) return normalized;
   const path = normalized.slice(0, stateStart);
   const suffix = normalized.slice(stateStart);
-  if (path.includes('[') || !/^\[[a-z0-9_=,/-]*\]$/.test(suffix)) return normalized;
+  if (
+    path.includes('[')
+    || !/^(\[]|\[[a-z0-9_/-]+=[a-z0-9_/-]+(,[a-z0-9_/-]+=[a-z0-9_/-]+)*\])$/.test(suffix)
+  ) return normalized;
   return path;
 }
 

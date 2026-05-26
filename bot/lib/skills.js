@@ -109,14 +109,34 @@ function sendServerCommand(command) {
   }
 }
 
+// Vanilla 1.21 /setblock block argument grammar:
+//   namespace:path[state1=v1,state2=v2,...]
+// We allow the optional state suffix so stairs/slabs/logs/doors keep their
+// orientation. NBT compounds ({...}) are intentionally NOT permitted — they
+// require richer escaping and aren't needed for visible architecture.
+// Security: console FIFO runs as op-level ServerCommandSender. A bare \n in
+// the block string would inject a SECOND console command (eg. /op or /stop),
+// so we reject every CR/LF/control char before the regex even runs.
+// Bracket body is `*` (zero-or-more) so `minecraft:air[]` and other empty
+// state-blocks from Sponge palettes are accepted. Paper accepts an empty
+// bracket pair the same as no bracket at all.
+const BLOCK_NAME_RE = /^[a-z0-9_]+:[a-z0-9_./-]+(\[[a-z0-9_=,/-]*\])?$/;
+
 function safeSetblockCommand(x, y, z, block) {
   const rawCoords = [x, y, z];
   if (rawCoords.some((value) => value == null || value === '' || typeof value === 'boolean')) {
     throw new Error('Unsafe setblock command arguments');
   }
   const coords = rawCoords.map((value) => Number(value));
-  const blockName = String(block || '').trim();
-  if (!coords.every(Number.isInteger) || !/^[a-z0-9_:-]+$/i.test(blockName)) {
+  let blockName = String(block || '').trim();
+  // Auto-prefix the default namespace so legacy callers (e.g. older
+  // converters that emit `oak_stairs` without `minecraft:`) keep working.
+  if (blockName && !blockName.includes(':')) blockName = `minecraft:${blockName}`;
+  // Strip control chars (newline = console-injection vector).
+  if (/[\x00-\x1f\x7f]/.test(blockName)) {
+    throw new Error('Unsafe setblock command arguments');
+  }
+  if (!coords.every(Number.isInteger) || !BLOCK_NAME_RE.test(blockName)) {
     throw new Error('Unsafe setblock command arguments');
   }
   return `setblock ${coords[0]} ${coords[1]} ${coords[2]} ${blockName}`;

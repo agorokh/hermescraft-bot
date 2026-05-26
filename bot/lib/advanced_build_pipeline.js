@@ -37,7 +37,13 @@ export function normalizeBlockName(name) {
 }
 
 export function normalizeBlockBaseName(name) {
-  return normalizeBlockName(name).replace(/\[.*\]$/, '');
+  const normalized = normalizeBlockName(name);
+  const stateStart = normalized.lastIndexOf('[');
+  if (stateStart === -1) return normalized;
+  const path = normalized.slice(0, stateStart);
+  const suffix = normalized.slice(stateStart);
+  if (path.includes('[') || !/^\[[a-z0-9_=,/-]*\]$/.test(suffix)) return normalized;
+  return path;
 }
 
 export function normalizeSchematicBlocks(blocks) {

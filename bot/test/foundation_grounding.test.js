@@ -12,6 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeFloorCells,
+  normalizeBlockBaseName,
   sampleFootprintGround,
   generateFoundation,
 } from '../lib/advanced_build_pipeline.js';
@@ -41,6 +42,11 @@ test('computeFloorCells returns empty for schematic with no floor blocks', () =>
   const blocks = [[0, 2, 0, 'stone_bricks']];   // floats — no floor
   const cells = computeFloorCells(blocks);
   assert.deepEqual(cells, []);
+});
+
+test('normalizeBlockBaseName strips only valid state suffixes', () => {
+  assert.equal(normalizeBlockBaseName('minecraft:oak_stairs[facing=north]'), 'oak_stairs');
+  assert.equal(normalizeBlockBaseName('minecraft:block[name[part]'), 'block[name[part]');
 });
 
 // ── sampleFootprintGround ────────────────────────────────────────────────────

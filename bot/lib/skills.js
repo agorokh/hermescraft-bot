@@ -55,6 +55,7 @@ import {
 } from './advanced_build_pipeline.js';
 
 const BUILD_STATE_SAVE_EVERY_N = 10;
+const MAX_FOUNDATION_PLACEMENTS = 4096;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -874,12 +875,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       // ground +1. This prevents the schematic from being buried into a hill.
       // Tolerate up to half the footprint having no ground (e.g. cliff edges)
       // before falling back to the caller's baseY.
+      let adjustedBaseY = baseY;
       if (sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
-        const adjustedBaseY = sample.maxGroundY + 1;
-        if (adjustedBaseY !== baseY) {
-          console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
-          baseY = adjustedBaseY;
-        }
+        adjustedBaseY = sample.maxGroundY + 1;
       }
       // After potential Y adjustment, generate foundation under the schematic.
       // Foundation block: use stone for natural builds, dirt_shelter keeps dirt.
@@ -888,13 +886,21 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         floorCells,
         groundMap: sample.groundMap,
         baseX,
-        baseY,
+        baseY: adjustedBaseY,
         baseZ,
         fillBlock,
         maxFillDepth: 16,
       });
-      foundationPlacements = foundationResult.placements;
-      foundationStats = foundationResult.stats;
+      if (foundationResult.placements.length > MAX_FOUNDATION_PLACEMENTS) {
+        console.log(`[build_schematic] foundation for "${name}" skipped: ${foundationResult.placements.length} blocks exceeds cap ${MAX_FOUNDATION_PLACEMENTS}`);
+      } else {
+        if (adjustedBaseY !== baseY) {
+          console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
+          baseY = adjustedBaseY;
+        }
+        foundationPlacements = foundationResult.placements;
+        foundationStats = foundationResult.stats;
+      }
       if (foundationStats && foundationStats.blocksAdded > 0) {
         console.log(`[build_schematic] foundation for "${name}": ${foundationStats.blocksAdded} ${fillBlock} blocks across ${foundationStats.cellsFilled} cells (max depth ${foundationStats.maxDepth}, capped ${foundationStats.capped})`);
       }

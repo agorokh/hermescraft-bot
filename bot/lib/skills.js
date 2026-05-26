@@ -854,9 +854,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (blocks.length === 0) return { result: `Schematic ${name} is empty.` };
 
   const baseX = Math.floor(x), baseZ = Math.floor(z);
+  const requestedBaseY = Math.floor(y);
   // baseY is `let` because terrain-aware grounding may adjust it below to
   // sit on the highest sampled ground under the schematic footprint.
-  let baseY = Math.floor(y);
+  let baseY = requestedBaseY;
   const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
   const centerX = baseX + Math.floor(fw / 2);
   const centerZ = baseZ + Math.floor(fl / 2);
@@ -872,6 +873,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const useChatCommand = await detectSetblockAuth(bot);
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
   const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
+  const respectExplicitBaseY = bodyFlagEnabled(bodyArgs.respect_explicit_base_y, false);
 
   // ── GROUNDING & FOUNDATION ────────────────────────────────────────────────
   // The schematic's floor (dy=0) cells must sit on solid ground or the build
@@ -914,7 +916,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           if (!block) return false;
           const bn = block.name || '';
           if (block.boundingBox !== 'block') return false;
-          if (['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava'].includes(bn)) return false;
+          if (['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava', 'poppy'].includes(bn)) return false;
           if (bn.endsWith('_leaves')) return false;
           if (sampleCtx.y >= baseY) {
             const dy = sampleCtx.y - baseY;
@@ -929,7 +931,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       // Tolerate up to half the footprint having no ground (e.g. cliff edges)
       // before falling back to the caller's baseY.
       let adjustedBaseY = baseY;
-      if (sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
+      if (!respectExplicitBaseY && sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
         adjustedBaseY = sample.maxGroundY + 1;
       }
       // After potential Y adjustment, generate foundation under the schematic.

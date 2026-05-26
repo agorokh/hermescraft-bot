@@ -42,7 +42,7 @@ bot/model.nlp
 bot/build_states/
 
 # Cursor / editor local state
-.cursor/
+.cursor/*
 
 # Editor / screenshots
 *.swp

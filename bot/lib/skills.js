@@ -877,21 +877,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (!skipFoundation && useChatCommand) {
     try {
       const floorCells = computeFloorCells(blocks);
-      const schematicBlocksByRelativePos = new Map(
-        blocks
-          .filter((b) => Array.isArray(b) && b.length >= 4)
-          .map(([dx, dy, dz, block]) => [
-            `${Math.floor(Number(dx))},${Math.floor(Number(dy))},${Math.floor(Number(dz))}`,
-            normalizeBlockBaseName(block),
-          ]),
-      );
-      const schematicBlocksByColumn = new Map();
-      for (const [key, block] of schematicBlocksByRelativePos.entries()) {
-        const [dx, , dz] = key.split(',');
-        const columnKey = `${dx},${dz}`;
-        if (!schematicBlocksByColumn.has(columnKey)) schematicBlocksByColumn.set(columnKey, new Set());
-        schematicBlocksByColumn.get(columnKey).add(block);
-      }
+      const completedCoords = new Set((savedState?.completed || []).map((id) => String(id).split(':')[0]));
       const groundSearchTopY = Math.min(319, baseY + 48);
       const sample = sampleFootprintGround({
         blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)),
@@ -908,11 +894,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           if (bn.endsWith('_leaves')) return false;
           if (bn.endsWith('_log') || bn.endsWith('_wood') || bn.endsWith('_stem') || bn.endsWith('_hyphae')) return false;
           if (sampleCtx.y >= baseY) {
-            const dy = sampleCtx.y - baseY;
-            const expected = schematicBlocksByRelativePos.get(`${sampleCtx.cell?.dx},${dy},${sampleCtx.cell?.dz}`);
-            if (expected && bn === expected) return false;
-            const columnBlocks = schematicBlocksByColumn.get(`${sampleCtx.cell?.dx},${sampleCtx.cell?.dz}`);
-            if (columnBlocks?.has(bn)) return false;
+            if (completedCoords.has(`${sampleCtx.wx},${sampleCtx.y},${sampleCtx.wz}`)) return false;
           }
           return true;
         },

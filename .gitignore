@@ -48,3 +48,14 @@ bot/build_states/
 *.swp
 *.swo
 /tmp/mc_screenshot_*.png
+
+# /post-merge unification (agorokh/agent-factory#246 follow-up):
+# allow the post-merge skill surfaces under .claude/.cursor/.codex even
+# when those parent dirs are otherwise ignored, so /post-merge works
+# identically across all agent surfaces in this repo.
+!.claude/skills/post-merge/
+!.claude/skills/post-merge/**
+!.cursor/skills/post-merge/
+!.cursor/skills/post-merge/**
+!.codex/skills/post-merge/
+!.codex/skills/post-merge/**

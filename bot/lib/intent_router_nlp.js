@@ -32,7 +32,7 @@ import { extractGatherBlockFromBody, extractKidName, extractOreFromBody } from '
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
-import { findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
+import { explicitSchematicBaseY, findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 import {
   combatImperativeText,
@@ -409,12 +409,17 @@ const DISPATCHERS = {
     const buildX = Math.floor(p.x) + 2;
     const buildZ = Math.floor(p.z);
     const action = isAdvancedSchematicName(name) ? 'build_schematic_advanced' : 'build_schematic';
+    const explicitY = explicitSchematicBaseY(ctx.body);
+    const buildY = schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y);
     const body = {
       name,
       x: buildX,
-      y: schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y),
+      y: buildY,
       z: buildZ,
     };
+    if (explicitY !== null && explicitY === buildY && action === 'build_schematic_advanced') {
+      body.respect_explicit_base_y = true;
+    }
     if (kidName) body.kid_name = kidName;
     return { action, body };
   },

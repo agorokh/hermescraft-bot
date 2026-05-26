@@ -920,6 +920,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           if (block.boundingBox !== 'block') return false;
           if (['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava', 'poppy'].includes(bn)) return false;
           if (bn.endsWith('_leaves')) return false;
+          if (bn.endsWith('_log') || bn.endsWith('_wood') || bn.endsWith('_stem') || bn.endsWith('_hyphae')) return false;
           if (sampleCtx.y >= baseY) {
             const dy = sampleCtx.y - baseY;
             const expected = schematicBlocksByRelativePos.get(`${sampleCtx.cell?.dx},${dy},${sampleCtx.cell?.dz}`);
@@ -990,8 +991,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
   if (resumeEnabled && savedState?.build_id === buildId && savedState?.status === 'done') {
     const verifiedState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
-      const block = bot.blockAt(new Vec3(wx, wy, wz));
-      return block?.name || null;
+      return bot.blockAt(new Vec3(wx, wy, wz));
     });
     const doneCount = verifiedState.completed?.length || 0;
     if (doneCount >= buildPlan.totalBlocks) {
@@ -1023,8 +1023,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (bodyArgs.record_state === true || resumeEnabled) {
     if (resumingBuild) {
       buildState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
-        const block = bot.blockAt(new Vec3(wx, wy, wz));
-        return block?.name || null;
+        return bot.blockAt(new Vec3(wx, wy, wz));
       });
     } else {
       buildState = createBuildState(buildPlan);

@@ -50,6 +50,51 @@ export function normalizeBlockBaseName(name) {
   return path;
 }
 
+function expectedBlockState(name) {
+  const normalized = normalizeBlockName(name);
+  const base = normalizeBlockBaseName(normalized);
+  const stateStart = normalized.lastIndexOf('[');
+  if (stateStart === -1) return { base, properties: null, invalid: false };
+  const suffix = normalized.slice(stateStart);
+  if (!STATE_SUFFIX_RE.test(suffix)) return { base, properties: null, invalid: true };
+  const body = suffix.slice(1, -1);
+  if (!body) return { base, properties: null, invalid: false };
+  const properties = Object.create(null);
+  for (const part of body.split(',')) {
+    const pair = part.split('=');
+    if (pair.length !== 2 || !pair[0] || !pair[1]) return { base, properties: null, invalid: true };
+    const [key, value] = pair;
+    properties[key] = value;
+  }
+  return { base, properties, invalid: false };
+}
+
+function readbackName(readback) {
+  if (typeof readback === 'string') return readback;
+  return readback?.name || null;
+}
+
+function readbackProperties(readback) {
+  if (typeof readback?.getProperties === 'function') {
+    try { return readback.getProperties(); } catch {}
+  }
+  return readback?.properties || readback?._properties || null;
+}
+
+function blockReadbackMatches(expected, readback) {
+  const actualName = readbackName(readback);
+  if (actualName == null || actualName === '') return null;
+  const expectedState = expectedBlockState(expected);
+  if (expectedState.invalid) return false;
+  if (normalizeBlockBaseName(actualName) !== expectedState.base) return false;
+  if (!expectedState.properties) return true;
+  const actualProperties = readbackProperties(readback);
+  if (!actualProperties) return false;
+  return Object.entries(expectedState.properties).every(
+    ([key, value]) => String(actualProperties[key]) === value,
+  );
+}
+
 export function normalizeSchematicBlocks(blocks) {
   return (blocks || [])
     .filter((b) => Array.isArray(b) && b.length >= 4)
@@ -407,15 +452,16 @@ export function reconcileCompletedPlacements(plan, state = {}, blockNameAt) {
       removed.push({ id, reason: 'not in plan' });
       continue;
     }
-    const rawName = blockNameAt(placement.x, placement.y, placement.z);
-    if (rawName == null || rawName === '') {
+    const readback = blockNameAt(placement.x, placement.y, placement.z);
+    const matches = blockReadbackMatches(placement.block, readback);
+    if (matches == null) {
       kept.push(id);
       continue;
     }
-    const actual = normalizeBlockBaseName(rawName);
-    if (actual === normalizeBlockBaseName(placement.block)) {
+    if (matches) {
       kept.push(id);
     } else {
+      const actual = normalizeBlockBaseName(readbackName(readback));
       removed.push({ id, reason: `world has ${actual || 'unknown'}, expected ${placement.block}` });
     }
   }

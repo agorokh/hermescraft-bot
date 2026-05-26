@@ -61,15 +61,24 @@ test('stateful blocks count as base materials for foreman inventory checks', () 
   assert.equal(materials.oak_stairs, 2);
 });
 
-test('resume reconciliation accepts base readback for stateful placements', () => {
+test('resume reconciliation verifies stateful placement properties', () => {
   const plan = createLayeredPlan({
     name: 'stateful',
     blocks: [[0, 0, 0, 'minecraft:oak_stairs[facing=east]']],
     origin: { x: 1, y: 2, z: 3 },
   });
   const state = { completed: [plan.placements[0].id], failed: [] };
-  const reconciled = reconcileCompletedPlacements(plan, state, () => 'oak_stairs');
+  const reconciled = reconcileCompletedPlacements(plan, state, () => ({
+    name: 'oak_stairs',
+    properties: { facing: 'east' },
+  }));
   assert.deepEqual(reconciled.completed, state.completed);
+
+  const drifted = reconcileCompletedPlacements(plan, state, () => ({
+    name: 'oak_stairs',
+    properties: { facing: 'west' },
+  }));
+  assert.deepEqual(drifted.completed, []);
 });
 
 // ── sampleFootprintGround ────────────────────────────────────────────────────
@@ -146,15 +155,17 @@ test('sampleFootprintGround skips water/leaves/air, finds solid below', () => {
   const blockAt = (_x, y, _z) => {
     if (y === 64) return { name: 'water', boundingBox: 'block' };       // pretend water
     if (y === 63) return { name: 'oak_leaves', boundingBox: 'block' };  // leaves above
-    if (y <= 62) return { name: 'dirt', boundingBox: 'block' };
+    if (y === 62) return { name: 'oak_log', boundingBox: 'block' };
+    if (y <= 61) return { name: 'dirt', boundingBox: 'block' };
     return { name: 'air', boundingBox: 'empty' };
   };
-  // isSolid here uses the same predicate as production (excludes leaves/water).
+  // isSolid here uses the same predicate as production (excludes leaves/water/logs).
   const isSolidProd = (block) => {
     if (!block || block.boundingBox !== 'block') return false;
     const bn = block.name || '';
     if (['air', 'cave_air', 'void_air', 'water', 'lava'].includes(bn)) return false;
     if (bn.endsWith('_leaves')) return false;
+    if (bn.endsWith('_log') || bn.endsWith('_wood') || bn.endsWith('_stem') || bn.endsWith('_hyphae')) return false;
     return true;
   };
   const out = sampleFootprintGround({
@@ -164,7 +175,7 @@ test('sampleFootprintGround skips water/leaves/air, finds solid below', () => {
     searchTopY: 80, searchBottomY: 40,
     isSolidGroundBlock: isSolidProd,
   });
-  assert.equal(out.maxGroundY, 62);   // skipped water + leaves, found dirt
+  assert.equal(out.maxGroundY, 61);   // skipped water + leaves + log, found dirt
 });
 
 test('sampleFootprintGround tracks missing cells when no ground in range', () => {

@@ -75,6 +75,10 @@ function readbackName(readback) {
 }
 
 function readbackProperties(readback) {
+  if (typeof readback === 'string') {
+    const parsed = expectedBlockState(readback);
+    return parsed.invalid ? null : parsed.properties;
+  }
   if (typeof readback?.getProperties === 'function') {
     try { return readback.getProperties(); } catch {}
   }
@@ -302,10 +306,7 @@ export function generateFoundation({
   const placements = [];
   const stats = { cellsFilled: 0, blocksAdded: 0, maxDepth: 0, capped: 0 };
   const limit = Math.floor(Number(maxFillDepth));
-  if (!Number.isFinite(limit) || limit <= 0) {
-    return { placements, stats };
-  }
-  maxFillDepth = limit;
+  maxFillDepth = Number.isFinite(limit) && limit > 0 ? limit : 16;
   for (const cell of floorCells) {
     const key = `${cell.dx},${cell.dz}`;
     const groundY = groundMap.get(key);

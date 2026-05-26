@@ -125,7 +125,6 @@ function sendServerCommand(command) {
 // state-blocks from Sponge palettes are accepted. Paper accepts an empty
 // bracket pair the same as no bracket at all.
 const STATE_SUFFIX_PATTERN = '\\[]|\\[[a-z0-9_]+=[a-z0-9_]+(,[a-z0-9_]+=[a-z0-9_]+)*\\]';
-const STATE_SUFFIX_RE = new RegExp(`^(${STATE_SUFFIX_PATTERN})$`);
 const BLOCK_NAME_RE = new RegExp(`^[a-z0-9_.-]+:[a-z0-9_./-]+(${STATE_SUFFIX_PATTERN})?$`);
 
 export function safeSetblockCommand(x, y, z, block) {
@@ -849,7 +848,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
   const respectExplicitBaseY = bodyFlagEnabled(bodyArgs.respect_explicit_base_y, false);
   let savedState = resumeEnabled ? await loadBuildState(stateFile) : null;
-  if (savedState?.build_id === buildId && Number.isFinite(Number(savedState.origin?.y))) {
+  if (savedState && savedState.build_id !== buildId) {
+    savedState = null;
+  }
+  if (savedState && Number.isFinite(Number(savedState.origin?.y))) {
     const savedBaseY = Math.floor(Number(savedState.origin.y));
     if (savedBaseY !== baseY) {
       console.log(`[build_schematic] resume state for "${name}" pins baseY: caller=${baseY} → saved=${savedBaseY}`);

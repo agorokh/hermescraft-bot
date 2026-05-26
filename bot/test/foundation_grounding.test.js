@@ -74,6 +74,9 @@ test('resume reconciliation verifies stateful placement properties', () => {
   }));
   assert.deepEqual(reconciled.completed, state.completed);
 
+  const stringReadback = reconcileCompletedPlacements(plan, state, () => 'oak_stairs[facing=east]');
+  assert.deepEqual(stringReadback.completed, state.completed);
+
   const drifted = reconcileCompletedPlacements(plan, state, () => ({
     name: 'oak_stairs',
     properties: { facing: 'west' },
@@ -272,6 +275,18 @@ test('generateFoundation caps depth at maxFillDepth', () => {
   const ys = placements.map((p) => p.y);
   assert.equal(Math.min(...ys), 54);
   assert.equal(Math.max(...ys), 69);
+});
+
+test('generateFoundation falls back to default depth for invalid maxFillDepth', () => {
+  const floorCells = [{ dx: 0, dz: 0 }];
+  const groundMap = new Map([['0,0', 10]]);
+  const { placements, stats } = generateFoundation({
+    floorCells, groundMap,
+    baseX: 0, baseY: 70, baseZ: 0,
+    maxFillDepth: Number.NaN,
+  });
+  assert.equal(placements.length, 16);
+  assert.equal(stats.capped, 1);
 });
 
 test('generateFoundation skips cells without ground sample', () => {

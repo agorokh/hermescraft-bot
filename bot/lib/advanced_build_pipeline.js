@@ -15,6 +15,7 @@ export function buildStateFileForId(buildId) {
 }
 
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
+const STATE_SUFFIX_RE = /^(\[]|\[[a-z0-9_]+=[a-z0-9_]+(,[a-z0-9_]+=[a-z0-9_]+)*\])$/;
 /** Blocks placeable via /setblock but not carried as stackable inventory. */
 const FOREMAN_INVENTORY_EXEMPT = new Set([
   'water', 'flowing_water', 'lava', 'flowing_lava', 'fire', 'soul_fire',
@@ -44,7 +45,7 @@ export function normalizeBlockBaseName(name) {
   const suffix = normalized.slice(stateStart);
   if (
     path.includes('[')
-    || !/^(\[]|\[[a-z0-9_/-]+=[a-z0-9_/-]+(,[a-z0-9_/-]+=[a-z0-9_/-]+)*\])$/.test(suffix)
+    || !STATE_SUFFIX_RE.test(suffix)
   ) return normalized;
   return path;
 }

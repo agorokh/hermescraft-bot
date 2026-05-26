@@ -123,7 +123,9 @@ function sendServerCommand(command) {
 // Bracket body is `*` (zero-or-more) so `minecraft:air[]` and other empty
 // state-blocks from Sponge palettes are accepted. Paper accepts an empty
 // bracket pair the same as no bracket at all.
-const BLOCK_NAME_RE = /^[a-z0-9_.-]+:[a-z0-9_./-]+(\[]|\[[a-z0-9_/-]+=[a-z0-9_/-]+(,[a-z0-9_/-]+=[a-z0-9_/-]+)*\])?$/;
+const STATE_SUFFIX_PATTERN = '\\[]|\\[[a-z0-9_]+=[a-z0-9_]+(,[a-z0-9_]+=[a-z0-9_]+)*\\]';
+const STATE_SUFFIX_RE = new RegExp(`^(${STATE_SUFFIX_PATTERN})$`);
+const BLOCK_NAME_RE = new RegExp(`^[a-z0-9_.-]+:[a-z0-9_./-]+(${STATE_SUFFIX_PATTERN})?$`);
 
 export function safeSetblockCommand(x, y, z, block) {
   const rawCoords = [x, y, z];
@@ -182,7 +184,7 @@ function expectedBlockState(blockName) {
   const stateStart = normalized.lastIndexOf('[');
   if (stateStart === -1) return { base, properties: null, invalid: false };
   const stateText = normalized.slice(stateStart);
-  if (!/^(\[]|\[[a-z0-9_/-]+=[a-z0-9_/-]+(,[a-z0-9_/-]+=[a-z0-9_/-]+)*\])$/.test(stateText)) {
+  if (!STATE_SUFFIX_RE.test(stateText)) {
     return { base, properties: null, invalid: true };
   }
   const body = stateText.slice(1, -1);

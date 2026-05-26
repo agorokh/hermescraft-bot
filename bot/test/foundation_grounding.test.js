@@ -50,6 +50,7 @@ test('computeFloorCells returns empty for schematic with no floor blocks', () =>
 test('normalizeBlockBaseName strips only valid state suffixes', () => {
   assert.equal(normalizeBlockBaseName('minecraft:oak_stairs[facing=north]'), 'oak_stairs');
   assert.equal(normalizeBlockBaseName('minecraft:block[name[part]'), 'block[name[part]');
+  assert.equal(normalizeBlockBaseName('minecraft:oak_log[foo/bar=baz]'), 'oak_log[foo/bar=baz]');
 });
 
 test('stateful blocks count as base materials for foreman inventory checks', () => {

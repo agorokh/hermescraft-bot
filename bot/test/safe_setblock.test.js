@@ -61,6 +61,9 @@ test('rejects NBT braces (escape complexity not handled)', () => {
 test('rejects malformed block-state suffixes', () => {
   assert.throws(() => safeSetblockCommand(0, 64, 0, 'minecraft:oak_log[axis]'));
   assert.throws(() => safeSetblockCommand(0, 64, 0, 'minecraft:oak_log[axis=y=bad]'));
+  assert.throws(() => safeSetblockCommand(0, 64, 0, 'minecraft:oak_log[foo/bar=baz]'));
+  assert.throws(() => safeSetblockCommand(0, 64, 0, 'minecraft:oak_log[a=b][c=d]'));
+  assert.throws(() => safeSetblockCommand(0, 64, 0, 'minecraft:oak_log[[axis=y]]'));
 });
 
 test('rejects shell metacharacters and spaces', () => {

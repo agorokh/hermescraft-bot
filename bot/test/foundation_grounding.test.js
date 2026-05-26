@@ -11,8 +11,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildBillOfMaterials,
   computeFloorCells,
+  createLayeredPlan,
   normalizeBlockBaseName,
+  reconcileCompletedPlacements,
   sampleFootprintGround,
   generateFoundation,
 } from '../lib/advanced_build_pipeline.js';
@@ -47,6 +50,25 @@ test('computeFloorCells returns empty for schematic with no floor blocks', () =>
 test('normalizeBlockBaseName strips only valid state suffixes', () => {
   assert.equal(normalizeBlockBaseName('minecraft:oak_stairs[facing=north]'), 'oak_stairs');
   assert.equal(normalizeBlockBaseName('minecraft:block[name[part]'), 'block[name[part]');
+});
+
+test('stateful blocks count as base materials for foreman inventory checks', () => {
+  const materials = buildBillOfMaterials([
+    [0, 0, 0, 'minecraft:oak_stairs[facing=east]'],
+    [1, 0, 0, 'oak_stairs[facing=west]'],
+  ]);
+  assert.equal(materials.oak_stairs, 2);
+});
+
+test('resume reconciliation accepts base readback for stateful placements', () => {
+  const plan = createLayeredPlan({
+    name: 'stateful',
+    blocks: [[0, 0, 0, 'minecraft:oak_stairs[facing=east]']],
+    origin: { x: 1, y: 2, z: 3 },
+  });
+  const state = { completed: [plan.placements[0].id], failed: [] };
+  const reconciled = reconcileCompletedPlacements(plan, state, () => 'oak_stairs');
+  assert.deepEqual(reconciled.completed, state.completed);
 });
 
 // ── sampleFootprintGround ────────────────────────────────────────────────────

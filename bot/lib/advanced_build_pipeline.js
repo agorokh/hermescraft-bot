@@ -67,7 +67,8 @@ export function normalizeSchematicBlocks(blocks) {
 export function buildBillOfMaterials(blocks) {
   const materials = Object.create(null);
   for (const { block } of normalizeSchematicBlocks(blocks)) {
-    materials[block] = (materials[block] || 0) + 1;
+    const baseBlock = normalizeBlockBaseName(block);
+    materials[baseBlock] = (materials[baseBlock] || 0) + 1;
   }
   return materials;
 }
@@ -75,7 +76,7 @@ export function buildBillOfMaterials(blocks) {
 export function inventoryCounts(items = []) {
   const counts = Object.create(null);
   for (const item of items || []) {
-    const name = normalizeBlockName(item?.name || item?.displayName);
+    const name = normalizeBlockBaseName(item?.name || item?.displayName);
     if (!name) continue;
     counts[name] = (counts[name] || 0) + Number(item.count || 0);
   }
@@ -83,7 +84,7 @@ export function inventoryCounts(items = []) {
 }
 
 export function inventoryBlockCount(available, block) {
-  const name = normalizeBlockName(block);
+  const name = normalizeBlockBaseName(block);
   let have = Number(available?.[name] || 0);
   for (const alias of INVENTORY_BLOCK_ALIASES[name] || []) {
     have += Number(available?.[alias] || 0);
@@ -103,9 +104,9 @@ export function isRetryableBuildFailure(error) {
 export function filterForemanRequired(required) {
   const filtered = Object.create(null);
   for (const [block, count] of Object.entries(required || {})) {
-    const name = normalizeBlockName(block);
+    const name = normalizeBlockBaseName(block);
     if (FOREMAN_INVENTORY_EXEMPT.has(name)) continue;
-    filtered[name] = Number(count || 0);
+    filtered[name] = (filtered[name] || 0) + Number(count || 0);
   }
   return filtered;
 }
@@ -117,7 +118,7 @@ export function foremanBillOfMaterials(required, setblockCapable = true) {
 export function validateBillOfMaterials(required, available, setblockCapable = true) {
   const missing = [];
   for (const [block, count] of Object.entries(required || {})) {
-    const name = normalizeBlockName(block);
+    const name = normalizeBlockBaseName(block);
     const have = setblockCapable
       ? inventoryBlockCount(available, name)
       : Number(available?.[name] || 0);
@@ -200,7 +201,7 @@ export function sampleFootprintGround({
     let groundY = null;
     for (let y = searchTopY; y >= searchBottomY; y--) {
       const block = blockAt(wx, y, wz);
-      if (isSolidGroundBlock(block)) { groundY = y; break; }
+      if (isSolidGroundBlock(block, { wx, y, wz, cell })) { groundY = y; break; }
     }
     if (groundY === null) {
       missingCells.push(`${cell.dx},${cell.dz}`);
@@ -403,8 +404,8 @@ export function reconcileCompletedPlacements(plan, state = {}, blockNameAt) {
       kept.push(id);
       continue;
     }
-    const actual = normalizeBlockName(rawName);
-    if (actual === placement.block) {
+    const actual = normalizeBlockBaseName(rawName);
+    if (actual === normalizeBlockBaseName(placement.block)) {
       kept.push(id);
     } else {
       removed.push({ id, reason: `world has ${actual || 'unknown'}, expected ${placement.block}` });

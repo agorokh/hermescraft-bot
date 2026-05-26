@@ -75,8 +75,9 @@ function skillWasStopped(bot, stopGen) {
 // ── helpers ──────────────────────────────────────────────────────────
 
 function findInventoryItem(bot, itemName) {
-  const ln = itemName.toLowerCase();
-  return bot.inventory.items().find((i) => i.name === ln || i.displayName?.toLowerCase() === ln);
+  const ln = normalizeBlockBaseName(itemName);
+  return bot.inventory.items().find((i) =>
+    normalizeBlockBaseName(i.name) === ln || normalizeBlockBaseName(i.displayName) === ln);
 }
 
 function sleep(ms) {
@@ -175,10 +176,40 @@ function collectItemMatches(tossedItem, collectedEntity) {
   return got === want || got.endsWith(`/${want}`) || want.endsWith(`/${got}`);
 }
 
+function expectedBlockState(blockName) {
+  const normalized = normalizeBlockName(blockName);
+  const base = normalizeBlockBaseName(normalized);
+  const stateText = normalized.slice(base.length);
+  if (!/^\[[a-z0-9_=,/-]*\]$/.test(stateText)) return { base, properties: null };
+  const body = stateText.slice(1, -1);
+  if (!body) return { base, properties: {} };
+  const properties = Object.create(null);
+  for (const part of body.split(',')) {
+    const [key, value] = part.split('=');
+    if (!key || value == null) return { base, properties: null };
+    properties[key] = value;
+  }
+  return { base, properties };
+}
+
+function readbackProperties(readback) {
+  if (typeof readback?.getProperties === 'function') {
+    try { return readback.getProperties(); } catch {}
+  }
+  return readback?.properties || readback?._properties || null;
+}
+
 function blockAtMatches(bot, x, y, z, expected) {
   const readback = bot.blockAt(new Vec3(x, y, z));
   if (!readback) return false;
-  return normalizeBlockBaseName(readback.name) === normalizeBlockBaseName(expected);
+  const expectedState = expectedBlockState(expected);
+  if (normalizeBlockBaseName(readback.name) !== expectedState.base) return false;
+  if (!expectedState.properties) return true;
+  const actualProperties = readbackProperties(readback);
+  if (!actualProperties) return false;
+  return Object.entries(expectedState.properties).every(
+    ([key, value]) => String(actualProperties[key]) === value,
+  );
 }
 
 // Pick an adjacent solid block we can place against. Mindcraft's 6-face scan.
@@ -853,8 +884,15 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (!skipFoundation && useChatCommand) {
     try {
       const floorCells = computeFloorCells(blocks);
-      const botY = Math.floor(bot.entity?.position?.y ?? baseY);
-      const groundSearchTopY = Math.min(319, Math.max(baseY + 48, botY + 48));
+      const schematicBlocksByRelativePos = new Map(
+        blocks
+          .filter((b) => Array.isArray(b) && b.length >= 4)
+          .map(([dx, dy, dz, block]) => [
+            `${Math.floor(Number(dx))},${Math.floor(Number(dy))},${Math.floor(Number(dz))}`,
+            normalizeBlockBaseName(block),
+          ]),
+      );
+      const groundSearchTopY = Math.min(319, baseY + 48);
       const sample = sampleFootprintGround({
         blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)),
         floorCells,
@@ -862,12 +900,17 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         baseZ,
         searchTopY: groundSearchTopY,
         searchBottomY: Math.max(-64, baseY - 32),
-        isSolidGroundBlock: (block) => {
+        isSolidGroundBlock: (block, sampleCtx = {}) => {
           if (!block) return false;
           const bn = block.name || '';
           if (block.boundingBox !== 'block') return false;
           if (['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava'].includes(bn)) return false;
           if (bn.endsWith('_leaves')) return false;
+          if (sampleCtx.y >= baseY) {
+            const dy = sampleCtx.y - baseY;
+            const expected = schematicBlocksByRelativePos.get(`${sampleCtx.cell?.dx},${dy},${sampleCtx.cell?.dz}`);
+            if (expected && normalizeBlockBaseName(bn) === expected) return false;
+          }
           return true;
         },
       });
@@ -891,13 +934,13 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         fillBlock,
         maxFillDepth: 16,
       });
+      if (adjustedBaseY !== baseY) {
+        console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
+        baseY = adjustedBaseY;
+      }
       if (foundationResult.placements.length > MAX_FOUNDATION_PLACEMENTS) {
         console.log(`[build_schematic] foundation for "${name}" skipped: ${foundationResult.placements.length} blocks exceeds cap ${MAX_FOUNDATION_PLACEMENTS}`);
       } else {
-        if (adjustedBaseY !== baseY) {
-          console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
-          baseY = adjustedBaseY;
-        }
         foundationPlacements = foundationResult.placements;
         foundationStats = foundationResult.stats;
       }
@@ -1007,6 +1050,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (useChatCommand && foundationPlacements.length > 0) {
     for (const fp of foundationPlacements) {
       if (skillWasStopped(bot, stopGen)) break;
+      if (blockAtMatches(bot, fp.x, fp.y, fp.z, fp.block)) {
+        foundationPlaced++;
+        continue;
+      }
       try {
         const transport = sendSetblockCommand(bot, fp.x, fp.y, fp.z, fp.block);
         const outcome = await waitForSetblockOutcome(
@@ -1116,8 +1163,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       // Survival / non-op fallback. Requires the bot to have the block in
       // inventory AND an adjacent solid block to place against. Aerial
       // cells will fail here — that's the cost of not being op.
-      if (!findInventoryItem(bot, block)) {
-        missing.add(block);
+      const placeBlock = normalizeBlockBaseName(block);
+      if (!findInventoryItem(bot, placeBlock)) {
+        missing.add(placeBlock);
         failed++;
         if (buildState) {
           buildState = markPlacementFailed(buildState, placementForState, 'missing inventory');
@@ -1126,7 +1174,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         }
         continue;
       }
-      const r = await placeOne(bot, block, tx, ty, tz);
+      const r = await placeOne(bot, placeBlock, tx, ty, tz);
       if (r.ok) {
         placed++;
         if (buildState) {

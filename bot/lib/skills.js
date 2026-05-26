@@ -187,20 +187,22 @@ function blockAtMatches(bot, x, y, z, expected) {
 async function findResumeStateForOrigin(name, baseX, requestedBaseY, baseZ) {
   const candidates = new Set([requestedBaseY]);
   for (let y = requestedBaseY - 32; y <= requestedBaseY + 48; y++) candidates.add(y);
+  const statusPriority = { running: 3, partial: 3, paused_sentry: 2, done: 1 };
   let best = null;
   for (const candidateY of candidates) {
     const buildId = `${name}-${baseX}-${candidateY}-${baseZ}`;
     const state = await loadBuildState(buildStateFileForId(buildId));
+    const priority = statusPriority[state?.status] || 0;
     if (
       !state
       || state.name !== name
       || Math.floor(Number(state.origin?.x)) !== baseX
       || Math.floor(Number(state.origin?.z)) !== baseZ
-      || !['running', 'done', 'paused_sentry'].includes(state.status)
+      || priority === 0
     ) continue;
     const updatedAt = Number(state.updated_at || state.started_at || 0);
-    if (!best || updatedAt > best.updatedAt) {
-      best = { state, baseY: Math.floor(Number(state.origin?.y ?? candidateY)), updatedAt };
+    if (!best || priority > best.priority || (priority === best.priority && updatedAt > best.updatedAt)) {
+      best = { state, baseY: Math.floor(Number(state.origin?.y ?? candidateY)), priority, updatedAt };
     }
   }
   return best;
@@ -231,13 +233,19 @@ function findBuildOffBlock(bot, x, y, z) {
 // just works (the existing block becomes the drop).
 const LIQUID_BLOCKS = new Set(['water', 'lava']);
 const REPLACEABLE_BLOCKS = new Set([
-  'air', 'cave_air', 'void_air', 'water', 'lava',
+  'air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava',
   'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
   'dead_bush', 'seagrass', 'tall_seagrass',
   'dandelion', 'poppy', 'blue_orchid', 'allium', 'azure_bluet',
   'red_tulip', 'orange_tulip', 'white_tulip', 'pink_tulip',
   'oxeye_daisy', 'cornflower', 'lily_of_the_valley',
   'snow', 'vine', 'glow_lichen', 'hanging_roots',
+  'wither_rose', 'sunflower', 'lilac', 'rose_bush', 'peony',
+  'brown_mushroom', 'red_mushroom', 'oak_sapling', 'spruce_sapling',
+  'birch_sapling', 'jungle_sapling', 'acacia_sapling', 'dark_oak_sapling',
+  'mangrove_propagule', 'cherry_sapling', 'bamboo_sapling',
+  'nether_sprouts', 'crimson_roots', 'warped_roots', 'torchflower',
+  'pitcher_plant',
 ]);
 
 // Cache for the bot's op-status. Set lazily on first placeOne call; never
@@ -916,7 +924,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           if (!block) return false;
           const bn = block.name || '';
           if (block.boundingBox !== 'block') return false;
-          if (['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava', 'poppy'].includes(bn)) return false;
+          if (REPLACEABLE_BLOCKS.has(bn)) return false;
           if (bn.endsWith('_leaves')) return false;
           if (bn.endsWith('_log') || bn.endsWith('_wood') || bn.endsWith('_stem') || bn.endsWith('_hyphae')) return false;
           if (sampleCtx.y >= baseY) {

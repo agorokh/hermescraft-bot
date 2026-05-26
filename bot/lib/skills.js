@@ -910,9 +910,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           if (sampleCtx.y >= baseY) {
             const dy = sampleCtx.y - baseY;
             const expected = schematicBlocksByRelativePos.get(`${sampleCtx.cell?.dx},${dy},${sampleCtx.cell?.dz}`);
-            if (expected && normalizeBlockBaseName(bn) === expected) return false;
+            if (expected && bn === expected) return false;
             const columnBlocks = schematicBlocksByColumn.get(`${sampleCtx.cell?.dx},${sampleCtx.cell?.dz}`);
-            if (columnBlocks?.has(normalizeBlockBaseName(bn))) return false;
+            if (columnBlocks?.has(bn)) return false;
           }
           return true;
         },

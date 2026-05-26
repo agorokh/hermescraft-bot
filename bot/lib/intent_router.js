@@ -26,7 +26,7 @@
 
 import { extractKidName, extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
-import { findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, schematicBuildBaseY, pickTowerFootOffset } from './player_utils.js';
+import { explicitSchematicBaseY, findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, schematicBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
 import { hasCombatImperative, hasNegativeMovementRequest, hasPositiveMovementRequest } from './movement_requests.js';
 
@@ -238,12 +238,17 @@ const INTENTS = [
       const kidName = extractKidName(ctx.body);
       const buildX = Math.floor(p.x) + 2;
       const buildZ = Math.floor(p.z);
+      const explicitY = explicitSchematicBaseY(ctx.body);
+      const buildY = schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y);
       const schemBody = {
         name,
         x: buildX,
-        y: schematicBuildBaseY(bot, name, ctx.body, buildX, buildZ, p.y),
+        y: buildY,
         z: buildZ,
       };
+      if (explicitY !== null && explicitY === buildY && isAdvancedSchematicName(name)) {
+        schemBody.respect_explicit_base_y = true;
+      }
       if (kidName) schemBody.kid_name = kidName;
       const action = isAdvancedSchematicName(name) ? 'build_schematic_advanced' : 'build_schematic';
       return { action, body: schemBody };

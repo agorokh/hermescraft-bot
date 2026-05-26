@@ -194,6 +194,14 @@ export function sampleFootprintGround({
   if (typeof isSolidGroundBlock !== 'function') {
     throw new Error('sampleFootprintGround needs isSolidGroundBlock(block) callback');
   }
+  if (!Number.isFinite(searchTopY) || !Number.isFinite(searchBottomY)) {
+    throw new Error('sampleFootprintGround needs finite searchTopY/searchBottomY values');
+  }
+  const topY = Math.floor(searchTopY);
+  const bottomY = Math.floor(searchBottomY);
+  if (topY < bottomY) {
+    throw new Error('sampleFootprintGround searchTopY must be >= searchBottomY');
+  }
   const groundMap = new Map();
   const missingCells = [];
   let maxGroundY = -Infinity;
@@ -202,9 +210,9 @@ export function sampleFootprintGround({
     const wx = baseX + cell.dx;
     const wz = baseZ + cell.dz;
     let groundY = null;
-    for (let y = searchTopY; y >= searchBottomY; y--) {
+    for (let y = topY; y >= bottomY; y--) {
       const block = blockAt(wx, y, wz);
-      if (isSolidGroundBlock(block, { wx, y, wz, cell })) { groundY = y; break; }
+      if (isSolidGroundBlock(block, { x: wx, y, z: wz, wx, wz, cell, blockAt })) { groundY = y; break; }
     }
     if (groundY === null) {
       missingCells.push(`${cell.dx},${cell.dz}`);
@@ -243,6 +251,10 @@ export function generateFoundation({
 }) {
   const placements = [];
   const stats = { cellsFilled: 0, blocksAdded: 0, maxDepth: 0, capped: 0 };
+  const fillDepthLimit = Math.floor(Number(maxFillDepth));
+  if (!Number.isFinite(fillDepthLimit) || fillDepthLimit <= 0) {
+    return { placements, stats };
+  }
   for (const cell of floorCells) {
     const key = `${cell.dx},${cell.dz}`;
     const groundY = groundMap.get(key);
@@ -253,9 +265,9 @@ export function generateFoundation({
     const wz = baseZ + cell.dz;
     let fillFrom = groundY + 1;
     const requestedDepth = targetTop - groundY;
-    if (requestedDepth > maxFillDepth) {
+    if (requestedDepth > fillDepthLimit) {
       stats.capped++;
-      fillFrom = targetTop - maxFillDepth + 1;
+      fillFrom = targetTop - fillDepthLimit + 1;
     }
     for (let y = fillFrom; y <= targetTop; y++) {
       placements.push({

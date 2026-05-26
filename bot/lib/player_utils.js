@@ -51,7 +51,7 @@ function clampBuildBaseY(y) {
   return Math.min(MAX_BUILD_BASE_Y, Math.max(MIN_BUILD_BASE_Y, Math.floor(y)));
 }
 
-function isWoodLikeBlockName(name) {
+export function isWoodLikeBlockName(name) {
   return name.endsWith('_log')
     || name.endsWith('_wood')
     || name.endsWith('_stem')
@@ -75,7 +75,7 @@ function isSolidGround(block) {
     && !name.endsWith('_leaves');
 }
 
-function hasNearbyLeaves(bot, x, y, z) {
+export function hasNearbyLeaves(bot, x, y, z) {
   for (let dy = 0; dy <= 2; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {

@@ -1,5 +1,5 @@
-// Tests for terrain-aware schematic grounding — the fix for "tower splitting
-// in halves" / "build floating mid-air" symptoms.
+// Tests for terrain-aware schematic grounding — the fix for "tower splitting in
+// halves" / "build floating mid-air" symptoms.
 //
 // Verifies:
 //   1. computeFloorCells returns only dy=0 cells with a real block
@@ -70,7 +70,6 @@ test('resume reconciliation accepts base readback for stateful placements', () =
   const reconciled = reconcileCompletedPlacements(plan, state, () => 'oak_stairs');
   assert.deepEqual(reconciled.completed, state.completed);
 });
-
 // ── sampleFootprintGround ────────────────────────────────────────────────────
 
 function makeBlockAtFlat(groundY, blockName = 'grass_block') {
@@ -100,6 +99,8 @@ test('sampleFootprintGround samples every floor cell on flat ground', () => {
     { dx: 2, dz: 0 },
     { dx: 0, dz: 1 },
     { dx: 0, dz: 2 },
+    { dx: 3, dz: 1 },
+    { dx: 4, dz: 2 },
   ];
   const out = sampleFootprintGround({
     blockAt: makeBlockAtFlat(64),
@@ -110,7 +111,7 @@ test('sampleFootprintGround samples every floor cell on flat ground', () => {
     searchBottomY: 40,
     isSolidGroundBlock: isSolid,
   });
-  assert.equal(out.sampledCells, 5);
+  assert.equal(out.sampledCells, floorCells.length);
   assert.equal(out.maxGroundY, 64);
   assert.equal(out.minGroundY, 64);
   assert.deepEqual(out.missingCells, []);
@@ -118,6 +119,27 @@ test('sampleFootprintGround samples every floor cell on flat ground', () => {
   assert.equal(out.groundMap.get('2,0'), 64);
 });
 
+test('sampleFootprintGround rejects invalid scan ranges', () => {
+  assert.throws(() => sampleFootprintGround({
+    blockAt: makeBlockAtFlat(64),
+    floorCells: [{ dx: 0, dz: 0 }],
+    baseX: 0,
+    baseZ: 0,
+    searchTopY: Number.NaN,
+    searchBottomY: 40,
+    isSolidGroundBlock: isSolid,
+  }), /finite searchTopY/);
+
+  assert.throws(() => sampleFootprintGround({
+    blockAt: makeBlockAtFlat(64),
+    floorCells: [{ dx: 0, dz: 0 }],
+    baseX: 0,
+    baseZ: 0,
+    searchTopY: 40,
+    searchBottomY: 80,
+    isSolidGroundBlock: isSolid,
+  }), /searchTopY must be >= searchBottomY/);
+});
 test('sampleFootprintGround captures slope spread', () => {
   // Slope: ground rises from y=60 at dx=0 to y=70 at dx=10
   const floorCells = [
@@ -262,6 +284,20 @@ test('generateFoundation caps depth at maxFillDepth', () => {
   assert.equal(Math.max(...ys), 69);
 });
 
+test('generateFoundation skips fill when maxFillDepth is not positive', () => {
+  const { placements, stats } = generateFoundation({
+    floorCells: [{ dx: 0, dz: 0 }],
+    groundMap: new Map([['0,0', 60]]),
+    baseX: 0,
+    baseY: 70,
+    baseZ: 0,
+    fillBlock: 'stone',
+    maxFillDepth: 0,
+  });
+  assert.deepEqual(placements, []);
+  assert.equal(stats.cellsFilled, 0);
+  assert.equal(stats.blocksAdded, 0);
+});
 test('generateFoundation skips cells without ground sample', () => {
   const floorCells = [
     { dx: 0, dz: 0 },

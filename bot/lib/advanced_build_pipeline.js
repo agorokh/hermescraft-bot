@@ -15,6 +15,7 @@ export function buildStateFileForId(buildId) {
 }
 
 const AIR_BLOCKS = new Set(['air', 'cave_air', 'void_air']);
+const STATE_SUFFIX_RE = /^(\[]|\[[a-z0-9_]+=[a-z0-9_]+(,[a-z0-9_]+=[a-z0-9_]+)*\])$/;
 /** Blocks placeable via /setblock but not carried as stackable inventory. */
 const FOREMAN_INVENTORY_EXEMPT = new Set([
   'water', 'flowing_water', 'lava', 'flowing_lava', 'fire', 'soul_fire',
@@ -36,6 +37,68 @@ export function normalizeBlockName(name) {
   return String(name || '').toLowerCase().replace(/^minecraft:/, '');
 }
 
+export function normalizeBlockBaseName(name) {
+  const normalized = normalizeBlockName(name);
+  const stateStart = normalized.lastIndexOf('[');
+  if (stateStart === -1) return normalized;
+  const path = normalized.slice(0, stateStart);
+  const suffix = normalized.slice(stateStart);
+  if (
+    path.includes('[')
+    || !STATE_SUFFIX_RE.test(suffix)
+  ) return normalized;
+  return path;
+}
+
+function expectedBlockState(name) {
+  const normalized = normalizeBlockName(name);
+  const base = normalizeBlockBaseName(normalized);
+  const stateStart = normalized.lastIndexOf('[');
+  if (stateStart === -1) return { base, properties: null, invalid: false };
+  const suffix = normalized.slice(stateStart);
+  if (!STATE_SUFFIX_RE.test(suffix)) return { base, properties: null, invalid: true };
+  const body = suffix.slice(1, -1);
+  if (!body) return { base, properties: null, invalid: false };
+  const properties = Object.create(null);
+  for (const part of body.split(',')) {
+    const pair = part.split('=');
+    if (pair.length !== 2 || !pair[0] || !pair[1]) return { base, properties: null, invalid: true };
+    const [key, value] = pair;
+    properties[key] = value;
+  }
+  return { base, properties, invalid: false };
+}
+
+function readbackName(readback) {
+  if (typeof readback === 'string') return readback;
+  return readback?.name || null;
+}
+
+function readbackProperties(readback) {
+  if (typeof readback === 'string') {
+    const parsed = expectedBlockState(readback);
+    return parsed.invalid ? null : parsed.properties;
+  }
+  if (typeof readback?.getProperties === 'function') {
+    try { return readback.getProperties(); } catch {}
+  }
+  return readback?.properties || readback?._properties || null;
+}
+
+export function blockReadbackMatches(expected, readback) {
+  const actualName = readbackName(readback);
+  if (actualName == null || actualName === '') return null;
+  const expectedState = expectedBlockState(expected);
+  if (expectedState.invalid) return false;
+  if (normalizeBlockBaseName(actualName) !== expectedState.base) return false;
+  if (!expectedState.properties) return true;
+  const actualProperties = readbackProperties(readback);
+  if (!actualProperties) return false;
+  return Object.entries(expectedState.properties).every(
+    ([key, value]) => String(actualProperties[key]) === value,
+  );
+}
+
 export function normalizeSchematicBlocks(blocks) {
   return (blocks || [])
     .filter((b) => Array.isArray(b) && b.length >= 4)
@@ -50,14 +113,15 @@ export function normalizeSchematicBlocks(blocks) {
       && Number.isFinite(b.dy)
       && Number.isFinite(b.dz)
       && b.block
-      && !AIR_BLOCKS.has(b.block)
+      && !AIR_BLOCKS.has(normalizeBlockBaseName(b.block))
     );
 }
 
 export function buildBillOfMaterials(blocks) {
   const materials = Object.create(null);
   for (const { block } of normalizeSchematicBlocks(blocks)) {
-    materials[block] = (materials[block] || 0) + 1;
+    const baseBlock = normalizeBlockBaseName(block);
+    materials[baseBlock] = (materials[baseBlock] || 0) + 1;
   }
   return materials;
 }
@@ -65,7 +129,7 @@ export function buildBillOfMaterials(blocks) {
 export function inventoryCounts(items = []) {
   const counts = Object.create(null);
   for (const item of items || []) {
-    const name = normalizeBlockName(item?.name || item?.displayName);
+    const name = normalizeBlockBaseName(item?.name || item?.displayName);
     if (!name) continue;
     counts[name] = (counts[name] || 0) + Number(item.count || 0);
   }
@@ -73,7 +137,7 @@ export function inventoryCounts(items = []) {
 }
 
 export function inventoryBlockCount(available, block) {
-  const name = normalizeBlockName(block);
+  const name = normalizeBlockBaseName(block);
   let have = Number(available?.[name] || 0);
   for (const alias of INVENTORY_BLOCK_ALIASES[name] || []) {
     have += Number(available?.[alias] || 0);
@@ -93,9 +157,9 @@ export function isRetryableBuildFailure(error) {
 export function filterForemanRequired(required) {
   const filtered = Object.create(null);
   for (const [block, count] of Object.entries(required || {})) {
-    const name = normalizeBlockName(block);
+    const name = normalizeBlockBaseName(block);
     if (FOREMAN_INVENTORY_EXEMPT.has(name)) continue;
-    filtered[name] = Number(count || 0);
+    filtered[name] = (filtered[name] || 0) + Number(count || 0);
   }
   return filtered;
 }
@@ -106,8 +170,12 @@ export function foremanBillOfMaterials(required, setblockCapable = true) {
 
 export function validateBillOfMaterials(required, available, setblockCapable = true) {
   const missing = [];
+  const normalizedRequired = Object.create(null);
   for (const [block, count] of Object.entries(required || {})) {
-    const name = normalizeBlockName(block);
+    const name = normalizeBlockBaseName(block);
+    normalizedRequired[name] = (normalizedRequired[name] || 0) + Number(count || 0);
+  }
+  for (const [name, count] of Object.entries(normalizedRequired)) {
     const have = setblockCapable
       ? inventoryBlockCount(available, name)
       : Number(available?.[name] || 0);
@@ -143,7 +211,7 @@ export function computeFloorCells(blocks) {
   const cells = new Map(); // "dx,dz" -> { dx, dz, block }
   for (const b of normalized) {
     if (b.dy !== 0) continue;
-    if (!b.block || AIR_BLOCKS.has(b.block)) continue;
+    if (!b.block || AIR_BLOCKS.has(normalizeBlockBaseName(b.block))) continue;
     const key = `${b.dx},${b.dz}`;
     if (!cells.has(key)) cells.set(key, { dx: b.dx, dz: b.dz, block: b.block });
   }
@@ -183,9 +251,9 @@ export function sampleFootprintGround({
   if (!Number.isFinite(searchTopY) || !Number.isFinite(searchBottomY)) {
     throw new Error('sampleFootprintGround needs finite searchTopY/searchBottomY values');
   }
-  const topY = Math.floor(searchTopY);
-  const bottomY = Math.floor(searchBottomY);
-  if (topY < bottomY) {
+  searchTopY = Math.floor(searchTopY);
+  searchBottomY = Math.floor(searchBottomY);
+  if (searchTopY < searchBottomY) {
     throw new Error('sampleFootprintGround searchTopY must be >= searchBottomY');
   }
   const groundMap = new Map();
@@ -196,9 +264,9 @@ export function sampleFootprintGround({
     const wx = baseX + cell.dx;
     const wz = baseZ + cell.dz;
     let groundY = null;
-    for (let y = topY; y >= bottomY; y--) {
+    for (let y = searchTopY; y >= searchBottomY; y--) {
       const block = blockAt(wx, y, wz);
-      if (isSolidGroundBlock(block, { x: wx, y, z: wz, blockAt })) { groundY = y; break; }
+      if (isSolidGroundBlock(block, { wx, y, wz, cell })) { groundY = y; break; }
     }
     if (groundY === null) {
       missingCells.push(`${cell.dx},${cell.dz}`);
@@ -237,10 +305,8 @@ export function generateFoundation({
 }) {
   const placements = [];
   const stats = { cellsFilled: 0, blocksAdded: 0, maxDepth: 0, capped: 0 };
-  const fillDepthLimit = Math.floor(Number(maxFillDepth));
-  if (!Number.isFinite(fillDepthLimit) || fillDepthLimit <= 0) {
-    return { placements, stats };
-  }
+  const limit = Math.floor(Number(maxFillDepth));
+  maxFillDepth = Number.isFinite(limit) && limit > 0 ? limit : 16;
   for (const cell of floorCells) {
     const key = `${cell.dx},${cell.dz}`;
     const groundY = groundMap.get(key);
@@ -251,9 +317,9 @@ export function generateFoundation({
     const wz = baseZ + cell.dz;
     let fillFrom = groundY + 1;
     const requestedDepth = targetTop - groundY;
-    if (requestedDepth > fillDepthLimit) {
+    if (requestedDepth > maxFillDepth) {
       stats.capped++;
-      fillFrom = targetTop - fillDepthLimit + 1;
+      fillFrom = targetTop - maxFillDepth + 1;
     }
     for (let y = fillFrom; y <= targetTop; y++) {
       placements.push({
@@ -400,15 +466,16 @@ export function reconcileCompletedPlacements(plan, state = {}, blockNameAt) {
       removed.push({ id, reason: 'not in plan' });
       continue;
     }
-    const rawName = blockNameAt(placement.x, placement.y, placement.z);
-    if (rawName == null || rawName === '') {
+    const readback = blockNameAt(placement.x, placement.y, placement.z);
+    const matches = blockReadbackMatches(placement.block, readback);
+    if (matches == null) {
       kept.push(id);
       continue;
     }
-    const actual = normalizeBlockName(rawName);
-    if (actual === placement.block) {
+    if (matches) {
       kept.push(id);
     } else {
+      const actual = normalizeBlockBaseName(readbackName(readback));
       removed.push({ id, reason: `world has ${actual || 'unknown'}, expected ${placement.block}` });
     }
   }

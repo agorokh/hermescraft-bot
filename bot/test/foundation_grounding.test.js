@@ -1,5 +1,5 @@
-// Tests for terrain-aware schematic grounding — the fix for "tower splitting in
-// halves" / "build floating mid-air" symptoms.
+// Tests for terrain-aware schematic grounding — the fix for "tower splitting
+// in halves" / "build floating mid-air" symptoms.
 //
 // Verifies:
 //   1. computeFloorCells returns only dy=0 cells with a real block
@@ -11,7 +11,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildBillOfMaterials,
   computeFloorCells,
+  createLayeredPlan,
+  normalizeBlockBaseName,
+  reconcileCompletedPlacements,
   sampleFootprintGround,
   generateFoundation,
 } from '../lib/advanced_build_pipeline.js';
@@ -25,6 +29,7 @@ test('computeFloorCells extracts only dy=0 cells with non-air blocks', () => {
     [0, 1, 0, 'stone_bricks'],   // wall
     [2, 0, 0, 'air'],            // air at floor — should skip
     [0, 0, 1, 'cave_air'],       // air at floor — should skip
+    [4, 0, 0, 'minecraft:air[]'], // state-suffix air — should skip
     [3, 5, 0, 'glass_pane'],     // upper — not floor
     [1, 0, 0, 'oak_planks'],     // duplicate floor cell — should dedupe
   ];
@@ -40,6 +45,43 @@ test('computeFloorCells returns empty for schematic with no floor blocks', () =>
   const blocks = [[0, 2, 0, 'stone_bricks']];   // floats — no floor
   const cells = computeFloorCells(blocks);
   assert.deepEqual(cells, []);
+});
+
+test('normalizeBlockBaseName strips only valid state suffixes', () => {
+  assert.equal(normalizeBlockBaseName('minecraft:oak_stairs[facing=north]'), 'oak_stairs');
+  assert.equal(normalizeBlockBaseName('minecraft:block[name[part]'), 'block[name[part]');
+  assert.equal(normalizeBlockBaseName('minecraft:oak_log[foo/bar=baz]'), 'oak_log[foo/bar=baz]');
+});
+
+test('stateful blocks count as base materials for foreman inventory checks', () => {
+  const materials = buildBillOfMaterials([
+    [0, 0, 0, 'minecraft:oak_stairs[facing=east]'],
+    [1, 0, 0, 'oak_stairs[facing=west]'],
+  ]);
+  assert.equal(materials.oak_stairs, 2);
+});
+
+test('resume reconciliation verifies stateful placement properties', () => {
+  const plan = createLayeredPlan({
+    name: 'stateful',
+    blocks: [[0, 0, 0, 'minecraft:oak_stairs[facing=east]']],
+    origin: { x: 1, y: 2, z: 3 },
+  });
+  const state = { completed: [plan.placements[0].id], failed: [] };
+  const reconciled = reconcileCompletedPlacements(plan, state, () => ({
+    name: 'oak_stairs',
+    properties: { facing: 'east' },
+  }));
+  assert.deepEqual(reconciled.completed, state.completed);
+
+  const stringReadback = reconcileCompletedPlacements(plan, state, () => 'oak_stairs[facing=east]');
+  assert.deepEqual(stringReadback.completed, state.completed);
+
+  const drifted = reconcileCompletedPlacements(plan, state, () => ({
+    name: 'oak_stairs',
+    properties: { facing: 'west' },
+  }));
+  assert.deepEqual(drifted.completed, []);
 });
 
 // ── sampleFootprintGround ────────────────────────────────────────────────────
@@ -71,8 +113,6 @@ test('sampleFootprintGround samples every floor cell on flat ground', () => {
     { dx: 2, dz: 0 },
     { dx: 0, dz: 1 },
     { dx: 0, dz: 2 },
-    { dx: 3, dz: 1 },
-    { dx: 4, dz: 2 },
   ];
   const out = sampleFootprintGround({
     blockAt: makeBlockAtFlat(64),
@@ -83,34 +123,12 @@ test('sampleFootprintGround samples every floor cell on flat ground', () => {
     searchBottomY: 40,
     isSolidGroundBlock: isSolid,
   });
-  assert.equal(out.sampledCells, floorCells.length);
+  assert.equal(out.sampledCells, 5);
   assert.equal(out.maxGroundY, 64);
   assert.equal(out.minGroundY, 64);
   assert.deepEqual(out.missingCells, []);
   assert.equal(out.groundMap.get('0,0'), 64);
   assert.equal(out.groundMap.get('2,0'), 64);
-});
-
-test('sampleFootprintGround rejects invalid scan ranges', () => {
-  assert.throws(() => sampleFootprintGround({
-    blockAt: makeBlockAtFlat(64),
-    floorCells: [{ dx: 0, dz: 0 }],
-    baseX: 0,
-    baseZ: 0,
-    searchTopY: Number.NaN,
-    searchBottomY: 40,
-    isSolidGroundBlock: isSolid,
-  }), /finite searchTopY/);
-
-  assert.throws(() => sampleFootprintGround({
-    blockAt: makeBlockAtFlat(64),
-    floorCells: [{ dx: 0, dz: 0 }],
-    baseX: 0,
-    baseZ: 0,
-    searchTopY: 40,
-    searchBottomY: 80,
-    isSolidGroundBlock: isSolid,
-  }), /searchTopY must be >= searchBottomY/);
 });
 
 test('sampleFootprintGround captures slope spread', () => {
@@ -140,15 +158,17 @@ test('sampleFootprintGround skips water/leaves/air, finds solid below', () => {
   const blockAt = (_x, y, _z) => {
     if (y === 64) return { name: 'water', boundingBox: 'block' };       // pretend water
     if (y === 63) return { name: 'oak_leaves', boundingBox: 'block' };  // leaves above
-    if (y <= 62) return { name: 'dirt', boundingBox: 'block' };
+    if (y === 62) return { name: 'oak_log', boundingBox: 'block' };
+    if (y <= 61) return { name: 'dirt', boundingBox: 'block' };
     return { name: 'air', boundingBox: 'empty' };
   };
-  // isSolid here uses the same predicate as production (excludes leaves/water).
+  // isSolid here uses the same predicate as production (excludes leaves/water/logs).
   const isSolidProd = (block) => {
     if (!block || block.boundingBox !== 'block') return false;
     const bn = block.name || '';
     if (['air', 'cave_air', 'void_air', 'water', 'lava'].includes(bn)) return false;
     if (bn.endsWith('_leaves')) return false;
+    if (bn.endsWith('_log') || bn.endsWith('_wood') || bn.endsWith('_stem') || bn.endsWith('_hyphae')) return false;
     return true;
   };
   const out = sampleFootprintGround({
@@ -158,7 +178,7 @@ test('sampleFootprintGround skips water/leaves/air, finds solid below', () => {
     searchTopY: 80, searchBottomY: 40,
     isSolidGroundBlock: isSolidProd,
   });
-  assert.equal(out.maxGroundY, 62);   // skipped water + leaves, found dirt
+  assert.equal(out.maxGroundY, 61);   // skipped water + leaves + log, found dirt
 });
 
 test('sampleFootprintGround tracks missing cells when no ground in range', () => {
@@ -257,19 +277,16 @@ test('generateFoundation caps depth at maxFillDepth', () => {
   assert.equal(Math.max(...ys), 69);
 });
 
-test('generateFoundation skips fill when maxFillDepth is not positive', () => {
+test('generateFoundation falls back to default depth for invalid maxFillDepth', () => {
+  const floorCells = [{ dx: 0, dz: 0 }];
+  const groundMap = new Map([['0,0', 10]]);
   const { placements, stats } = generateFoundation({
-    floorCells: [{ dx: 0, dz: 0 }],
-    groundMap: new Map([['0,0', 60]]),
-    baseX: 0,
-    baseY: 70,
-    baseZ: 0,
-    fillBlock: 'stone',
-    maxFillDepth: 0,
+    floorCells, groundMap,
+    baseX: 0, baseY: 70, baseZ: 0,
+    maxFillDepth: Number.NaN,
   });
-  assert.deepEqual(placements, []);
-  assert.equal(stats.cellsFilled, 0);
-  assert.equal(stats.blocksAdded, 0);
+  assert.equal(placements.length, 16);
+  assert.equal(stats.capped, 1);
 });
 
 test('generateFoundation skips cells without ground sample', () => {

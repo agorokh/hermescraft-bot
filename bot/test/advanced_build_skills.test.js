@@ -396,8 +396,8 @@ test('build_schematic places terrain foundation before schematic blocks', async 
     const result = await actions.build_schematic({ name: 'well', x: 10, y: 64, z: 10 });
 
     assert.match(result.result, /Built schematic "well" at 10,67,10/);
-    const firstFoundation = commands.findIndex((line) => line.endsWith(' stone'));
-    const firstSchematic = commands.findIndex((line) => line.endsWith(' cobblestone'));
+    const firstFoundation = commands.findIndex((line) => /\s(?:minecraft:)?stone$/.test(line));
+    const firstSchematic = commands.findIndex((line) => /\s(?:minecraft:)?cobblestone$/.test(line));
     assert.ok(firstFoundation >= 0, `expected foundation commands, saw: ${commands.join(', ')}`);
     assert.ok(firstSchematic > firstFoundation, `expected foundation before schematic, saw: ${commands.join(', ')}`);
   });
@@ -426,6 +426,6 @@ test('build_schematic preserves pinned baseY and skip_foundation bypasses ground
       skip_foundation: true,
     });
     assert.match(skippedResult.result, /Built schematic "well" at 10,64,10/);
-    assert.equal(skipped.commands.some((line) => line.endsWith(' stone')), false);
+    assert.equal(skipped.commands.some((line) => /\s(?:minecraft:)?stone$/.test(line)), false);
   });
 });

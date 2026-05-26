@@ -31,8 +31,9 @@ import fs from 'fs';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { findPlayerEntity, hasNearbyLeaves, isWoodLikeBlockName, itemNameFromCollectEntity } from './player_utils.js';
+import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
 import {
+  blockReadbackMatches,
   buildStateFileForId,
   buildBillOfMaterials,
   computeFloorCells,
@@ -44,6 +45,7 @@ import {
   loadBuildState,
   markPlacementComplete,
   markPlacementFailed,
+  normalizeBlockBaseName,
   normalizeBlockName,
   pendingPlacements,
   reconcileCompletedPlacements,
@@ -54,6 +56,7 @@ import {
 } from './advanced_build_pipeline.js';
 
 const BUILD_STATE_SAVE_EVERY_N = 10;
+const MAX_FOUNDATION_PLACEMENTS = 4096;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -61,18 +64,6 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 
 // Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
 const SETBLOCK_CHAT_INTERVAL_MS = 150;
-const CLEAR_GROUND_SPACE_BLOCKS = new Set([
-  'air', 'cave_air', 'void_air', 'short_grass', 'tall_grass', 'grass', 'snow',
-  'fern', 'large_fern', 'dead_bush', 'dandelion', 'poppy', 'blue_orchid',
-  'allium', 'azure_bluet', 'red_tulip', 'orange_tulip', 'white_tulip',
-  'pink_tulip', 'oxeye_daisy', 'cornflower', 'lily_of_the_valley',
-  'wither_rose', 'sunflower', 'lilac', 'rose_bush', 'peony', 'brown_mushroom',
-  'red_mushroom', 'oak_sapling', 'spruce_sapling', 'birch_sapling',
-  'jungle_sapling', 'acacia_sapling', 'dark_oak_sapling', 'mangrove_propagule',
-  'cherry_sapling', 'bamboo_sapling', 'nether_sprouts', 'crimson_roots',
-  'warped_roots', 'torchflower', 'pitcher_plant',
-]);
-const NON_GROUND_BLOCKS = new Set(['air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava']);
 
 function captureStopGen(bot) {
   return bot._stopGeneration || 0;
@@ -85,28 +76,13 @@ function skillWasStopped(bot, stopGen) {
 // ── helpers ──────────────────────────────────────────────────────────
 
 function findInventoryItem(bot, itemName) {
-  const ln = itemName.toLowerCase();
-  return bot.inventory.items().find((i) => i.name === ln || i.displayName?.toLowerCase() === ln);
+  const ln = normalizeBlockBaseName(itemName);
+  return bot.inventory.items().find((i) =>
+    normalizeBlockBaseName(i.name) === ln || normalizeBlockBaseName(i.displayName) === ln);
 }
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-function isClearGroundSpaceBlock(block) {
-  if (!block) return true;
-  const name = block.name || '';
-  if (['water', 'lava', 'flowing_water', 'flowing_lava'].includes(name)) return false;
-  return CLEAR_GROUND_SPACE_BLOCKS.has(name) || block.boundingBox !== 'block';
-}
-
-function isFoundationGroundBlock(bot, block, x, y, z) {
-  const name = block?.name || '';
-  if (!block || block.boundingBox !== 'block') return false;
-  if (NON_GROUND_BLOCKS.has(name) || CLEAR_GROUND_SPACE_BLOCKS.has(name) || name.endsWith('_leaves')) return false;
-  const above = bot.blockAt(new Vec3(x, y + 1, z));
-  if (!isClearGroundSpaceBlock(above)) return false;
-  return !isWoodLikeBlockName(name) || !hasNearbyLeaves(bot, x, y, z);
 }
 
 function paperConsoleFifo() {
@@ -137,14 +113,35 @@ function sendServerCommand(command) {
   }
 }
 
-function safeSetblockCommand(x, y, z, block) {
+// Vanilla 1.21 /setblock block argument grammar:
+//   namespace:path[state1=v1,state2=v2,...]
+// We allow the optional state suffix so stairs/slabs/logs/doors keep their
+// orientation. NBT compounds ({...}) are intentionally NOT permitted — they
+// require richer escaping and aren't needed for visible architecture.
+// Security: console FIFO runs as op-level ServerCommandSender. A bare \n in
+// the block string would inject a SECOND console command (eg. /op or /stop),
+// so we reject every CR/LF/control char before the regex even runs.
+// Bracket body is `*` (zero-or-more) so `minecraft:air[]` and other empty
+// state-blocks from Sponge palettes are accepted. Paper accepts an empty
+// bracket pair the same as no bracket at all.
+const STATE_SUFFIX_PATTERN = '\\[]|\\[[a-z0-9_]+=[a-z0-9_]+(,[a-z0-9_]+=[a-z0-9_]+)*\\]';
+const BLOCK_NAME_RE = new RegExp(`^[a-z0-9_.-]+:[a-z0-9_./-]+(${STATE_SUFFIX_PATTERN})?$`);
+
+export function safeSetblockCommand(x, y, z, block) {
   const rawCoords = [x, y, z];
   if (rawCoords.some((value) => value == null || value === '' || typeof value === 'boolean')) {
     throw new Error('Unsafe setblock command arguments');
   }
   const coords = rawCoords.map((value) => Number(value));
-  const blockName = String(block || '').trim();
-  if (!coords.every(Number.isInteger) || !/^[a-z0-9_:-]+$/i.test(blockName)) {
+  let blockName = String(block || '').trim().toLowerCase();
+  // Auto-prefix the default namespace so legacy callers (e.g. older
+  // converters that emit `oak_stairs` without `minecraft:`) keep working.
+  if (blockName && !blockName.includes(':')) blockName = `minecraft:${blockName}`;
+  // Strip control chars (newline = console-injection vector).
+  if (/[\x00-\x1f\x7f]/.test(blockName)) {
+    throw new Error('Unsafe setblock command arguments');
+  }
+  if (!coords.every(Number.isInteger) || !BLOCK_NAME_RE.test(blockName)) {
     throw new Error('Unsafe setblock command arguments');
   }
   return `setblock ${coords[0]} ${coords[1]} ${coords[2]} ${blockName}`;
@@ -183,8 +180,7 @@ function collectItemMatches(tossedItem, collectedEntity) {
 
 function blockAtMatches(bot, x, y, z, expected) {
   const readback = bot.blockAt(new Vec3(x, y, z));
-  if (!readback) return false;
-  return normalizeBlockName(readback.name) === normalizeBlockName(expected);
+  return blockReadbackMatches(expected, readback) === true;
 }
 
 // Pick an adjacent solid block we can place against. Mindcraft's 6-face scan.
@@ -212,13 +208,19 @@ function findBuildOffBlock(bot, x, y, z) {
 // just works (the existing block becomes the drop).
 const LIQUID_BLOCKS = new Set(['water', 'lava']);
 const REPLACEABLE_BLOCKS = new Set([
-  'air', 'cave_air', 'void_air', 'water', 'lava',
+  'air', 'cave_air', 'void_air', 'water', 'lava', 'flowing_water', 'flowing_lava',
   'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
   'dead_bush', 'seagrass', 'tall_seagrass',
   'dandelion', 'poppy', 'blue_orchid', 'allium', 'azure_bluet',
   'red_tulip', 'orange_tulip', 'white_tulip', 'pink_tulip',
   'oxeye_daisy', 'cornflower', 'lily_of_the_valley',
   'snow', 'vine', 'glow_lichen', 'hanging_roots',
+  'wither_rose', 'sunflower', 'lilac', 'rose_bush', 'peony',
+  'brown_mushroom', 'red_mushroom', 'oak_sapling', 'spruce_sapling',
+  'birch_sapling', 'jungle_sapling', 'acacia_sapling', 'dark_oak_sapling',
+  'mangrove_propagule', 'cherry_sapling', 'bamboo_sapling',
+  'nether_sprouts', 'crimson_roots', 'warped_roots', 'torchflower',
+  'pitcher_plant',
 ]);
 
 // Cache for the bot's op-status. Set lazily on first placeOne call; never
@@ -827,6 +829,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // baseY is `let` because terrain-aware grounding may adjust it below to
   // sit on the highest sampled ground under the schematic footprint.
   let baseY = requestedBaseY;
+  const buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
+  const stateFile = buildStateFileForId(buildId);
   const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
   const centerX = baseX + Math.floor(fw / 2);
   const centerZ = baseZ + Math.floor(fl / 2);
@@ -842,59 +846,66 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const useChatCommand = await detectSetblockAuth(bot);
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
   const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
-  const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
   const respectExplicitBaseY = bodyFlagEnabled(bodyArgs.respect_explicit_base_y, false);
-  const buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
-  const stateFile = buildStateFileForId(buildId);
-  let savedState = null;
-  if (resumeEnabled) {
-    savedState = await loadBuildState(stateFile);
+  let savedState = resumeEnabled ? await loadBuildState(stateFile) : null;
+  if (savedState && savedState.build_id !== buildId) {
+    savedState = null;
+  }
+  if (savedState && Number.isFinite(Number(savedState.origin?.y))) {
+    const savedBaseY = Math.floor(Number(savedState.origin.y));
+    if (savedBaseY !== baseY) {
+      console.log(`[build_schematic] resume state for "${name}" pins baseY: caller=${baseY} → saved=${savedBaseY}`);
+      baseY = savedBaseY;
+    }
   }
 
   // ── GROUNDING & FOUNDATION ────────────────────────────────────────────────
   // The schematic's floor (dy=0) cells must sit on solid ground or the build
   // looks "split in halves" (some buried in a hill, others floating in air).
-  // Sample the actual terrain under the entire footprint and:
+  // In /setblock mode, sample the actual terrain under the footprint and:
   //   (1) override baseY to maxGroundY+1 so nothing in the schematic is buried
   //   (2) generate foundation cells filling the gap from terrain to baseY-1
   //       for every floor cell where the ground is below the build floor
   // This grounds builds on real landscape — hills, valleys, slopes.
-  // Skipped for physical placement, explicit skip requests, aerial schematics,
-  // and resume attempts that already have a saved origin/foundation plan.
+  // Skipped only when the brain explicitly sets `skip_foundation: true`
+  // (e.g. sky_bridge intentionally floats) or when only physical placement is
+  // available, because physical mode cannot cheaply backfill terrain supports.
   let foundationPlacements = [];
   let foundationStats = null;
-  const skipFoundation = !useChatCommand
-    || bodyFlagEnabled(bodyArgs.skip_foundation, false)
+  const skipFoundation = bodyFlagEnabled(bodyArgs.skip_foundation, false)
     || name === 'sky_bridge';   // sky_bridge is the canonical aerial schematic
-  const resumingBuildState = savedState?.build_id === buildId && Number.isFinite(savedState?.origin?.y);
-  if (resumingBuildState) {
-    baseY = Math.floor(savedState.origin.y);
-    foundationPlacements = Array.isArray(savedState.foundation_placements)
-      ? savedState.foundation_placements
-      : [];
-    foundationStats = savedState.foundation_stats || null;
-  } else if (!skipFoundation) {
+  if (!skipFoundation && useChatCommand) {
     try {
       const floorCells = computeFloorCells(blocks);
+      const completedCoords = new Set((savedState?.completed || []).map((id) => String(id).split(':')[0]));
+      const groundSearchTopY = Math.min(319, baseY + 48);
       const sample = sampleFootprintGround({
         blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)),
         floorCells,
         baseX,
         baseZ,
-        searchTopY: Math.min(319, baseY + 32),
+        searchTopY: groundSearchTopY,
         searchBottomY: Math.max(-64, baseY - 32),
-        isSolidGroundBlock: (block, pos) => isFoundationGroundBlock(bot, block, pos.x, pos.y, pos.z),
+        isSolidGroundBlock: (block, sampleCtx = {}) => {
+          if (!block) return false;
+          const bn = block.name || '';
+          if (block.boundingBox !== 'block') return false;
+          if (REPLACEABLE_BLOCKS.has(bn)) return false;
+          if (bn.endsWith('_leaves')) return false;
+          if (bn.endsWith('_log') || bn.endsWith('_wood') || bn.endsWith('_stem') || bn.endsWith('_hyphae')) return false;
+          if (sampleCtx.y >= baseY) {
+            if (completedCoords.has(`${sampleCtx.wx},${sampleCtx.y},${sampleCtx.wz}`)) return false;
+          }
+          return true;
+        },
       });
       // If we found ground under most cells, retarget baseY to the highest
       // ground +1. This prevents the schematic from being buried into a hill.
       // Tolerate up to half the footprint having no ground (e.g. cliff edges)
       // before falling back to the caller's baseY.
-      if (!respectExplicitBaseY && sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
-        const adjustedBaseY = sample.maxGroundY + 1;
-        if (adjustedBaseY !== baseY) {
-          console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
-          baseY = adjustedBaseY;
-        }
+      let adjustedBaseY = baseY;
+      if (!savedState && !respectExplicitBaseY && sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
+        adjustedBaseY = sample.maxGroundY + 1;
       }
       // After potential Y adjustment, generate foundation under the schematic.
       // Foundation block: use stone for natural builds, dirt_shelter keeps dirt.
@@ -903,13 +914,21 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         floorCells,
         groundMap: sample.groundMap,
         baseX,
-        baseY,
+        baseY: adjustedBaseY,
         baseZ,
         fillBlock,
         maxFillDepth: 16,
       });
-      foundationPlacements = foundationResult.placements;
-      foundationStats = foundationResult.stats;
+      if (foundationResult.placements.length > MAX_FOUNDATION_PLACEMENTS) {
+        console.log(`[build_schematic] foundation for "${name}" skipped: ${foundationResult.placements.length} blocks exceeds cap ${MAX_FOUNDATION_PLACEMENTS}`);
+      } else {
+        if (adjustedBaseY !== baseY) {
+          console.log(`[build_schematic] terrain-aware baseY for "${name}": caller=${baseY} → adjusted=${adjustedBaseY} (maxGround=${sample.maxGroundY}, minGround=${sample.minGroundY}, spread=${sample.maxGroundY - sample.minGroundY}, sampled=${sample.sampledCells}/${floorCells.length})`);
+          baseY = adjustedBaseY;
+        }
+        foundationPlacements = foundationResult.placements;
+        foundationStats = foundationResult.stats;
+      }
       if (foundationStats && foundationStats.blocksAdded > 0) {
         console.log(`[build_schematic] foundation for "${name}": ${foundationStats.blocksAdded} ${fillBlock} blocks across ${foundationStats.cellsFilled} cells (max depth ${foundationStats.maxDepth}, capped ${foundationStats.capped})`);
       }
@@ -930,10 +949,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     await saveBuildState(buildState, stateFile);
     placementsSinceSave = 0;
   };
+  const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
   if (resumeEnabled && savedState?.build_id === buildId && savedState?.status === 'done') {
     const verifiedState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
-      const block = bot.blockAt(new Vec3(wx, wy, wz));
-      return block?.name || null;
+      return bot.blockAt(new Vec3(wx, wy, wz));
     });
     const doneCount = verifiedState.completed?.length || 0;
     if (doneCount >= buildPlan.totalBlocks) {
@@ -965,16 +984,13 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (bodyArgs.record_state === true || resumeEnabled) {
     if (resumingBuild) {
       buildState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
-        const block = bot.blockAt(new Vec3(wx, wy, wz));
-        return block?.name || null;
+        return bot.blockAt(new Vec3(wx, wy, wz));
       });
     } else {
       buildState = {
         ...createBuildState(buildPlan),
         build_id: buildId,
         requested_origin: { x: baseX, y: requestedBaseY, z: baseZ },
-        foundation_placements: foundationPlacements,
-        foundation_stats: foundationStats,
       };
     }
     await persistBuildState(true);
@@ -986,6 +1002,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   let unverified = 0;
   let foundationPlaced = 0;
   let foundationFailed = 0;
+  let foundationUnverified = 0;
   const missing = new Set();
   const totalPlacedSoFar = () => (buildState ? (buildState.completed?.length || 0) : placed);
   try {
@@ -1010,6 +1027,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (useChatCommand && foundationPlacements.length > 0) {
     for (const fp of foundationPlacements) {
       if (skillWasStopped(bot, stopGen)) break;
+      if (blockAtMatches(bot, fp.x, fp.y, fp.z, fp.block)) {
+        foundationPlaced++;
+        continue;
+      }
       try {
         const transport = sendSetblockCommand(bot, fp.x, fp.y, fp.z, fp.block);
         const outcome = await waitForSetblockOutcome(
@@ -1017,8 +1038,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           { x: fp.x, y: fp.y, z: fp.z, block: fp.block },
           transport === 'console_fifo' ? 300 : SETBLOCK_CHAT_INTERVAL_MS + 50,
         );
-        if (outcome.ok === true || (outcome.ok === null && trustedSetblock)) {
+        if (outcome.ok === true) {
           foundationPlaced++;
+        } else if (outcome.ok === null) {
+          foundationUnverified++;
         } else {
           foundationFailed++;
         }
@@ -1026,7 +1049,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         foundationFailed++;
       }
     }
-    console.log(`[build_schematic] foundation phase: ${foundationPlaced}/${foundationPlacements.length} placed, ${foundationFailed} failed`);
+    console.log(`[build_schematic] foundation phase: ${foundationPlaced}/${foundationPlacements.length} placed, ${foundationFailed} failed, ${foundationUnverified} unverified`);
   }
 
   const sorted = buildState
@@ -1041,7 +1064,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     // Skip explicit air cells — schematic authors sometimes encode them as
     // "negative space" placeholders.  /setblock to air is a no-op crash
     // hazard; physical placeBlock just no-ops.
-    if (!block || block === 'air' || block === 'cave_air' || block === 'void_air') continue;
+    if (!block || ['air', 'cave_air', 'void_air'].includes(normalizeBlockBaseName(block))) continue;
     const tx = baseX + dx, ty = baseY + dy, tz = baseZ + dz;
     const placementForState = { id: `${tx},${ty},${tz}:${normalizeBlockName(block)}` };
 
@@ -1117,8 +1140,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       // Survival / non-op fallback. Requires the bot to have the block in
       // inventory AND an adjacent solid block to place against. Aerial
       // cells will fail here — that's the cost of not being op.
-      if (!findInventoryItem(bot, block)) {
-        missing.add(block);
+      const placeBlock = normalizeBlockBaseName(block);
+      if (!findInventoryItem(bot, placeBlock)) {
+        missing.add(placeBlock);
         failed++;
         if (buildState) {
           buildState = markPlacementFailed(buildState, placementForState, 'missing inventory');
@@ -1127,7 +1151,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         }
         continue;
       }
-      const r = await placeOne(bot, block, tx, ty, tz);
+      const r = await placeOne(bot, placeBlock, tx, ty, tz);
       if (r.ok) {
         placed++;
         if (buildState) {
@@ -1156,8 +1180,12 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
 
   const missingStr = missing.size > 0 ? ` Missing materials: ${[...missing].join(', ')}.` : '';
   const unverifiedStr = unverified > 0 ? ` ${unverified} cells unverified (chunk unloaded).` : '';
-  const foundationStr = foundationPlaced > 0
-    ? ` Foundation: ${foundationPlaced} blocks filled under build to ground it (depth ${foundationStats?.maxDepth || '?'}).`
+  const foundationAttempts = foundationPlaced + foundationFailed + foundationUnverified;
+  const foundationStr = foundationAttempts > 0
+    ? ` Foundation: ${foundationPlaced}/${foundationPlacements.length} blocks verified under build`
+      + `${foundationFailed > 0 ? `, ${foundationFailed} failed` : ''}`
+      + `${foundationUnverified > 0 ? `, ${foundationUnverified} unverified` : ''}`
+      + `${foundationPlaced > 0 ? ` (depth ${foundationStats?.maxDepth || '?'})` : ''}.`
     : '';
   const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
   const total = buildPlan.totalBlocks;

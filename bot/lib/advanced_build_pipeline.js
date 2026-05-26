@@ -244,6 +244,14 @@ export function sampleFootprintGround({
   if (typeof isSolidGroundBlock !== 'function') {
     throw new Error('sampleFootprintGround needs isSolidGroundBlock(block) callback');
   }
+  if (!Number.isFinite(searchTopY) || !Number.isFinite(searchBottomY)) {
+    throw new Error('sampleFootprintGround needs finite searchTopY/searchBottomY values');
+  }
+  searchTopY = Math.floor(searchTopY);
+  searchBottomY = Math.floor(searchBottomY);
+  if (searchTopY < searchBottomY) {
+    throw new Error('sampleFootprintGround searchTopY must be >= searchBottomY');
+  }
   const groundMap = new Map();
   const missingCells = [];
   let maxGroundY = -Infinity;
@@ -293,6 +301,11 @@ export function generateFoundation({
 }) {
   const placements = [];
   const stats = { cellsFilled: 0, blocksAdded: 0, maxDepth: 0, capped: 0 };
+  const limit = Math.floor(Number(maxFillDepth));
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return { placements, stats };
+  }
+  maxFillDepth = limit;
   for (const cell of floorCells) {
     const key = `${cell.dx},${cell.dz}`;
     const groundY = groundMap.get(key);

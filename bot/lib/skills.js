@@ -184,30 +184,6 @@ function blockAtMatches(bot, x, y, z, expected) {
   return blockReadbackMatches(expected, readback) === true;
 }
 
-async function findResumeStateForOrigin(name, baseX, requestedBaseY, baseZ) {
-  const candidates = new Set([requestedBaseY]);
-  for (let y = requestedBaseY - 32; y <= requestedBaseY + 48; y++) candidates.add(y);
-  const statusPriority = { running: 3, partial: 3, paused_sentry: 2, done: 1 };
-  let best = null;
-  for (const candidateY of candidates) {
-    const buildId = `${name}-${baseX}-${candidateY}-${baseZ}`;
-    const state = await loadBuildState(buildStateFileForId(buildId));
-    const priority = statusPriority[state?.status] || 0;
-    if (
-      !state
-      || state.name !== name
-      || Math.floor(Number(state.origin?.x)) !== baseX
-      || Math.floor(Number(state.origin?.z)) !== baseZ
-      || priority === 0
-    ) continue;
-    const updatedAt = Number(state.updated_at || state.started_at || 0);
-    if (!best || priority > best.priority || (priority === best.priority && updatedAt > best.updatedAt)) {
-      best = { state, baseY: Math.floor(Number(state.origin?.y ?? candidateY)), priority, updatedAt };
-    }
-  }
-  return best;
-}
-
 // Pick an adjacent solid block we can place against. Mindcraft's 6-face scan.
 function findBuildOffBlock(bot, x, y, z) {
   const faces = [
@@ -854,6 +830,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // baseY is `let` because terrain-aware grounding may adjust it below to
   // sit on the highest sampled ground under the schematic footprint.
   let baseY = requestedBaseY;
+  const buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
+  const stateFile = buildStateFileForId(buildId);
   const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
   const centerX = baseX + Math.floor(fw / 2);
   const centerZ = baseZ + Math.floor(fl / 2);
@@ -870,13 +848,13 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
   const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
   const respectExplicitBaseY = bodyFlagEnabled(bodyArgs.respect_explicit_base_y, false);
-  const resumeMatch = resumeEnabled
-    ? await findResumeStateForOrigin(name, baseX, baseY, baseZ)
-    : null;
-  let savedState = resumeMatch?.state || null;
-  if (resumeMatch && resumeMatch.baseY !== baseY) {
-    console.log(`[build_schematic] resume state for "${name}" pins baseY: caller=${baseY} → saved=${resumeMatch.baseY}`);
-    baseY = resumeMatch.baseY;
+  let savedState = resumeEnabled ? await loadBuildState(stateFile) : null;
+  if (savedState?.build_id === buildId && Number.isFinite(Number(savedState.origin?.y))) {
+    const savedBaseY = Math.floor(Number(savedState.origin.y));
+    if (savedBaseY !== baseY) {
+      console.log(`[build_schematic] resume state for "${name}" pins baseY: caller=${baseY} → saved=${savedBaseY}`);
+      baseY = savedBaseY;
+    }
   }
 
   // ── GROUNDING & FOUNDATION ────────────────────────────────────────────────
@@ -977,11 +955,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     }
   }
 
-  // buildId uses the FINAL (terrain-adjusted) baseY so resume state files match
-  // actual placement, not the kid's pre-adjustment position.
-  const buildId = `${name}-${baseX}-${baseY}-${baseZ}`;
-  const stateFile = buildStateFileForId(buildId);
-
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
   let buildState = null;
   let placementsSinceSave = 0;
@@ -993,9 +966,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     placementsSinceSave = 0;
   };
   const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
-  if (resumeEnabled && !savedState) {
-    savedState = await loadBuildState(stateFile);
-  }
   if (resumeEnabled && savedState?.build_id === buildId && savedState?.status === 'done') {
     const verifiedState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
       return bot.blockAt(new Vec3(wx, wy, wz));
@@ -1033,7 +1003,11 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         return bot.blockAt(new Vec3(wx, wy, wz));
       });
     } else {
-      buildState = createBuildState(buildPlan);
+      buildState = {
+        ...createBuildState(buildPlan),
+        build_id: buildId,
+        requested_origin: { x: baseX, y: requestedBaseY, z: baseZ },
+      };
     }
     await persistBuildState(true);
   }

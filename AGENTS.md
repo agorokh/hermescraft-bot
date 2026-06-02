@@ -7,6 +7,7 @@
 - Never change CI workflows or checks just to make failures pass; fix in-scope code or report back.
 - Validate Bugbot and similar bot review findings before acting; only fix valid issues and explain when disagreeing.
 - Run local verification green before pushing PR fixes (`bot/` tests and syntax check).
+- When reporting task results, be brief and omit explicit "no follow-ups needed" disclaimers.
 
 ## Learned Workspace Facts
 
@@ -18,3 +19,4 @@
 - PR review automation commonly includes CodeRabbit, Cursor Bugbot, Codex/Gemini, and Sourcery (often rate-limited or skipped).
 - Workspace may start without a checkout; clone the relevant PR branch from GitHub when needed.
 - Parent monorepo `hermescraft` vendors this repo at `vendor/hermescraft`.
+- `scripts/post_merge_sync.sh` is absent from this repo; the parent `hermescraft` script targets its own repo and is not a bot-repo substitute.

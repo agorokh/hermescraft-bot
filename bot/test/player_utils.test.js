@@ -89,6 +89,10 @@ test('findPlayerEntity ignores null roster and entity entries', () => {
   assert.equal(findPlayerEntity(bot, 'DanceO3677'), entity);
 });
 
+test('findPlayerEntity rejects empty normalized player names', () => {
+  assert.equal(findPlayerEntity({ username: 'Rosie', players: {}, entities: {} }, '.'), null);
+});
+
 test('findPlayerEntity matches bare player roster names from Floodgate-prefixed input', () => {
   const entity = { username: 'DanceO3677', type: 'player' };
   const bot = {

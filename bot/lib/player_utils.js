@@ -38,6 +38,7 @@ export function playerNameMatchesResolvedCollector(collector, requested, resolve
 export function findPlayerEntity(bot, name) {
   if (!bot || !name) return null;
   const lname = normalizePlayerName(name);
+  if (!lname) return null;
   const rosterEntries = Object.entries(bot.players || {})
     .filter(([n]) => !playerNameExactMatch(n, bot.username));
   for (const [n, p] of rosterEntries) {

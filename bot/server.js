@@ -3074,6 +3074,7 @@ const ACTIONS = {
     }
     const has_irt = replyTo != null;  // loose: catches both null + undefined
     let voiceTurn = null;
+    let blockedVoiceReply = null;
     if (has_irt && _pendingVoiceTurns.has(replyTo)) {
       voiceTurn = _pendingVoiceTurns.get(replyTo);  // case A
     } else if (!skip_voice_autocorrelate && !has_irt && !String(message).trimStart().startsWith('/')) {
@@ -3093,16 +3094,22 @@ const ACTIONS = {
       const oldest = commandQueue
         .filter(c => c.status === 'pending')
         .sort((a, b) => a.time - b.time)[0];
-      if (oldest && oldest.source === 'voice'
-          && _pendingVoiceTurns.has(oldest.id)) {
+      if (oldest && oldest.source === 'voice') {
         const turn = _pendingVoiceTurns.get(oldest.id);
         const dispatchTs = turn?.dispatched_ts;
         if (dispatchTs && (now - dispatchTs) <= VOICE_AUTOCORRELATE_MS) {
           voiceTurn = turn;
+        } else {
+          let reason = 'voice turn not claimed';
+          if (!turn) reason = 'voice routing state missing';
+          else if (dispatchTs) reason = 'voice autocorrelate window expired';
+          blockedVoiceReply = {
+            id: oldest.id,
+            reason,
+          };
         }
       }
-      // Otherwise (oldest is a chat turn OR no pending OR voice not yet
-      // dispatched OR voice age past window): fall through to bot.chat().
+      // Otherwise, oldest is a chat turn or no pending turn: fall through to bot.chat().
     }
     if (voiceTurn) {
       const qEntry = commandQueue.find(c => c.id === voiceTurn.id);
@@ -3130,6 +3137,12 @@ const ACTIONS = {
       try { voiceTurn.resolve?.({ ok: true, reply: message, in_reply_to: voiceTurn.id }); } catch (e) { log(`[voice] resolver throw: ${e.message}`); }
       log(`[voice→] (id=${voiceTurn.id}, kid=${voiceTurn.kid}) ${message.slice(0, 80)}`);
       return { result: `Spoke to ${voiceTurn.kid} via voice (id=${voiceTurn.id})` };
+    }
+    if (blockedVoiceReply) {
+      log(`[voice✗] (id=${blockedVoiceReply.id}) ambiguous chat reply while ${blockedVoiceReply.reason} — dropped fail-closed`);
+      const err = new Error(`Voice turn ${blockedVoiceReply.id} is pending but ${blockedVoiceReply.reason}; reply dropped fail-closed.`);
+      err.statusCode = 409;
+      throw err;
     }
     if (has_irt) {
       const qEntry = commandQueue.find((c) => c.id === replyTo || String(c.id) === String(replyTo));
@@ -4326,6 +4339,13 @@ const httpServer = http.createServer(async (req, res) => {
         }
         const kid = String(body.kid || body.from || 'voice').trim().slice(0, 32) || 'voice';
         const character = String(body.character || config.mc.username).trim().slice(0, 32) || config.mc.username;
+        const rawSpeakUrl = body.speak_url || body.speakUrl || VOICE_SPEAK_URL;
+        let speakUrl;
+        try {
+          speakUrl = resolveVoiceSpeakUrl(rawSpeakUrl);
+        } catch (e) {
+          return respond(res, 400, { ok: false, error: 'invalid_speak_url', detail: e?.message || String(e) });
+        }
         const id = nextEnvelopeId();
         const turnId = String(body.turn_id || body.turnId || id).trim().slice(0, 80) || String(id);
         const ts = Date.now();
@@ -4352,7 +4372,7 @@ const httpServer = http.createServer(async (req, res) => {
           ts,
           dispatched_ts: null,
           delivery: 'sidecar',
-          speak_url: body.speak_url || body.speakUrl || VOICE_SPEAK_URL,
+          speak_url: speakUrl,
           timer,
         });
         return respond(res, 202, { ok: true, id, turn_id: turnId, source: 'voice', delivery: 'sidecar' });

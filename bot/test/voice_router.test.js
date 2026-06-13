@@ -237,7 +237,7 @@ test('read-only commands peeks do not arm voice auto-correlation', async () => {
     const { response: peekChatResponse } = await postJson(`http://127.0.0.1:${apiPort}/action/chat`, {
       message: 'This should not be spoken yet.',
     });
-    assert.equal(peekChatResponse.status, 503);
+    assert.equal(peekChatResponse.status, 409);
     assert.equal(messages.length, 0);
 
     await fetch(`http://127.0.0.1:${apiPort}/commands?claim=1`);
@@ -251,5 +251,26 @@ test('read-only commands peeks do not arm voice auto-correlation', async () => {
   } finally {
     await stopBotServer(child);
     await closeServer(speakServer);
+  }
+});
+
+test('voice-utterance rejects unsafe speak URLs before queueing', async () => {
+  const { apiPort, child } = await startBotServer({
+    HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
+  });
+  try {
+    const { response, payload } = await postJson(`http://127.0.0.1:${apiPort}/voice-utterance`, {
+      transcript: 'Rosie, do not queue this',
+      speak_url: 'https://example.com/speak',
+    });
+    assert.equal(response.status, 400);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.error, 'invalid_speak_url');
+
+    const commandsResponse = await fetch(`http://127.0.0.1:${apiPort}/commands`);
+    const commandsPayload = await commandsResponse.json();
+    assert.equal(commandsPayload.data.commands.length, 0);
+  } finally {
+    await stopBotServer(child);
   }
 });

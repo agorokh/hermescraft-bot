@@ -130,11 +130,13 @@ test('voice-utterance is hidden when source router flag is disabled', async () =
 test('voice-utterance queues a voice turn and routes chat replies to sidecar speak', async () => {
   const { server: speakServer, messages } = createSpeakServer();
   const speakPort = await listenOnLoopback(speakServer);
-  const { apiPort, child } = await startBotServer({
-    HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
-    HERMESCRAFT_VOICE_SPEAK_URL: 'http://127.0.0.1:1/speak',
-  });
+  let botServer;
   try {
+    botServer = await startBotServer({
+      HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
+      HERMESCRAFT_VOICE_SPEAK_URL: 'http://127.0.0.1:1/speak',
+    });
+    const { apiPort } = botServer;
     const { response: queuedResponse, payload: queued } = await postJson(`http://127.0.0.1:${apiPort}/voice-utterance`, {
       transcript: 'Rosie, say hello',
       kid: 'DanceO3677',
@@ -168,7 +170,7 @@ test('voice-utterance queues a voice turn and routes chat replies to sidecar spe
     assert.equal(messages[0].kid, 'DanceO3677');
     assert.equal(messages[0].character, 'Rosie');
   } finally {
-    await stopBotServer(child);
+    if (botServer) await stopBotServer(botServer.child);
     await closeServer(speakServer);
   }
 });
@@ -176,11 +178,13 @@ test('voice-utterance queues a voice turn and routes chat replies to sidecar spe
 test('voice-utterance keeps sidecar turns retryable after a speak failure', async () => {
   const { server: speakServer, messages } = createSpeakServer({ failFirst: true });
   const speakPort = await listenOnLoopback(speakServer);
-  const { apiPort, child } = await startBotServer({
-    HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
-    HERMESCRAFT_VOICE_SPEAK_URL: `http://127.0.0.1:${speakPort}/speak`,
-  });
+  let botServer;
   try {
+    botServer = await startBotServer({
+      HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
+      HERMESCRAFT_VOICE_SPEAK_URL: `http://127.0.0.1:${speakPort}/speak`,
+    });
+    const { apiPort } = botServer;
     const { payload: queued } = await postJson(`http://127.0.0.1:${apiPort}/voice-utterance`, {
       transcript: 'Rosie, retry this',
       kid: 'DanceO3677',
@@ -210,7 +214,7 @@ test('voice-utterance keeps sidecar turns retryable after a speak failure', asyn
     assert.equal(messages[1].text, 'Second try');
     assert.equal(messages[1].turn_id, 'voice-turn-retry');
   } finally {
-    await stopBotServer(child);
+    if (botServer) await stopBotServer(botServer.child);
     await closeServer(speakServer);
   }
 });
@@ -218,11 +222,13 @@ test('voice-utterance keeps sidecar turns retryable after a speak failure', asyn
 test('read-only commands peeks do not arm voice auto-correlation or block public chat', async () => {
   const { server: speakServer, messages } = createSpeakServer();
   const speakPort = await listenOnLoopback(speakServer);
-  const { apiPort, child } = await startBotServer({
-    HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
-    HERMESCRAFT_VOICE_SPEAK_URL: `http://127.0.0.1:${speakPort}/speak`,
-  });
+  let botServer;
   try {
+    botServer = await startBotServer({
+      HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
+      HERMESCRAFT_VOICE_SPEAK_URL: `http://127.0.0.1:${speakPort}/speak`,
+    });
+    const { apiPort } = botServer;
     const { payload: queued } = await postJson(`http://127.0.0.1:${apiPort}/voice-utterance`, {
       transcript: 'Rosie, this is only a peek',
       kid: 'DanceO3677',
@@ -249,7 +255,7 @@ test('read-only commands peeks do not arm voice auto-correlation or block public
     assert.equal(messages.length, 1);
     assert.equal(messages[0].text, 'This should be spoken after claim.');
   } finally {
-    await stopBotServer(child);
+    if (botServer) await stopBotServer(botServer.child);
     await closeServer(speakServer);
   }
 });

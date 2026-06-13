@@ -549,6 +549,15 @@ function resolveVoiceSpeakUrl(raw) {
   return url.toString();
 }
 
+if (VOICE_ROUTER_ENABLED) {
+  try {
+    resolveVoiceSpeakUrl(VOICE_SPEAK_URL);
+  } catch (e) {
+    console.error(`[startup] invalid HERMESCRAFT_VOICE_SPEAK_URL: ${e?.message || String(e)}`);
+    process.exit(1);
+  }
+}
+
 function voiceSpeakError(e) {
   if (e?.name === 'AbortError') {
     const err = new Error(`voice sidecar timeout after ${VOICE_SPEAK_TIMEOUT_MS}ms`);

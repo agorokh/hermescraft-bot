@@ -127,6 +127,16 @@ test('voice-utterance is hidden when source router flag is disabled', async () =
   }
 });
 
+test('voice router fails fast on unsafe default speak URL config', async () => {
+  await assert.rejects(
+    () => startBotServer({
+      HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
+      HERMESCRAFT_VOICE_SPEAK_URL: 'https://example.com/speak',
+    }),
+    /voice sidecar URL must be loopback/,
+  );
+});
+
 test('voice-utterance queues a voice turn and routes chat replies to sidecar speak', async () => {
   const { server: speakServer, messages } = createSpeakServer();
   const speakPort = await listenOnLoopback(speakServer);

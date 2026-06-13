@@ -24,8 +24,19 @@ export function playerNameMatches(candidate, requested) {
   return !!c && !!r && c === r;
 }
 
+export function playerNameMatchesResolvedCollector(collector, requested, resolved) {
+  if (playerNameExactMatch(collector, resolved)) return true;
+  const requestedName = String(requested || '').trim();
+  const resolvedName = String(resolved || '').trim();
+  if (requestedName.startsWith('.')) return false;
+  if (!resolvedName.startsWith('.')) return false;
+  const c = normalizePlayerName(collector);
+  const r = normalizePlayerName(resolvedName);
+  return !!c && !!r && c === r;
+}
+
 export function findPlayerEntity(bot, name) {
-  if (!name) return null;
+  if (!bot || !name) return null;
   const lname = normalizePlayerName(name);
   const rosterEntries = Object.entries(bot.players || {})
     .filter(([n]) => !playerNameExactMatch(n, bot.username));

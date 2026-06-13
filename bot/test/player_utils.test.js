@@ -6,6 +6,7 @@ import {
   normalizeBuildBaseY,
   normalizePlayerName,
   playerNameMatches,
+  playerNameMatchesResolvedCollector,
   schematicBuildBaseY,
 } from '../lib/player_utils.js';
 
@@ -21,6 +22,14 @@ test('normalizePlayerName ignores Floodgate leading dot prefixes', () => {
 test('playerNameMatches only strips Floodgate prefix for bare requests', () => {
   assert.equal(playerNameMatches('.DanceO3677', 'DanceO3677'), true);
   assert.equal(playerNameMatches('DanceO3677', '.DanceO3677'), false);
+});
+
+test('playerNameMatchesResolvedCollector requires exact pickup confirmation after resolution', () => {
+  assert.equal(playerNameMatchesResolvedCollector('.Alex', 'Alex', 'Alex'), false);
+  assert.equal(playerNameMatchesResolvedCollector('Alex', 'Alex', 'Alex'), true);
+  assert.equal(playerNameMatchesResolvedCollector('DanceO3677', 'DanceO3677', '.DanceO3677'), true);
+  assert.equal(playerNameMatchesResolvedCollector('DanceO3677', '.DanceO3677', '.DanceO3677'), false);
+  assert.equal(playerNameMatchesResolvedCollector('.DanceO3677', '.DanceO3677', '.DanceO3677'), true);
 });
 
 test('findPlayerEntity matches Floodgate-prefixed player roster names from bare input', () => {

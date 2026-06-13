@@ -214,3 +214,42 @@ test('voice-utterance keeps sidecar turns retryable after a speak failure', asyn
     await closeServer(speakServer);
   }
 });
+
+test('read-only commands peeks do not arm voice auto-correlation', async () => {
+  const { server: speakServer, messages } = createSpeakServer();
+  const speakPort = await listenOnLoopback(speakServer);
+  const { apiPort, child } = await startBotServer({
+    HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
+    HERMESCRAFT_VOICE_SPEAK_URL: `http://127.0.0.1:${speakPort}/speak`,
+  });
+  try {
+    const { payload: queued } = await postJson(`http://127.0.0.1:${apiPort}/voice-utterance`, {
+      transcript: 'Rosie, this is only a peek',
+      kid: 'DanceO3677',
+      turn_id: 'voice-turn-peek',
+    });
+
+    const peekResponse = await fetch(`http://127.0.0.1:${apiPort}/commands`);
+    const peekPayload = await peekResponse.json();
+    assert.equal(peekPayload.ok, true);
+    assert.equal(peekPayload.data.commands[0].id, queued.id);
+
+    const { response: peekChatResponse } = await postJson(`http://127.0.0.1:${apiPort}/action/chat`, {
+      message: 'This should not be spoken yet.',
+    });
+    assert.equal(peekChatResponse.status, 503);
+    assert.equal(messages.length, 0);
+
+    await fetch(`http://127.0.0.1:${apiPort}/commands?claim=1`);
+    const { response: claimedChatResponse, payload: claimed } = await postJson(`http://127.0.0.1:${apiPort}/action/chat`, {
+      message: 'This should be spoken after claim.',
+    });
+    assert.equal(claimedChatResponse.status, 200);
+    assert.equal(claimed.ok, true);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, 'This should be spoken after claim.');
+  } finally {
+    await stopBotServer(child);
+    await closeServer(speakServer);
+  }
+});

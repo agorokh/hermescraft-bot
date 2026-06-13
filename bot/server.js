@@ -279,6 +279,10 @@ function trimCommandQueue() {
     const evicted = commandQueue.shift();
     if (evicted && evicted.source === 'voice' && _pendingVoiceTurns.has(evicted.id)) {
       const turn = _pendingVoiceTurns.get(evicted.id);
+      if (!turn) {
+        _pendingVoiceTurns.delete(evicted.id);
+        continue;
+      }
       clearTimeout(turn.timer);
       _pendingVoiceTurns.delete(evicted.id);
       try { turn.resolve?.({ ok: false, error: 'queue_evicted', id: evicted.id }); } catch {}
@@ -2482,8 +2486,9 @@ const ACTIONS = {
   async follow({ player }) {
     const b = ensureBot();
     const targetName = normalizePlayerName(player);
-    const entity = findPlayerEntity(b, player) || Object.values(b.entities).find(e =>
-      e !== b.entity && normalizePlayerName(e.name) === targetName
+    if (!targetName) throw new Error('Player name is required to follow.');
+    const entity = findPlayerEntity(b, player) || Object.values(b.entities || {}).find(e =>
+      e && e !== b.entity && normalizePlayerName(e.name || e.username) === targetName
     );
     if (!entity) throw new Error(`Player/entity "${player}" not found nearby.`);
     b.pathfinder.setGoal(new goals.GoalFollow(entity, 2), true);
@@ -4239,13 +4244,6 @@ const httpServer = http.createServer(async (req, res) => {
 
       if (path === '/commands') {
         const surfaced = commandQueue.filter(c => c.status === 'pending' || c.status === 'stale');
-        const now = Date.now();
-        for (const entry of surfaced) {
-          if (entry.source === 'voice' && _pendingVoiceTurns.has(entry.id)) {
-            const turn = _pendingVoiceTurns.get(entry.id);
-            if (!turn.dispatched_ts) turn.dispatched_ts = now;
-          }
-        }
         if (url.searchParams.get('claim') === '1') {
           markOldestVoiceDispatchedIfPending();
         }

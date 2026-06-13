@@ -2,21 +2,64 @@
 
 import { Vec3 } from 'vec3';
 
+function lowerPlayerName(name) {
+  return String(name || '').toLowerCase();
+}
+
+export function normalizePlayerName(name) {
+  return lowerPlayerName(name).replace(/^\./, '');
+}
+
+export function playerNameExactMatch(candidate, requested) {
+  const c = lowerPlayerName(candidate);
+  const r = lowerPlayerName(requested);
+  return !!c && !!r && c === r;
+}
+
+export function playerNameMatches(candidate, requested) {
+  if (playerNameExactMatch(candidate, requested)) return true;
+  if (lowerPlayerName(requested).startsWith('.')) return false;
+  const c = normalizePlayerName(candidate);
+  const r = normalizePlayerName(requested);
+  return !!c && !!r && c === r;
+}
+
+export function playerNameMatchesResolvedCollector(collector, requested, resolved) {
+  if (playerNameExactMatch(collector, resolved)) return true;
+  const requestedName = String(requested || '').trim();
+  const resolvedName = String(resolved || '').trim();
+  if (requestedName.startsWith('.')) return false;
+  if (!resolvedName.startsWith('.')) return false;
+  const c = normalizePlayerName(collector);
+  const r = normalizePlayerName(resolvedName);
+  return !!c && !!r && c === r;
+}
+
 export function findPlayerEntity(bot, name) {
-  if (!name) return null;
-  const lname = name.toLowerCase();
-  for (const [n, p] of Object.entries(bot.players || {})) {
-    if (n === bot.username) continue;
-    if (n.toLowerCase() === lname || n.toLowerCase().replace(/^\./, '') === lname) {
-      if (p.entity) return p.entity;
+  if (!bot || !name) return null;
+  const lname = normalizePlayerName(name);
+  if (!lname) return null;
+  const rosterEntries = Object.entries(bot.players || {})
+    .filter(([n]) => !playerNameExactMatch(n, bot.username));
+  for (const [n, p] of rosterEntries) {
+    if (p?.entity && (playerNameExactMatch(n, name) || playerNameExactMatch(p.entity.username, name))) {
+      return p.entity;
     }
   }
-  return Object.values(bot.entities || {}).find((e) => {
+  const entityEntries = Object.values(bot.entities || {}).filter((e) => {
+    if (!e) return false;
     if (e === bot.entity) return false;
     if (e.type !== 'player') return false;
-    const en = (e.username || '').toLowerCase();
-    return en === lname || en.replace(/^\./, '') === lname;
-  }) || null;
+    return true;
+  });
+  const exactEntity = entityEntries.find((e) => playerNameExactMatch(e.username, name));
+  if (exactEntity) return exactEntity;
+  for (const [n, p] of rosterEntries) {
+    if (p?.entity && (normalizePlayerName(n) === lname || normalizePlayerName(p.entity.username) === lname)) {
+      return p.entity;
+    }
+  }
+  return entityEntries.find((e) => normalizePlayerName(e.username) === lname) || null;
 }
 
 // Resolve the position to build "near" — preferring the kid's player entity,

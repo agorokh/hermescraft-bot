@@ -1,10 +1,121 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { explicitSchematicBaseY, normalizeBuildBaseY, schematicBuildBaseY } from '../lib/player_utils.js';
+import {
+  explicitSchematicBaseY,
+  findPlayerEntity,
+  normalizeBuildBaseY,
+  normalizePlayerName,
+  playerNameMatches,
+  playerNameMatchesResolvedCollector,
+  schematicBuildBaseY,
+} from '../lib/player_utils.js';
 
 function mockBot(blockAtFn) {
   return { blockAt: blockAtFn };
 }
+
+test('normalizePlayerName ignores Floodgate leading dot prefixes', () => {
+  assert.equal(normalizePlayerName('DanceO3677'), 'danceo3677');
+  assert.equal(normalizePlayerName('.DanceO3677'), 'danceo3677');
+});
+
+test('playerNameMatches only strips Floodgate prefix for bare requests', () => {
+  assert.equal(playerNameMatches('.DanceO3677', 'DanceO3677'), true);
+  assert.equal(playerNameMatches('DanceO3677', '.DanceO3677'), false);
+});
+
+test('playerNameMatchesResolvedCollector requires exact pickup confirmation after resolution', () => {
+  assert.equal(playerNameMatchesResolvedCollector('.Alex', 'Alex', 'Alex'), false);
+  assert.equal(playerNameMatchesResolvedCollector('Alex', 'Alex', 'Alex'), true);
+  assert.equal(playerNameMatchesResolvedCollector('DanceO3677', 'DanceO3677', '.DanceO3677'), true);
+  assert.equal(playerNameMatchesResolvedCollector('DanceO3677', '.DanceO3677', '.DanceO3677'), false);
+  assert.equal(playerNameMatchesResolvedCollector('.DanceO3677', '.DanceO3677', '.DanceO3677'), true);
+});
+
+test('findPlayerEntity matches Floodgate-prefixed player roster names from bare input', () => {
+  const entity = { username: '.DanceO3677', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      '.DanceO3677': { entity },
+    },
+    entities: {},
+  };
+  assert.equal(findPlayerEntity(bot, 'DanceO3677'), entity);
+});
+
+test('findPlayerEntity prefers exact bare match over Floodgate fallback', () => {
+  const bare = { username: 'Alex', type: 'player' };
+  const floodgate = { username: '.Alex', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      '.Alex': { entity: floodgate },
+      Alex: { entity: bare },
+    },
+    entities: {},
+  };
+  assert.equal(findPlayerEntity(bot, 'Alex'), bare);
+});
+
+test('findPlayerEntity preserves explicit Floodgate prefix in collisions', () => {
+  const bare = { username: 'Alex', type: 'player' };
+  const floodgate = { username: '.Alex', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      Alex: { entity: bare },
+      '.Alex': { entity: floodgate },
+    },
+    entities: {},
+  };
+  assert.equal(findPlayerEntity(bot, '.Alex'), floodgate);
+});
+
+test('findPlayerEntity ignores null roster and entity entries', () => {
+  const entity = { username: '.DanceO3677', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    entity: null,
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      Ghost: null,
+    },
+    entities: { 1: null, 2: entity },
+  };
+  assert.equal(findPlayerEntity(bot, 'DanceO3677'), entity);
+});
+
+test('findPlayerEntity rejects empty normalized player names', () => {
+  assert.equal(findPlayerEntity({ username: 'Rosie', players: {}, entities: {} }, '.'), null);
+});
+
+test('findPlayerEntity matches bare player roster names from Floodgate-prefixed input', () => {
+  const entity = { username: 'DanceO3677', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      DanceO3677: { entity },
+    },
+    entities: {},
+  };
+  assert.equal(findPlayerEntity(bot, '.DanceO3677'), entity);
+});
+
+test('findPlayerEntity falls back to Floodgate-prefixed entity usernames', () => {
+  const entity = { username: '.DanceO3677', type: 'player' };
+  const bot = {
+    entity: { username: 'Rosie' },
+    username: 'Rosie',
+    players: {},
+    entities: { 42: entity },
+  };
+  assert.equal(findPlayerEntity(bot, 'DanceO3677'), entity);
+});
 
 test('normalizeBuildBaseY does not return above world ceiling', () => {
   const bot = mockBot((pos) => {

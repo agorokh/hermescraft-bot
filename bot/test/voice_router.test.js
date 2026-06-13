@@ -215,7 +215,7 @@ test('voice-utterance keeps sidecar turns retryable after a speak failure', asyn
   }
 });
 
-test('read-only commands peeks do not arm voice auto-correlation', async () => {
+test('read-only commands peeks do not arm voice auto-correlation or block public chat', async () => {
   const { server: speakServer, messages } = createSpeakServer();
   const speakPort = await listenOnLoopback(speakServer);
   const { apiPort, child } = await startBotServer({
@@ -237,7 +237,7 @@ test('read-only commands peeks do not arm voice auto-correlation', async () => {
     const { response: peekChatResponse } = await postJson(`http://127.0.0.1:${apiPort}/action/chat`, {
       message: 'This should not be spoken yet.',
     });
-    assert.equal(peekChatResponse.status, 409);
+    assert.equal(peekChatResponse.status, 503);
     assert.equal(messages.length, 0);
 
     await fetch(`http://127.0.0.1:${apiPort}/commands?claim=1`);

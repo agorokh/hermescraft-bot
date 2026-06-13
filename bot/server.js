@@ -3099,17 +3099,15 @@ const ACTIONS = {
         const dispatchTs = turn?.dispatched_ts;
         if (dispatchTs && (now - dispatchTs) <= VOICE_AUTOCORRELATE_MS) {
           voiceTurn = turn;
-        } else {
-          let reason = 'voice turn not claimed';
-          if (!turn) reason = 'voice routing state missing';
-          else if (dispatchTs) reason = 'voice autocorrelate window expired';
+        } else if (dispatchTs) {
           blockedVoiceReply = {
             id: oldest.id,
-            reason,
+            reason: 'voice autocorrelate window expired',
           };
         }
       }
-      // Otherwise, oldest is a chat turn or no pending turn: fall through to bot.chat().
+      // Otherwise, oldest is a chat turn, no pending turn, or an unclaimed
+      // voice peek (`mc commands` claims with ?claim=1): fall through to bot.chat().
     }
     if (voiceTurn) {
       const qEntry = commandQueue.find(c => c.id === voiceTurn.id);

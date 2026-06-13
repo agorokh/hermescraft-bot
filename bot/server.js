@@ -515,13 +515,41 @@ const VOICE_TURN_TIMEOUT_MS = 75000;
 const VOICE_AUTOCORRELATE_MS = 60000;
 const VOICE_ROUTER_ENABLED = process.env.HERMESCRAFT_VOICE_ROUTER_ENABLED === '1';
 const VOICE_SPEAK_URL = process.env.HERMESCRAFT_VOICE_SPEAK_URL || 'http://127.0.0.1:5901/speak';
-const VOICE_SPEAK_TIMEOUT_MS = parseInt(process.env.HERMESCRAFT_VOICE_SPEAK_TIMEOUT_MS || '5000', 10);
+const VOICE_SPEAK_TIMEOUT_MS = positiveIntEnv(process.env.HERMESCRAFT_VOICE_SPEAK_TIMEOUT_MS, 5000);
+
+function positiveIntEnv(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function resolveVoiceSpeakUrl(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    const err = new Error(`invalid voice sidecar URL: ${raw}`);
+    err.statusCode = 502;
+    throw err;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    const err = new Error(`voice sidecar URL must use http(s): ${url.protocol}`);
+    err.statusCode = 403;
+    throw err;
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!['localhost', '127.0.0.1', '::1'].includes(host)) {
+    const err = new Error(`voice sidecar URL must be loopback, got ${url.hostname}`);
+    err.statusCode = 403;
+    throw err;
+  }
+  return url.toString();
+}
 
 async function postVoiceSpeak(turn, message) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), VOICE_SPEAK_TIMEOUT_MS);
   try {
-    const response = await fetch(turn.speak_url || VOICE_SPEAK_URL, {
+    const response = await fetch(resolveVoiceSpeakUrl(turn.speak_url || VOICE_SPEAK_URL), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -3060,23 +3088,25 @@ const ACTIONS = {
       // dispatched OR voice age past window): fall through to bot.chat().
     }
     if (voiceTurn) {
-      clearTimeout(voiceTurn.timer);
-      _pendingVoiceTurns.delete(voiceTurn.id);
       const qEntry = commandQueue.find(c => c.id === voiceTurn.id);
       if (voiceTurn.delivery === 'sidecar') {
         try {
           await postVoiceSpeak(voiceTurn, message);
+          clearTimeout(voiceTurn.timer);
+          _pendingVoiceTurns.delete(voiceTurn.id);
           if (qEntry) qEntry.status = 'completed';
           rememberSocialEvent({ actor: getMyName(), target: voiceTurn.kid, kind: 'sent', channel: 'voice', message });
           log(`[voice→sidecar] (id=${voiceTurn.id}, turn_id=${voiceTurn.turn_id}, kid=${voiceTurn.kid}) ${message.slice(0, 80)}`);
           return { result: `Spoke to ${voiceTurn.kid} via voice sidecar (id=${voiceTurn.id})` };
         } catch (e) {
-          if (qEntry) qEntry.status = 'voice_speak_failed';
+          if (qEntry && qEntry.status === 'pending') qEntry.voice_delivery_error = e.message;
           log(`[voice✗] (id=${voiceTurn.id}, turn_id=${voiceTurn.turn_id}) sidecar delivery failed — ${e.message}`);
           throw e;
         }
       }
       // Resolve the held HTTP request from /chat/voice
+      clearTimeout(voiceTurn.timer);
+      _pendingVoiceTurns.delete(voiceTurn.id);
       if (qEntry) qEntry.status = 'completed';
       rememberSocialEvent({ actor: getMyName(), target: voiceTurn.kid, kind: 'sent', channel: 'voice', message });
       try { voiceTurn.resolve?.({ ok: true, reply: message, in_reply_to: voiceTurn.id }); } catch (e) { log(`[voice] resolver throw: ${e.message}`); }

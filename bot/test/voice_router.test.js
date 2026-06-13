@@ -25,8 +25,9 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-function createSpeakServer() {
+function createSpeakServer({ failFirst = false } = {}) {
   const messages = [];
+  let calls = 0;
   const server = http.createServer((req, res) => {
     if (req.method !== 'POST' || req.url !== '/speak') {
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -35,7 +36,12 @@ function createSpeakServer() {
     let data = '';
     req.on('data', chunk => data += chunk);
     req.on('end', () => {
+      calls++;
       messages.push(JSON.parse(data || '{}'));
+      if (failFirst && calls === 1) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: false, error: 'temporary speaker failure' }));
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     });
@@ -65,7 +71,12 @@ async function startBotServer(env) {
   });
   child.stdout.on('data', chunk => logs.push(String(chunk)));
   child.stderr.on('data', chunk => logs.push(String(chunk)));
-  await waitForHealth(apiPort, child, logs);
+  try {
+    await waitForHealth(apiPort, child, logs);
+  } catch (e) {
+    await stopBotServer(child);
+    throw e;
+  }
   return { apiPort, child, logs };
 }
 
@@ -155,6 +166,48 @@ test('voice-utterance queues a voice turn and routes chat replies to sidecar spe
     assert.equal(messages[0].turn_id, 'voice-turn-124');
     assert.equal(messages[0].kid, 'DanceO3677');
     assert.equal(messages[0].character, 'Rosie');
+  } finally {
+    await stopBotServer(child);
+    await closeServer(speakServer);
+  }
+});
+
+test('voice-utterance keeps sidecar turns retryable after a speak failure', async () => {
+  const { server: speakServer, messages } = createSpeakServer({ failFirst: true });
+  const speakPort = await listenOnLoopback(speakServer);
+  const { apiPort, child } = await startBotServer({
+    HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
+    HERMESCRAFT_VOICE_SPEAK_URL: `http://127.0.0.1:${speakPort}/speak`,
+  });
+  try {
+    const { payload: queued } = await postJson(`http://127.0.0.1:${apiPort}/voice-utterance`, {
+      transcript: 'Rosie, retry this',
+      kid: 'DanceO3677',
+      turn_id: 'voice-turn-retry',
+    });
+
+    await fetch(`http://127.0.0.1:${apiPort}/commands?claim=1`);
+
+    const { response: failedResponse, payload: failed } = await postJson(`http://127.0.0.1:${apiPort}/action/chat`, {
+      message: 'First try',
+      in_reply_to: queued.id,
+    });
+    assert.equal(failedResponse.status, 502);
+    assert.equal(failed.ok, false);
+
+    const commandsAfterFailure = await fetch(`http://127.0.0.1:${apiPort}/commands`);
+    const commandsPayload = await commandsAfterFailure.json();
+    assert.equal(commandsPayload.data.commands[0].status, 'pending');
+
+    const { response: retryResponse, payload: retry } = await postJson(`http://127.0.0.1:${apiPort}/action/chat`, {
+      message: 'Second try',
+      in_reply_to: queued.id,
+    });
+    assert.equal(retryResponse.status, 200);
+    assert.equal(retry.ok, true);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[1].text, 'Second try');
+    assert.equal(messages[1].turn_id, 'voice-turn-retry');
   } finally {
     await stopBotServer(child);
     await closeServer(speakServer);

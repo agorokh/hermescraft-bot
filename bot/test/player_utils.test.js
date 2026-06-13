@@ -5,6 +5,7 @@ import {
   findPlayerEntity,
   normalizeBuildBaseY,
   normalizePlayerName,
+  playerNameMatches,
   schematicBuildBaseY,
 } from '../lib/player_utils.js';
 
@@ -15,6 +16,11 @@ function mockBot(blockAtFn) {
 test('normalizePlayerName ignores Floodgate leading dot prefixes', () => {
   assert.equal(normalizePlayerName('DanceO3677'), 'danceo3677');
   assert.equal(normalizePlayerName('.DanceO3677'), 'danceo3677');
+});
+
+test('playerNameMatches only strips Floodgate prefix for bare requests', () => {
+  assert.equal(playerNameMatches('.DanceO3677', 'DanceO3677'), true);
+  assert.equal(playerNameMatches('DanceO3677', '.DanceO3677'), false);
 });
 
 test('findPlayerEntity matches Floodgate-prefixed player roster names from bare input', () => {
@@ -28,6 +34,36 @@ test('findPlayerEntity matches Floodgate-prefixed player roster names from bare 
     entities: {},
   };
   assert.equal(findPlayerEntity(bot, 'DanceO3677'), entity);
+});
+
+test('findPlayerEntity prefers exact bare match over Floodgate fallback', () => {
+  const bare = { username: 'Alex', type: 'player' };
+  const floodgate = { username: '.Alex', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      '.Alex': { entity: floodgate },
+      Alex: { entity: bare },
+    },
+    entities: {},
+  };
+  assert.equal(findPlayerEntity(bot, 'Alex'), bare);
+});
+
+test('findPlayerEntity preserves explicit Floodgate prefix in collisions', () => {
+  const bare = { username: 'Alex', type: 'player' };
+  const floodgate = { username: '.Alex', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      Alex: { entity: bare },
+      '.Alex': { entity: floodgate },
+    },
+    entities: {},
+  };
+  assert.equal(findPlayerEntity(bot, '.Alex'), floodgate);
 });
 
 test('findPlayerEntity matches bare player roster names from Floodgate-prefixed input', () => {

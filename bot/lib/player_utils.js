@@ -2,24 +2,51 @@
 
 import { Vec3 } from 'vec3';
 
+function lowerPlayerName(name) {
+  return String(name || '').toLowerCase();
+}
+
 export function normalizePlayerName(name) {
-  return String(name || '').toLowerCase().replace(/^\./, '');
+  return lowerPlayerName(name).replace(/^\./, '');
+}
+
+export function playerNameExactMatch(candidate, requested) {
+  const c = lowerPlayerName(candidate);
+  const r = lowerPlayerName(requested);
+  return !!c && !!r && c === r;
+}
+
+export function playerNameMatches(candidate, requested) {
+  if (playerNameExactMatch(candidate, requested)) return true;
+  if (lowerPlayerName(requested).startsWith('.')) return false;
+  const c = normalizePlayerName(candidate);
+  const r = normalizePlayerName(requested);
+  return !!c && !!r && c === r;
 }
 
 export function findPlayerEntity(bot, name) {
   if (!name) return null;
   const lname = normalizePlayerName(name);
-  for (const [n, p] of Object.entries(bot.players || {})) {
-    if (n === bot.username) continue;
-    if (normalizePlayerName(n) === lname) {
-      if (p.entity) return p.entity;
+  const rosterEntries = Object.entries(bot.players || {})
+    .filter(([n]) => !playerNameExactMatch(n, bot.username));
+  for (const [n, p] of rosterEntries) {
+    if (p.entity && (playerNameExactMatch(n, name) || playerNameExactMatch(p.entity.username, name))) {
+      return p.entity;
     }
   }
-  return Object.values(bot.entities || {}).find((e) => {
+  const entityEntries = Object.values(bot.entities || {}).filter((e) => {
     if (e === bot.entity) return false;
     if (e.type !== 'player') return false;
-    return normalizePlayerName(e.username) === lname;
-  }) || null;
+    return true;
+  });
+  const exactEntity = entityEntries.find((e) => playerNameExactMatch(e.username, name));
+  if (exactEntity) return exactEntity;
+  for (const [n, p] of rosterEntries) {
+    if (p.entity && (normalizePlayerName(n) === lname || normalizePlayerName(p.entity.username) === lname)) {
+      return p.entity;
+    }
+  }
+  return entityEntries.find((e) => normalizePlayerName(e.username) === lname) || null;
 }
 
 // Resolve the position to build "near" — preferring the kid's player entity,

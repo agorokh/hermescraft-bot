@@ -1,10 +1,58 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { explicitSchematicBaseY, normalizeBuildBaseY, schematicBuildBaseY } from '../lib/player_utils.js';
+import {
+  explicitSchematicBaseY,
+  findPlayerEntity,
+  normalizeBuildBaseY,
+  normalizePlayerName,
+  schematicBuildBaseY,
+} from '../lib/player_utils.js';
 
 function mockBot(blockAtFn) {
   return { blockAt: blockAtFn };
 }
+
+test('normalizePlayerName ignores Floodgate leading dot prefixes', () => {
+  assert.equal(normalizePlayerName('DanceO3677'), 'danceo3677');
+  assert.equal(normalizePlayerName('.DanceO3677'), 'danceo3677');
+});
+
+test('findPlayerEntity matches Floodgate-prefixed player roster names from bare input', () => {
+  const entity = { username: '.DanceO3677', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      '.DanceO3677': { entity },
+    },
+    entities: {},
+  };
+  assert.equal(findPlayerEntity(bot, 'DanceO3677'), entity);
+});
+
+test('findPlayerEntity matches bare player roster names from Floodgate-prefixed input', () => {
+  const entity = { username: 'DanceO3677', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      DanceO3677: { entity },
+    },
+    entities: {},
+  };
+  assert.equal(findPlayerEntity(bot, '.DanceO3677'), entity);
+});
+
+test('findPlayerEntity falls back to Floodgate-prefixed entity usernames', () => {
+  const entity = { username: '.DanceO3677', type: 'player' };
+  const bot = {
+    entity: { username: 'Rosie' },
+    username: 'Rosie',
+    players: {},
+    entities: { 42: entity },
+  };
+  assert.equal(findPlayerEntity(bot, 'DanceO3677'), entity);
+});
 
 test('normalizeBuildBaseY does not return above world ceiling', () => {
   const bot = mockBot((pos) => {

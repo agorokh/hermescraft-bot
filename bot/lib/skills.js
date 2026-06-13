@@ -31,7 +31,7 @@ import fs from 'fs';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { findPlayerEntity, itemNameFromCollectEntity } from './player_utils.js';
+import { findPlayerEntity, itemNameFromCollectEntity, normalizePlayerName } from './player_utils.js';
 import {
   blockReadbackMatches,
   buildStateFileForId,
@@ -419,9 +419,10 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   await bot.lookAt(p);
   // Register before toss so fast LAN pickups cannot fire before we listen.
   let received = false;
+  const targetPlayer = normalizePlayerName(player);
   const onCollect = (collector, collected) => {
-    const who = (collector?.username || collector?.name || '').toLowerCase();
-    if (who === player.toLowerCase() && collectItemMatches(item, collected)) {
+    const who = normalizePlayerName(collector?.username || collector?.name);
+    if (who === targetPlayer && collectItemMatches(item, collected)) {
       received = true;
     }
   };

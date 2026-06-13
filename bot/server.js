@@ -61,6 +61,7 @@ import { registerHighLevelSkills } from './lib/skills.js';
 import { actionOutcomeFailed, isSurvivalBlock, publicActionResult } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
+import { findPlayerEntity, normalizePlayerName } from './lib/player_utils.js';
 // NLP.js router (council-led migration, 3 rounds of Gemini+Mistral review).
 // Promoted to PRIMARY 2026-05-18 after the 92-utterance correctness
 // benchmark showed NLP 100% vs regex 69.6%, with all council-flagged risks
@@ -280,7 +281,7 @@ function trimCommandQueue() {
       const turn = _pendingVoiceTurns.get(evicted.id);
       clearTimeout(turn.timer);
       _pendingVoiceTurns.delete(evicted.id);
-      try { turn.resolve({ ok: false, error: 'queue_evicted', id: evicted.id }); } catch {}
+      try { turn.resolve?.({ ok: false, error: 'queue_evicted', id: evicted.id }); } catch {}
       log(`[voice✗] (id=${evicted.id}) MAX_QUEUE evicted before brain reply — fail-closed`);
     }
   }
@@ -512,6 +513,52 @@ const VOICE_TURN_TIMEOUT_MS = 75000;
 // Auto-correlate window: if /action/chat fires without in_reply_to, route
 // to the oldest voice turn dispatched within this window.
 const VOICE_AUTOCORRELATE_MS = 60000;
+const VOICE_ROUTER_ENABLED = process.env.HERMESCRAFT_VOICE_ROUTER_ENABLED === '1';
+const VOICE_SPEAK_URL = process.env.HERMESCRAFT_VOICE_SPEAK_URL || 'http://127.0.0.1:5901/speak';
+const VOICE_SPEAK_TIMEOUT_MS = parseInt(process.env.HERMESCRAFT_VOICE_SPEAK_TIMEOUT_MS || '5000', 10);
+
+async function postVoiceSpeak(turn, message) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), VOICE_SPEAK_TIMEOUT_MS);
+  try {
+    const response = await fetch(turn.speak_url || VOICE_SPEAK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: message,
+        reply: message,
+        in_reply_to: turn.id,
+        turn_id: turn.turn_id || String(turn.id),
+        kid: turn.kid,
+        character: turn.character || config.mc.username,
+        source: 'voice',
+      }),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const err = new Error(`voice sidecar HTTP ${response.status}${text ? `: ${text.slice(0, 200)}` : ''}`);
+      err.statusCode = 502;
+      throw err;
+    }
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { raw: text };
+    }
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      const err = new Error(`voice sidecar timeout after ${VOICE_SPEAK_TIMEOUT_MS}ms`);
+      err.statusCode = 504;
+      throw err;
+    }
+    if (!e.statusCode) e.statusCode = 502;
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 /** Start the voice auto-correlate window for the oldest pending voice turn. */
 function markOldestVoiceDispatchedIfPending() {
@@ -2394,11 +2441,9 @@ const ACTIONS = {
 
   async follow({ player }) {
     const b = ensureBot();
-    const entity = Object.values(b.entities).find(e =>
-      e !== b.entity && (
-        (e.username || '').toLowerCase() === player.toLowerCase() ||
-        (e.name || '').toLowerCase() === player.toLowerCase()
-      )
+    const targetName = normalizePlayerName(player);
+    const entity = findPlayerEntity(b, player) || Object.values(b.entities).find(e =>
+      e !== b.entity && normalizePlayerName(e.name) === targetName
     );
     if (!entity) throw new Error(`Player/entity "${player}" not found nearby.`);
     b.pathfinder.setGoal(new goals.GoalFollow(entity, 2), true);
@@ -3006,8 +3051,8 @@ const ACTIONS = {
       if (oldest && oldest.source === 'voice'
           && _pendingVoiceTurns.has(oldest.id)) {
         const turn = _pendingVoiceTurns.get(oldest.id);
-        const dispatchTs = turn?.dispatched_ts ?? oldest.time;
-        if ((now - dispatchTs) <= VOICE_AUTOCORRELATE_MS) {
+        const dispatchTs = turn?.dispatched_ts;
+        if (dispatchTs && (now - dispatchTs) <= VOICE_AUTOCORRELATE_MS) {
           voiceTurn = turn;
         }
       }
@@ -3015,13 +3060,26 @@ const ACTIONS = {
       // dispatched OR voice age past window): fall through to bot.chat().
     }
     if (voiceTurn) {
-      // Resolve the held HTTP request from /chat/voice
       clearTimeout(voiceTurn.timer);
       _pendingVoiceTurns.delete(voiceTurn.id);
       const qEntry = commandQueue.find(c => c.id === voiceTurn.id);
+      if (voiceTurn.delivery === 'sidecar') {
+        try {
+          await postVoiceSpeak(voiceTurn, message);
+          if (qEntry) qEntry.status = 'completed';
+          rememberSocialEvent({ actor: getMyName(), target: voiceTurn.kid, kind: 'sent', channel: 'voice', message });
+          log(`[voice→sidecar] (id=${voiceTurn.id}, turn_id=${voiceTurn.turn_id}, kid=${voiceTurn.kid}) ${message.slice(0, 80)}`);
+          return { result: `Spoke to ${voiceTurn.kid} via voice sidecar (id=${voiceTurn.id})` };
+        } catch (e) {
+          if (qEntry) qEntry.status = 'voice_speak_failed';
+          log(`[voice✗] (id=${voiceTurn.id}, turn_id=${voiceTurn.turn_id}) sidecar delivery failed — ${e.message}`);
+          throw e;
+        }
+      }
+      // Resolve the held HTTP request from /chat/voice
       if (qEntry) qEntry.status = 'completed';
       rememberSocialEvent({ actor: getMyName(), target: voiceTurn.kid, kind: 'sent', channel: 'voice', message });
-      try { voiceTurn.resolve({ ok: true, reply: message, in_reply_to: voiceTurn.id }); } catch (e) { log(`[voice] resolver throw: ${e.message}`); }
+      try { voiceTurn.resolve?.({ ok: true, reply: message, in_reply_to: voiceTurn.id }); } catch (e) { log(`[voice] resolver throw: ${e.message}`); }
       log(`[voice→] (id=${voiceTurn.id}, kid=${voiceTurn.kid}) ${message.slice(0, 80)}`);
       return { result: `Spoke to ${voiceTurn.kid} via voice (id=${voiceTurn.id})` };
     }
@@ -4217,12 +4275,55 @@ const httpServer = http.createServer(async (req, res) => {
       // Body: {transcript: string, kid?: string, character?: string}
       // Returns: {ok: true, reply: string, in_reply_to: id} on brain response
       //          {ok: false, error: "brain_timeout", id} on timeout (fail-closed)
+      if (path === '/voice-utterance') {
+        if (!VOICE_ROUTER_ENABLED) {
+          return respond(res, 404, { ok: false, error: 'Unknown endpoint: /voice-utterance' });
+        }
+        const transcript = String(body.transcript || body.text || '').trim();
+        if (!transcript) {
+          return respond(res, 400, { ok: false, error: 'transcript required' });
+        }
+        const kid = String(body.kid || body.from || 'voice').trim().slice(0, 32) || 'voice';
+        const character = String(body.character || config.mc.username).trim().slice(0, 32) || config.mc.username;
+        const id = nextEnvelopeId();
+        const turnId = String(body.turn_id || body.turnId || id).trim().slice(0, 80) || String(id);
+        const ts = Date.now();
+        commandQueue.push({
+          id, turn_id: turnId, time: ts, from: kid, command: transcript,
+          channel: 'voice', source: 'voice', voice_delivery: 'sidecar',
+          originalMessage: transcript, status: 'pending',
+        });
+        trimCommandQueue();
+        rememberSocialEvent({ actor: kid, kind: 'heard', channel: 'voice', command: true, message: transcript });
+        log(`[voice←sidecar] (id=${id}, turn_id=${turnId}, kid=${kid}) ${transcript.slice(0, 80)}`);
+
+        const timer = setTimeout(() => {
+          _pendingVoiceTurns.delete(id);
+          const qEntry = commandQueue.find(c => c.id === id);
+          if (qEntry && qEntry.status === 'pending') qEntry.status = 'timeout';
+          log(`[voice✗] (id=${id}, turn_id=${turnId}) sidecar brain_timeout after ${VOICE_TURN_TIMEOUT_MS}ms`);
+        }, VOICE_TURN_TIMEOUT_MS);
+        _pendingVoiceTurns.set(id, {
+          id,
+          turn_id: turnId,
+          kid,
+          character,
+          ts,
+          dispatched_ts: null,
+          delivery: 'sidecar',
+          speak_url: VOICE_SPEAK_URL,
+          timer,
+        });
+        return respond(res, 202, { ok: true, id, turn_id: turnId, source: 'voice', delivery: 'sidecar' });
+      }
+
       if (path === '/chat/voice') {
         const transcript = String(body.transcript || '').trim();
         if (!transcript) {
           return respond(res, 400, { ok: false, error: 'transcript required' });
         }
         const kid = String(body.kid || body.from || 'voice').trim().slice(0, 32) || 'voice';
+        const character = String(body.character || config.mc.username).trim().slice(0, 32) || config.mc.username;
         const id = nextEnvelopeId();
         const ts = Date.now();
         commandQueue.push({
@@ -4250,7 +4351,17 @@ const httpServer = http.createServer(async (req, res) => {
           log(`[voice✗] (id=${id}) brain_timeout after ${VOICE_TURN_TIMEOUT_MS}ms`);
           resolveOnce({ ok: false, error: 'brain_timeout', id });
         }, VOICE_TURN_TIMEOUT_MS);
-        _pendingVoiceTurns.set(id, { id, kid, ts, dispatched_ts: ts, timer, resolve: resolveOnce });
+        _pendingVoiceTurns.set(id, {
+          id,
+          turn_id: String(id),
+          kid,
+          character,
+          ts,
+          dispatched_ts: null,
+          delivery: 'long_poll',
+          timer,
+          resolve: resolveOnce,
+        });
         // Client may give up before us (live_loop.py timeout is 90s); detect
         // and clean up so the resolver doesn't fire on a dead socket AND so
         // an orphaned turn cannot get auto-correlated to a later brain reply
@@ -4352,7 +4463,6 @@ const httpServer = http.createServer(async (req, res) => {
         return respond(res, 400, { ok: false, error: `Unknown action "${actionName}". Available: ${available}` });
       }
 
-      markOldestVoiceDispatchedIfPending();
       if (actionName === 'stop') {
         armIntentRoutedAction('stop');
       } else if (bot) {
@@ -4493,7 +4603,7 @@ function _clearPendingVoiceTurns(reason) {
   for (const [id, turn] of _pendingVoiceTurns) {
     clearTimeout(turn.timer);
     try {
-      turn.resolve({ ok: false, error: reason, in_reply_to: id, id });
+      turn.resolve?.({ ok: false, error: reason, in_reply_to: id, id });
     } catch (e) { /* client already gone */ }
     _pendingVoiceTurns.delete(id);
   }

@@ -66,6 +66,20 @@ test('findPlayerEntity preserves explicit Floodgate prefix in collisions', () =>
   assert.equal(findPlayerEntity(bot, '.Alex'), floodgate);
 });
 
+test('findPlayerEntity ignores null roster and entity entries', () => {
+  const entity = { username: '.DanceO3677', type: 'player' };
+  const bot = {
+    username: 'Rosie',
+    entity: null,
+    players: {
+      Rosie: { entity: { username: 'Rosie' } },
+      Ghost: null,
+    },
+    entities: { 1: null, 2: entity },
+  };
+  assert.equal(findPlayerEntity(bot, 'DanceO3677'), entity);
+});
+
 test('findPlayerEntity matches bare player roster names from Floodgate-prefixed input', () => {
   const entity = { username: 'DanceO3677', type: 'player' };
   const bot = {

@@ -545,6 +545,24 @@ function resolveVoiceSpeakUrl(raw) {
   return url.toString();
 }
 
+function voiceSpeakError(e) {
+  if (e?.name === 'AbortError') {
+    const err = new Error(`voice sidecar timeout after ${VOICE_SPEAK_TIMEOUT_MS}ms`);
+    err.statusCode = 504;
+    return err;
+  }
+  const err = e instanceof Error ? e : new Error(String(e));
+  if (err.statusCode) return err;
+  try {
+    err.statusCode = 502;
+    return err;
+  } catch {
+    const wrapped = new Error(err.message || String(e));
+    wrapped.statusCode = 502;
+    return wrapped;
+  }
+}
+
 async function postVoiceSpeak(turn, message) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), VOICE_SPEAK_TIMEOUT_MS);
@@ -576,13 +594,7 @@ async function postVoiceSpeak(turn, message) {
       return { raw: text };
     }
   } catch (e) {
-    if (e?.name === 'AbortError') {
-      const err = new Error(`voice sidecar timeout after ${VOICE_SPEAK_TIMEOUT_MS}ms`);
-      err.statusCode = 504;
-      throw err;
-    }
-    if (!e.statusCode) e.statusCode = 502;
-    throw e;
+    throw voiceSpeakError(e);
   } finally {
     clearTimeout(timeout);
   }
@@ -3099,8 +3111,9 @@ const ACTIONS = {
           log(`[voice→sidecar] (id=${voiceTurn.id}, turn_id=${voiceTurn.turn_id}, kid=${voiceTurn.kid}) ${message.slice(0, 80)}`);
           return { result: `Spoke to ${voiceTurn.kid} via voice sidecar (id=${voiceTurn.id})` };
         } catch (e) {
-          if (qEntry && qEntry.status === 'pending') qEntry.voice_delivery_error = e.message;
-          log(`[voice✗] (id=${voiceTurn.id}, turn_id=${voiceTurn.turn_id}) sidecar delivery failed — ${e.message}`);
+          const messageText = e?.message || String(e);
+          if (qEntry && qEntry.status === 'pending') qEntry.voice_delivery_error = messageText;
+          log(`[voice✗] (id=${voiceTurn.id}, turn_id=${voiceTurn.turn_id}) sidecar delivery failed — ${messageText}`);
           throw e;
         }
       }
@@ -4341,7 +4354,7 @@ const httpServer = http.createServer(async (req, res) => {
           ts,
           dispatched_ts: null,
           delivery: 'sidecar',
-          speak_url: VOICE_SPEAK_URL,
+          speak_url: body.speak_url || body.speakUrl || VOICE_SPEAK_URL,
           timer,
         });
         return respond(res, 202, { ok: true, id, turn_id: turnId, source: 'voice', delivery: 'sidecar' });

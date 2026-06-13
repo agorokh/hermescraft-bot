@@ -30,11 +30,12 @@ export function findPlayerEntity(bot, name) {
   const rosterEntries = Object.entries(bot.players || {})
     .filter(([n]) => !playerNameExactMatch(n, bot.username));
   for (const [n, p] of rosterEntries) {
-    if (p.entity && (playerNameExactMatch(n, name) || playerNameExactMatch(p.entity.username, name))) {
+    if (p?.entity && (playerNameExactMatch(n, name) || playerNameExactMatch(p.entity.username, name))) {
       return p.entity;
     }
   }
   const entityEntries = Object.values(bot.entities || {}).filter((e) => {
+    if (!e) return false;
     if (e === bot.entity) return false;
     if (e.type !== 'player') return false;
     return true;
@@ -42,7 +43,7 @@ export function findPlayerEntity(bot, name) {
   const exactEntity = entityEntries.find((e) => playerNameExactMatch(e.username, name));
   if (exactEntity) return exactEntity;
   for (const [n, p] of rosterEntries) {
-    if (p.entity && (normalizePlayerName(n) === lname || normalizePlayerName(p.entity.username) === lname)) {
+    if (p?.entity && (normalizePlayerName(n) === lname || normalizePlayerName(p.entity.username) === lname)) {
       return p.entity;
     }
   }

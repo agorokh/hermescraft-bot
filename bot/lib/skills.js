@@ -419,7 +419,10 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   await bot.lookAt(p);
   // Register before toss so fast LAN pickups cannot fire before we listen.
   let received = false;
-  const targetPlayer = entity.username || entity.name || player;
+  const requestedPlayer = String(player || '');
+  const targetPlayer = requestedPlayer.startsWith('.')
+    ? (entity.username || entity.name || requestedPlayer)
+    : requestedPlayer;
   const onCollect = (collector, collected) => {
     const who = collector?.username || collector?.name;
     if (playerNameMatches(who, targetPlayer) && collectItemMatches(item, collected)) {

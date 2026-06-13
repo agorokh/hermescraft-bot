@@ -132,7 +132,7 @@ test('voice-utterance queues a voice turn and routes chat replies to sidecar spe
   const speakPort = await listenOnLoopback(speakServer);
   const { apiPort, child } = await startBotServer({
     HERMESCRAFT_VOICE_ROUTER_ENABLED: '1',
-    HERMESCRAFT_VOICE_SPEAK_URL: `http://127.0.0.1:${speakPort}/speak`,
+    HERMESCRAFT_VOICE_SPEAK_URL: 'http://127.0.0.1:1/speak',
   });
   try {
     const { response: queuedResponse, payload: queued } = await postJson(`http://127.0.0.1:${apiPort}/voice-utterance`, {
@@ -140,6 +140,7 @@ test('voice-utterance queues a voice turn and routes chat replies to sidecar spe
       kid: 'DanceO3677',
       character: 'Rosie',
       turn_id: 'voice-turn-124',
+      speak_url: `http://127.0.0.1:${speakPort}/speak`,
     });
     assert.equal(queuedResponse.status, 202);
     assert.equal(queued.ok, true);

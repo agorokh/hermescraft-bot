@@ -41,6 +41,9 @@ bot/model.nlp
 # Schematic build progress checkpoints (generated locally by bot)
 bot/build_states/
 
+# Agent session scratch (PR bodies, commit msgs — never commit)
+.scratch/
+
 # Cursor / editor local state
 .cursor/*
 

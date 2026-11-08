@@ -747,6 +747,13 @@ test('#501 a bare tower never places the small_tower schematic', async () => {
   }
 });
 
+test('#501 an unframed build mention does not replace a non-build skill', async () => {
+  for (const body of ['come here and build a pirate ship', 'follow me and build a rocket']) {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    assert.notEqual(r.intent_name, 'build_unsupported', `${body}: zone=${r.nlp_zone} intent=${r.nlp_intent}`);
+  }
+});
+
 test('#501 narration about building stays with the brain', async () => {
   const r = await tryRoute(stubBot(), 'my brother wants to build a pirate ship', 'Adalynn');
   assert.notEqual(r.intent_name, 'build_unsupported');

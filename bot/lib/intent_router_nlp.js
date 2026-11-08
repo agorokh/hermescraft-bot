@@ -582,11 +582,6 @@ const DISPATCHERS = {
 };
 
 // ── Build-request contract (hermescraft#501) ─────────────────────────────
-// Intents whose dispatch only talks or emotes; acting on them changes no blocks.
-const NON_WORLD_INTENTS = new Set([
-  'report_position', 'report_inventory', 'give_compliment', 'show_me_diamonds', 'ask_about_pet',
-  'emote_wave', 'emote_jump', 'emote_dance', 'emote_sit',
-]);
 
 /**
  * Check a build sentence against the library before anything is dispatched.
@@ -830,7 +825,10 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   const score = result.score || 0;
   // Build-request contract (#501): the library decides, not the score. An
   // unsupported build is a handled refusal in every confidence zone.
-  const acting = Boolean(intent) && score >= ACT_THRESHOLD && !NON_WORLD_INTENTS.has(intent);
+  // "acting" means the classifier would place blocks. A confident movement,
+  // gather or chat skill is not a build, so a build mention inside it ("come
+  // here and build a pirate ship") does not replace that skill with a refusal.
+  const acting = Boolean(intent) && score >= ACT_THRESHOLD && PLACEMENT_INTENTS.has(intent);
   const { route: refusal, contract } = checkBuildRequest(bot, body, sender, intent, score, { acting });
   if (refusal) return refusal;
   // The classifier is not acting, the catalog confirms the structure, and the

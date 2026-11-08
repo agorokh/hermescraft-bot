@@ -697,6 +697,30 @@ test('#501 fairy treehouse named Aurora builds the library treehouse', async () 
   assert.equal(r.body.kid_name, 'Aurora');
 });
 
+test('#501 contractBuildRoute builds the named schematic, not a keyword elsewhere', async () => {
+  const { contractBuildRoute } = await import('../lib/intent_router_nlp.js');
+  const r = await contractBuildRoute(stubBot(), 'build a garden near the hotel', 'Adalynn', 'garden');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'build_schematic');
+  assert.equal(r.body.name, 'garden');
+  assert.equal(r.nlp_zone, 'catalog_remap');
+  const ice = await contractBuildRoute(stubBot(), 'build a house of ice', 'Adalynn', 'ice_castle');
+  assert.equal(ice.body.name, 'ice_castle');
+});
+
+test('#501 a schematic route never builds a structure the object does not name', async () => {
+  for (const [body, allowed] of [
+    ['build a garden near the hotel', 'garden'],
+    ['build a house of ice', 'ice_castle'],
+    ['build a tower of wizards', 'wizard_tower'],
+  ]) {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    if (r.matched && ['build_schematic', 'build_schematic_advanced'].includes(r.action)) {
+      assert.equal(r.body.name, allowed, `${body}: zone=${r.nlp_zone}`);
+    }
+  }
+});
+
 test('#501 narration about building stays with the brain', async () => {
   const r = await tryRoute(stubBot(), 'my brother wants to build a pirate ship', 'Adalynn');
   assert.notEqual(r.intent_name, 'build_unsupported');

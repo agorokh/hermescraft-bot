@@ -624,6 +624,29 @@ export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore 
   };
 }
 
+/**
+ * Library build route for a schematic the contract already named. server.js
+ * uses it when the regex router resolved a different structure from the same
+ * sentence. Returns null when no anchor position is available. The caller
+ * records the skill.
+ */
+export async function contractBuildRoute(bot, body, sender, schematicName) {
+  if (!bot || !body || !schematicName) return null;
+  const senderEntity = findPlayerEntity(bot, sender);
+  const ctx = { sender, senderEntity, message: body, body, schematicName };
+  const decision = await Promise.resolve(DISPATCHERS.build_schematic(bot, ctx));
+  if (!decision) return null;
+  return {
+    matched: true,
+    intent_name: 'build_schematic',
+    action: decision.action,
+    body: decision.body,
+    skill_id: null,
+    nlp_score: null,
+    nlp_zone: 'catalog_remap',
+  };
+}
+
 // Public API — drop-in replacement for intent_router.tryRoute.
 // Same return shape: {matched, intent_name, action, body}.
 export async function tryRoute(bot, body, sender, opts = {}) {
@@ -805,7 +828,13 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     }
   }
   // ctx already constructed above for anaphora; reuse to avoid double-lookup
-  const decision = await Promise.resolve(dispatch(bot, ctx));
+  // A confident build_schematic builds the structure the contract named from
+  // the object, not whatever a keyword elsewhere in the sentence resolves to
+  // ("build a garden near the hotel" is a garden).
+  const dispatchCtx = intent === 'build_schematic' && contract.status === 'supported' && contract.schematic
+    ? { ...ctx, schematicName: contract.schematic }
+    : ctx;
+  const decision = await Promise.resolve(dispatch(bot, dispatchCtx));
   if (!decision) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
   }

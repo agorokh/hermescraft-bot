@@ -77,7 +77,7 @@ import { findPlayerEntity, normalizePlayerName } from './lib/player_utils.js';
 // the call returns matched=false with error set. To avoid silent drops,
 // we also try regex as a last-resort fallback when NLP returns
 // matched=false. This is belt-and-suspenders for the kids-tonight rollout.
-import { tryRoute as tryRouteNlp, checkBuildRequest, markLastSkillFailed, recordLastSkill } from './lib/intent_router_nlp.js';
+import { tryRoute as tryRouteNlp, checkBuildRequest, contractBuildRoute, markLastSkillFailed, recordLastSkill } from './lib/intent_router_nlp.js';
 const NLP_PRIMARY = process.env.HERMES_NLP_PRIMARY !== '0';  // default ON
 // When NLP is primary, shadow the regex router by default for AGREE/DIFFER telemetry.
 const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '0'
@@ -95,22 +95,23 @@ const SURVIVAL_REGEX_FALLBACK = new Set([
 // "lets build the eiffel tower" is build_tower on the regex router too.
 const REGEX_BUILD_ACTIONS = new Set(['build_tower', 'build_schematic', 'build_schematic_advanced', 'place_near_player']);
 
-function guardRegexBuildRoute(bot, body, sender, route) {
+async function guardRegexBuildRoute(bot, body, sender, route) {
   if (!route?.matched || !REGEX_BUILD_ACTIONS.has(route.action)) return route;
   const { route: refusal, contract } = checkBuildRequest(bot, body, sender, route.intent_name, null, { acting: true });
   if (refusal) return refusal;
   // The regex router resolved a different structure than the one the sentence
-  // names ("build a garden near the hotel" → grand_hotel): do not build it.
+  // names ("build a garden near the hotel" → grand_hotel): build the named one.
   if (contract.status === 'supported' && contract.schematic && route.body?.name
     && route.body.name !== contract.schematic) {
-    log(`[IntentRouter] regex ${route.action} ${route.body.name} dropped: request names ${contract.schematic}`);
-    return { matched: false, nlp_zone: 'regex_build_mismatch' };
+    const remapped = await contractBuildRoute(bot, body, sender, contract.schematic);
+    log(`[IntentRouter] regex ${route.action} ${route.body.name} -> ${remapped ? contract.schematic : 'dropped'}: request names ${contract.schematic}`);
+    return remapped || { matched: false, nlp_zone: 'regex_build_mismatch' };
   }
   return route;
 }
 
 async function tryRouteRegexPrimary(bot, body, sender) {
-  const regex = guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
+  const regex = await guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
   if (regex.matched) return regex;
   // An unsupported "build ..." sentence the regex router did not match is still
   // a handled refusal, not a brain turn.
@@ -127,11 +128,12 @@ async function tryRoute(bot, body, sender) {
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
   if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
-    const regex = guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
+    const regex = await guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
     if (regex.nlp_zone === 'build_unsupported') return regex;
     if (
       regex.matched
-      && (SURVIVAL_REGEX_FALLBACK.has(regex.intent_name) || regex.action === 'build_schematic_advanced')
+      && (SURVIVAL_REGEX_FALLBACK.has(regex.intent_name) || regex.action === 'build_schematic_advanced'
+        || regex.nlp_zone === 'catalog_remap')
     ) {
       regex._fallback_from_nlp_zone = nlp.nlp_zone;
       regex._fallback_from_nlp_score = nlp.nlp_score;
@@ -140,7 +142,7 @@ async function tryRoute(bot, body, sender) {
     }
     return nlp;
   }
-  const regex = guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
+  const regex = await guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
   if (regex.nlp_zone === 'build_unsupported') return regex;
   if (regex.matched) {
     // Annotate so the log line shows it was a fallback decision

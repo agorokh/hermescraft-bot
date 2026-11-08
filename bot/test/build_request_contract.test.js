@@ -79,6 +79,24 @@ test('every object of every build verb is checked', () => {
   }
 });
 
+// Review of PR #25 round 3: the named structure is the resolver's reading of the
+// whole object, never of the whole sentence.
+test('schematic is resolved from the whole object, not the head alone or the sentence', () => {
+  for (const [body, schematic] of [
+    ['build a house of ice', 'ice_castle'],
+    ['build a tower of wizards', 'wizard_tower'],
+    ['build a castle made of ice', 'ice_castle'],
+    ['build a wizard tower', 'wizard_tower'],
+    ['build a garden near the hotel', 'garden'],
+    ['build a garden in front of the observatory', 'garden'],
+    ['build a small house for me here', 'small_house'],
+  ]) {
+    const c = buildRequestContract(body);
+    assert.equal(c.status, 'supported', body);
+    assert.equal(c.schematic, schematic, body);
+  }
+});
+
 test('"make" is a build verb only when the classifier picked a build intent', () => {
   assert.equal(status('make me a sword'), 'none');
   assert.equal(status('make me a sword', { nlpIntent: 'gather_block' }), 'none');

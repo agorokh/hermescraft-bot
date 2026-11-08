@@ -328,7 +328,12 @@ function checkObject(obj, names) {
     }
   }
   if (headStart < 0) return { status: 'unsupported', phrase, reason: 'not_in_library' };
-  const schematic = entry === 'capability' ? null : entry;
+  // The structure is what the resolver makes of the whole object, not the head
+  // alone: "a house of ice" is ice_castle, "a tower of wizards" wizard_tower.
+  // Only the object is resolved, never the whole sentence, so "a garden near
+  // the hotel" stays a garden.
+  const objectEntry = resolvedEntry([...words, ...(obj.ofWords.length ? ['of', ...obj.ofWords] : [])].join(' '));
+  const schematic = objectEntry || (entry === 'capability' ? null : entry);
   const headWords = words.slice(headStart, headEnd);
   const base = { phrase, schematic, head: headWords.join(' ') };
 

@@ -721,6 +721,15 @@ test('#501 a schematic route never builds a structure the object does not name',
   }
 });
 
+test('#501 a bare tower never places the small_tower schematic', async () => {
+  for (const body of ['build a stone tower', 'build me a tower 4 tall', 'build a tower near the hotel']) {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    if (r.matched && ['build_schematic', 'build_schematic_advanced'].includes(r.action)) {
+      assert.fail(`${body}: placed schematic ${r.body.name} (zone=${r.nlp_zone})`);
+    }
+  }
+});
+
 test('#501 narration about building stays with the brain', async () => {
   const r = await tryRoute(stubBot(), 'my brother wants to build a pirate ship', 'Adalynn');
   assert.notEqual(r.intent_name, 'build_unsupported');

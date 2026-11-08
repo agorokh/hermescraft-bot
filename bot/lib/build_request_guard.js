@@ -5,7 +5,7 @@
 // here: in regex-primary mode (HERMES_NLP_PRIMARY=0) and in the NLP-primary
 // fallback branches. Kept out of server.js so it can be tested without a bot.
 
-import { checkBuildRequest, contractBuildRoute, recordLastSkill } from './intent_router_nlp.js';
+import { checkBuildRequest, contractBuildRoute, contractCapabilityRoute, recordLastSkill } from './intent_router_nlp.js';
 
 // Regex actions that change the world with a structure or placement.
 export const REGEX_BUILD_ACTIONS = new Set([
@@ -30,18 +30,29 @@ function cannotPlaceRoute(schematic) {
  * - the regex resolved a different structure than the object names ("build a
  *   garden near the hotel" → grand_hotel) → the named structure (nlp_zone
  *   catalog_remap), or a handled refusal when it cannot be anchored
+ * - the object is a body capability but the regex placed a schematic ("build a
+ *   tower near the hotel") → the capability's skill (nlp_zone catalog_remap)
  * - otherwise the route unchanged
- * Remapped routes come back with skill_id null; the caller records them.
+ * Remapped routes come back with skill_id null (the caller records them) and
+ * build_framed: whether the sentence was a request to the companion.
  */
 export async function guardRegexBuildRoute(bot, body, sender, route, log = () => {}) {
   if (!route?.matched || !REGEX_BUILD_ACTIONS.has(route.action)) return route;
   const { route: refusal, contract } = checkBuildRequest(bot, body, sender, route.intent_name, null, { acting: true });
   if (refusal) return refusal;
-  if (contract.status === 'supported' && contract.schematic && route.body?.name
-    && route.body.name !== contract.schematic) {
+  if (contract.status !== 'supported' || !route.body?.name) return route;
+  // The object names a schematic, and the regex placed a different one.
+  if (contract.schematic && route.body.name !== contract.schematic) {
     const remapped = await contractBuildRoute(bot, body, sender, contract.schematic);
     log(`[IntentRouter] regex ${route.action} ${route.body.name} -> ${remapped ? contract.schematic : 'refused'}: request names ${contract.schematic}`);
-    return remapped || cannotPlaceRoute(contract.schematic);
+    return remapped ? { ...remapped, build_framed: contract.framed } : cannotPlaceRoute(contract.schematic);
+  }
+  // The object is a body capability ("a tower near the hotel"), and the regex
+  // placed a schematic: use the capability's skill.
+  if (!contract.schematic && contract.capability) {
+    const skill = await contractCapabilityRoute(bot, body, sender, contract.capability);
+    log(`[IntentRouter] regex ${route.action} ${route.body.name} -> ${skill ? skill.action : 'refused'}: request names ${contract.capability}`);
+    return skill ? { ...skill, build_framed: contract.framed } : cannotPlaceRoute(contract.capability);
   }
   return route;
 }

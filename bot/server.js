@@ -114,7 +114,9 @@ async function tryRoute(bot, body, sender) {
     if (
       regex.matched
       && (SURVIVAL_REGEX_FALLBACK.has(regex.intent_name) || regex.action === 'build_schematic_advanced'
-        || regex.nlp_zone === 'catalog_remap')
+        // A remap is admitted here only for a request to the companion; narration
+        // ("my brother wants to build a garden near the house") stays with the brain.
+        || (regex.nlp_zone === 'catalog_remap' && regex.build_framed === true))
     ) {
       regex._fallback_from_nlp_zone = nlp.nlp_zone;
       regex._fallback_from_nlp_score = nlp.nlp_score;

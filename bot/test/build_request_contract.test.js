@@ -104,6 +104,10 @@ test('a bare tower names no schematic; a word that changes it does', () => {
   assert.equal(buildRequestContract('build a tower of wizards').schematic, 'wizard_tower');
   assert.equal(buildRequestContract('build a wizard tower').schematic, 'wizard_tower');
   assert.equal(buildRequestContract('build a castle').schematic, 'small_tower');
+  assert.equal(buildRequestContract('build a stone tower').capability, 'tower');
+  assert.equal(buildRequestContract('build a tower of wizards').capability, null);
+  assert.equal(buildRequestContract('build a big tower with battlements').schematic, 'small_tower');
+  assert.equal(buildRequestContract('build a big tower with battlements').capability, null);
 });
 
 test('"set up" and "put up" are build verbs without a classifier intent', () => {

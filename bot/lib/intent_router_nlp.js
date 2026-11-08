@@ -626,6 +626,39 @@ export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore 
   };
 }
 
+// Body capabilities the contract can name, and the dispatcher that builds each.
+// A capability with no entry here has no skill to fall back to.
+const CAPABILITY_INTENTS = {
+  tower: 'build_tower',
+  pillar: 'build_tower',
+  column: 'build_tower',
+  spire: 'build_tower',
+  flower: 'plant_flowers',
+};
+
+/**
+ * Skill route for a body capability the contract named ("a stone tower" is the
+ * build_tower skill, not the small_tower schematic). Returns null when the
+ * capability has no skill or no anchor. The caller records the skill.
+ */
+export async function contractCapabilityRoute(bot, body, sender, capability) {
+  const intent = CAPABILITY_INTENTS[capability];
+  if (!bot || !body || !intent) return null;
+  const senderEntity = findPlayerEntity(bot, sender);
+  const ctx = { sender, senderEntity, message: body, body };
+  const decision = await Promise.resolve(DISPATCHERS[intent](bot, ctx));
+  if (!decision) return null;
+  return {
+    matched: true,
+    intent_name: intent,
+    action: decision.action,
+    body: decision.body,
+    skill_id: null,
+    nlp_score: null,
+    nlp_zone: 'catalog_remap',
+  };
+}
+
 /**
  * Library build route for a schematic the contract already named. server.js
  * uses it when the regex router resolved a different structure from the same
@@ -833,6 +866,15 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   // A confident build_schematic builds the structure the contract named from
   // the object, not whatever a keyword elsewhere in the sentence resolves to
   // ("build a garden near the hotel" is a garden).
+  // A bare body capability ("build a stone tower") is the capability's skill,
+  // not the schematic the resolver maps the word to.
+  if (intent === 'build_schematic' && contract.status === 'supported' && contract.capability) {
+    const skill = await contractCapabilityRoute(bot, body, sender, contract.capability);
+    if (skill) {
+      const skill_id = opts.dryRun ? null : recordLastSkill(bot, skill.intent_name, skill.action, skill.body, body);
+      return { ...skill, skill_id, nlp_score: score, nlp_zone: 'act' };
+    }
+  }
   const dispatchCtx = intent === 'build_schematic' && contract.status === 'supported' && contract.schematic
     ? { ...ctx, schematicName: contract.schematic }
     : ctx;

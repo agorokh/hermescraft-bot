@@ -338,14 +338,17 @@ function checkObject(obj, names) {
   const headOnly = entry === 'capability' ? null : entry;
   let schematic = objectEntry || headOnly;
   // A bare body capability ("a stone tower 4 tall") is the build_tower skill,
-  // not the small_tower schematic the resolver maps "tower" to. Only a word
-  // that changes the structure ("a tower of wizards") names a schematic.
+  // not the small_tower schematic the resolver maps "tower" to. A word that
+  // changes the structure ("a tower of wizards") or a feature only the
+  // schematic carries ("a tower with battlements") names the schematic.
   const headLast = singular(headWords[headWords.length - 1]);
-  if (headWords.length === 1 && CAPABILITY_HEADS.has(headLast)
+  let capability = null;
+  if (headWords.length === 1 && CAPABILITY_HEADS.has(headLast) && obj.withWords.length === 0
     && (!objectEntry || objectEntry === headOnly)) {
     schematic = null;
+    capability = headLast;
   }
-  const base = { phrase, schematic, head: headWords.join(' ') };
+  const base = { phrase, schematic, capability, head: headWords.join(' ') };
 
   // A descriptive modifier is fine ("a haunted house"). After "the", an unknown
   // modifier names one specific other thing ("the eiffel tower").

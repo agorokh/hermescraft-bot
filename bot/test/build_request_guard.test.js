@@ -44,6 +44,29 @@ test('regex build of a different structure is remapped to the one the object nam
   assert.equal(r.nlp_zone, 'catalog_remap');
 });
 
+// Review round 5: a capability object must not let the regex place a schematic.
+test('regex schematic for a capability object becomes the capability skill', async () => {
+  const bot = stubBot();
+  const raw = await tryRouteRegex(bot, 'build a tower near the hotel', 'Adalynn');
+  assert.equal(raw.body?.name, 'grand_hotel', 'precondition: the regex router picks the hotel');
+  const r = await guarded(bot, 'build a tower near the hotel');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'build_tower');
+  assert.equal(r.nlp_zone, 'catalog_remap');
+  assert.equal(r.build_framed, true);
+});
+
+test('a remap of narration is marked unframed so the NLP fallback leaves it to the brain', async () => {
+  const bot = stubBot();
+  const body = 'my brother wants to build a garden near the house';
+  const raw = await tryRouteRegex(bot, body, 'Adalynn');
+  assert.equal(raw.body?.name, 'small_house', 'precondition: the regex router picks the house');
+  const r = await guarded(bot, body);
+  assert.equal(r.nlp_zone, 'catalog_remap');
+  assert.equal(r.body.name, 'garden');
+  assert.equal(r.build_framed, false);
+});
+
 test('a remap that cannot be anchored is a handled refusal, not a silent drop', async () => {
   const bot = stubBot('Adalynn', { noEntity: true });
   const route = { matched: true, intent_name: 'build_schematic', action: 'build_schematic_advanced', body: { name: 'grand_hotel', x: 0, y: 64, z: 0 } };

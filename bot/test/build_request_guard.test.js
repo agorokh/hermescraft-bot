@@ -150,3 +150,41 @@ test("the sender's name never masks a trailing noun", () => {
   assert.equal(contract.status, 'unsupported');
   assert.equal(contract.reason, 'trailing:boat');
 });
+
+
+test('unsupported narration matching a regex build is deferred rather than refused', async () => {
+  const bot = stubBot();
+  const body = 'my brother wants to build the eiffel tower';
+  const raw = await tryRouteRegex(bot, body, 'Adalynn');
+  assert.equal(raw.action, 'build_tower');
+  for (const r of [await guarded(bot, body), await routeRegexPrimary(bot, body, 'Adalynn', tryRouteRegex)]) {
+    assert.equal(r.matched, false);
+    assert.equal(r.nlp_zone, 'regex_build_unframed');
+    assert.equal(r.action, undefined);
+  }
+  const { route } = checkBuildRequest(bot, body, 'Adalynn', 'build_tower', 0.99, { acting: true });
+  assert.equal(route.matched, false, 'a confident NLP placement must also defer');
+  assert.equal(route.nlp_zone, 'build_unframed');
+});
+
+test('a flower capability remaps torch placement despite the shared action', async () => {
+  const bot = stubBot();
+  const body = 'build a flower near the torch here';
+  const torch = await tryRouteRegex(bot, body, 'Adalynn');
+  assert.equal(torch.intent_name, 'torch_near_me');
+  assert.equal(torch.action, 'place_near_player');
+  const r = await guardRegexBuildRoute(bot, body, 'Adalynn', torch);
+  assert.equal(r.intent_name, 'plant_flowers');
+  assert.equal(r.action, 'place_near_player');
+  assert.notEqual(r.body.item, 'torch');
+  assert.equal(r.nlp_zone, 'catalog_remap');
+  assert.equal(await guardRegexBuildRoute(bot, body, 'Adalynn', r), r, 'the correct flower skill passes unchanged');
+});
+
+test('regex-primary keeps stop ahead of builds using the regex router stop path', async () => {
+  for (const body of ['stop', 'Rosie stop', 'stop building the tower', 'cancel']) {
+    const r = await routeRegexPrimary(stubBot(), body, 'Adalynn', tryRouteRegex);
+    assert.equal(r.action, 'stop', body);
+    assert.equal(r.intent_name, 'stop', body);
+  }
+});

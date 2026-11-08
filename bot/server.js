@@ -101,9 +101,7 @@ function guardRegexBuildRoute(bot, body, sender, route) {
 
 async function tryRoute(bot, body, sender) {
   if (!NLP_PRIMARY) {
-    // Stop keeps its hot path in regex-primary mode too.
-    const stop = await tryStopRoute(bot, body, sender);
-    if (stop.matched) return stop;
+    // tryRouteRegex checks the same stop patterns first, before build routes.
     return routeRegexPrimary(bot, body, sender, tryRouteRegex, log);
   }
   // Safety primitive: stop/cancel must never depend on NLP classification.
@@ -115,7 +113,11 @@ async function tryRoute(bot, body, sender) {
   if (nlp.matched) return nlp;
   if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
     const regex = await guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
-    if (regex.nlp_zone === 'build_unsupported') return regex;
+    if (regex.nlp_zone === 'build_unsupported') return {
+      ...regex,
+      _fallback_from_nlp_zone: nlp.nlp_zone,
+      _fallback_from_nlp_score: nlp.nlp_score,
+    };
     if (
       regex.matched
       && (SURVIVAL_REGEX_FALLBACK.has(regex.intent_name) || regex.action === 'build_schematic_advanced'
@@ -131,7 +133,11 @@ async function tryRoute(bot, body, sender) {
     return nlp;
   }
   const regex = await guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
-  if (regex.nlp_zone === 'build_unsupported') return regex;
+  if (regex.nlp_zone === 'build_unsupported') return {
+    ...regex,
+    _fallback_from_nlp_zone: nlp.nlp_zone,
+    _fallback_from_nlp_score: nlp.nlp_score,
+  };
   if (regex.matched) {
     // Annotate so the log line shows it was a fallback decision
     regex._fallback_from_nlp_zone = nlp.nlp_zone;

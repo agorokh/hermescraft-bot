@@ -591,10 +591,9 @@ const DISPATCHERS = {
  * it for the brain (which in May 2026 talked about building and placed nothing).
  * See lib/build_request_contract.js for the rules.
  *
- * The refusal fires when the sentence is a request to the companion ("can you
- * build ...", "lets build ...") or when the caller would otherwise act on the
- * world (`opts.acting`). A narrative line that only mentions building ("my
- * brother wants to build a pirate ship") stays with the brain, as before.
+ * Refuse only requests to the companion ("can you build ...", "lets build
+ * ..."). If a caller would place blocks for unsupported narration, return an
+ * unmatched route to suppress that act and leave the line with the brain.
  */
 export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore = null, opts = {}) {
   // Only the companion's own name may trail the object ("build a house rosie");
@@ -604,7 +603,17 @@ export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore 
     names: [bot?.username].filter(Boolean),
   });
   if (contract.status !== 'unsupported') return { route: null, contract };
-  if (!contract.framed && !opts.acting) return { route: null, contract };
+  if (!contract.framed) {
+    return {
+      contract,
+      route: opts.acting ? {
+        matched: false,
+        nlp_intent: nlpIntent,
+        nlp_score: nlpScore,
+        nlp_zone: 'build_unframed',
+      } : null,
+    };
+  }
   return {
     contract,
     route: {
@@ -657,7 +666,7 @@ const CAPABILITY_ACTIONS = {
 /** Whether a route already runs the skill a contract capability names. */
 export function routeIsCapabilitySkill(route, capability) {
   const intent = CAPABILITY_INTENTS[capability];
-  return Boolean(intent && route?.action === CAPABILITY_ACTIONS[intent]);
+  return Boolean(intent && route?.intent_name === intent && route.action === CAPABILITY_ACTIONS[intent]);
 }
 
 /**

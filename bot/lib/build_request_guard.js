@@ -56,7 +56,13 @@ function noSkillRoute(capability) {
 export async function guardRegexBuildRoute(bot, body, sender, route, log = () => {}) {
   if (!route?.matched || !REGEX_BUILD_ACTIONS.has(route.action)) return route;
   const { route: refusal, contract } = checkBuildRequest(bot, body, sender, route.intent_name, null, { acting: true });
-  if (refusal) return refusal;
+  if (refusal) {
+    if (!refusal.matched) {
+      log(`[IntentRouter][contract-drop] regex ${route.action} not built: unsupported unframed build mention -> brain`);
+      return { ...refusal, nlp_zone: 'regex_build_unframed' };
+    }
+    return refusal;
+  }
   if (contract.status !== 'supported') return route;
   // A capability object ("a farm next to my tower") is mismatched by any route
   // that is not that capability's own skill, named schematic or nameless pillar.

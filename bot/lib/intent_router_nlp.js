@@ -652,6 +652,19 @@ export function capabilityHasSkill(capability) {
   return Boolean(CAPABILITY_INTENTS[capability]);
 }
 
+// The server action each capability skill dispatches.
+const CAPABILITY_ACTIONS = {
+  build_tower: 'build_tower',
+  plant_flowers: 'place_near_player',
+  build_shelter_for_night: 'build_shelter_for_night',
+};
+
+/** Whether a route already runs the skill a contract capability names. */
+export function routeIsCapabilitySkill(route, capability) {
+  const intent = CAPABILITY_INTENTS[capability];
+  return Boolean(intent && route?.action === CAPABILITY_ACTIONS[intent]);
+}
+
 /**
  * Skill route for a body capability the contract named ("a stone tower" is the
  * build_tower skill, not the small_tower schematic). Returns null when the

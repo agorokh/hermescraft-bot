@@ -71,6 +71,17 @@ test('capability heads with a skill get it; those without get an honest refusal'
   assert.equal(farm.body.text, "I can't build a farm yet.");
 });
 
+// Review round 9: a capability object is checked against nameless regex builds too.
+test('a nameless regex pillar for another capability becomes that capability or a refusal', async () => {
+  const bot = stubBot();
+  const pillar = { matched: true, intent_name: 'build_tower', action: 'build_tower', body: { x: 2, y: 64, z: 0, height: 5 } };
+  const farm = await guardRegexBuildRoute(bot, 'build a farm next to my tower', 'Adalynn', pillar);
+  assert.equal(farm.action, 'chat');
+  assert.equal(farm.body.text, "I can't build a farm yet.");
+  const shelter = await guardRegexBuildRoute(bot, 'build a shelter next to the tower', 'Adalynn', pillar);
+  assert.equal(shelter.action, 'build_shelter_for_night');
+});
+
 // Review round 7: a nameless regex build is remapped when the object names a schematic.
 test('a regex pillar for a schematic-named object becomes that schematic', async () => {
   const bot = stubBot();

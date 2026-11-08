@@ -74,8 +74,18 @@ test('every object of every build verb is checked', () => {
     'build a house and a pirate ship', 'build a house then a pirate ship',
     'build a house. build a pirate ship', 'build a house build a pirate ship',
     'build me a tower like the eiffel tower',
+    // Review round 9: bare conjuncts, bare comparisons, a stop in an earlier clause.
+    'build a castle and moat', 'build a house then pirate ship', 'build a tower like eiffel tower',
+    'stop! build me a pirate ship',
   ]) {
     assert.equal(status(body), 'unsupported', body);
+  }
+  for (const body of [
+    'build a fairy treehouse and name it Aurora', 'build a tower and stack it up',
+    'build a house and make it big', 'build a house like my friends house',
+    'build me a flower garden poppies and dandelions',
+  ]) {
+    assert.equal(status(body), 'supported', body);
   }
 });
 
@@ -140,7 +150,6 @@ test('sentences that are not build commands are left to the router', () => {
     'i love building towers',
     'how do you build a rocket',
     'do you know how to build a house',
-    'stop! build me a rocket',
     'build a house nvm',
   ]) {
     assert.equal(status(body), 'none', body);

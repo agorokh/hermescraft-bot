@@ -141,8 +141,6 @@ const REQUEST_FRAME_WORDS = new Set([
   'to', 'just', 'and', 'so', 'quick', 'quickly', 'yo', 'pretty', 'oh', 'also', 'then',
   'help', 'me', 'even',
 ]);
-// A stop / cancel anywhere before the verb: the sentence is not a build request.
-const STOP_BEFORE_RE = /\b(?:stop|halt|cancel|quit|freeze)\b/;
 const FILLER_RE = /^(?:u+h+|u+m+|h+m+|e+r+m*|a+h+)$/;
 const SIZE_TOKEN_RE = /^\d+(?:x\d+)?(?:-?(?:tall|high|wide|long|blocks?|story|stories|floors?))?$/;
 const PLEASE_RE = /^p+l+(?:e+a+)?s+e*$|^pl[sz]+$/;
@@ -231,6 +229,28 @@ function tokenize(rest) {
 
 const isModifier = (t) => isSizeOrStyle(t) || CATALOG_WORDS.has(t) || DETERMINERS.has(t);
 
+// Particles and pronouns that mark a verb phrase after "and" ("stack it up").
+const VERB_PHRASE_MARKERS = new Set(['it', 'them', 'up', 'down', 'out', 'off', 'over', 'away', 'again']);
+
+/**
+ * Whether the tokens from index j form a bare coordinated noun phrase
+ * ("moat", "pirate ship") rather than a verb phrase ("name it", "stack it up").
+ */
+function isBareConjunct(tokens, j) {
+  const first = tokens[j];
+  if (!first || first === ',' || BOUNDARY_WORDS.has(first) || BUILD_VERB_TOKENS.has(first)) return false;
+  if (SUBJECT_PRONOUNS.has(first) || RELATIVE_WORDS.has(first) || OBJECT_PRONOUNS.has(first)) return false;
+  let describesOnly = true;
+  for (let k = j; k < tokens.length; k += 1) {
+    const t = tokens[k];
+    if (t === ',' || BOUNDARY_WORDS.has(t) || COORDINATORS.has(t) || PLEASE_RE.test(t)) break;
+    if (VERB_PHRASE_MARKERS.has(t) || SUBJECT_PRONOUNS.has(t) || BUILD_VERB_TOKENS.has(t)) return false;
+    if (!FEATURE_WORDS.has(t) && !isModifier(t)) describesOnly = false;
+  }
+  // "a flower garden poppies and dandelions" lists what the garden holds.
+  return !describesOnly;
+}
+
 /**
  * Parse the objects of one build verb: the main object, coordinated objects
  * ("and a moat"), and a "like ..." comparison. Each object carries its own
@@ -274,6 +294,13 @@ function parseObjects(tokens) {
       let j = i + 1;
       while (tokens[j] === 'also' || tokens[j] === 'then' || tokens[j] === 'and') j += 1;
       if (DETERMINERS.has(tokens[j]) && tokens[j] !== 'me' && tokens[j] !== 'us') {
+        i = j - 1;
+        open();
+        continue;
+      }
+      // "a castle and moat" coordinates a bare noun phrase; "and name it",
+      // "and stack it up", "and make it tall" are verb phrases that end the request.
+      if (isBareConjunct(tokens, j)) {
         i = j - 1;
         open();
         continue;
@@ -351,8 +378,9 @@ function checkObject(obj, names) {
   const base = { phrase, schematic, capability, head: headWords.join(' ') };
 
   // A descriptive modifier is fine ("a haunted house"). After "the", an unknown
-  // modifier names one specific other thing ("the eiffel tower").
-  if (obj.det === 'the') {
+  // modifier names one specific other thing ("the eiffel tower"); so does a bare
+  // comparison target ("a tower like eiffel tower").
+  if (obj.det === 'the' || (obj.compare && obj.det == null)) {
     const named = words.slice(0, headStart).find((t) => !isModifier(t) && !isModifier(singular(t)));
     if (named) return { ...base, status: 'unsupported', reason: `named:${named}` };
   }
@@ -396,9 +424,10 @@ export function buildRequestContract(body, opts = {}) {
     const before = text.slice(0, m.index);
     const clauseStart = Math.max(...[',', '.', ';', '!', '?', ':'].map((c) => before.lastIndexOf(c)));
     const prefix = before.slice(clauseStart + 1);
-    // "dont build a tower" / "i love when we build stuff" are not commands.
+    // "dont build a tower" / "i love when we build stuff" are not commands. A
+    // stop in the same clause is a negation; a stop in an earlier clause ("stop!
+    // build me a pirate ship") is handled by tryStopRoute / the stop intent first.
     if (NEGATION_RE.test(prefix) || SUBORDINATE_RE.test(prefix)) continue;
-    if (STOP_BEFORE_RE.test(before)) return { status: 'none' };
 
     const after = text.slice(m.index + verb.length);
     const sentenceEnd = after.search(/[.!?;:]/);

@@ -11,6 +11,7 @@ import {
   contractBuildRoute,
   contractCapabilityRoute,
   recordLastSkill,
+  routeIsCapabilitySkill,
 } from './intent_router_nlp.js';
 
 // Regex actions that change the world with a structure or placement.
@@ -57,13 +58,16 @@ export async function guardRegexBuildRoute(bot, body, sender, route, log = () =>
   const { route: refusal, contract } = checkBuildRequest(bot, body, sender, route.intent_name, null, { acting: true });
   if (refusal) return refusal;
   if (contract.status !== 'supported') return route;
-  const mismatched = (contract.schematic && route.body?.name !== contract.schematic)
-    || (!contract.schematic && contract.capability && route.body?.name);
+  // A capability object ("a farm next to my tower") is mismatched by any route
+  // that is not that capability's own skill, named schematic or nameless pillar.
+  const capabilityMismatch = !contract.schematic && contract.capability
+    && !routeIsCapabilitySkill(route, contract.capability);
+  const mismatched = (contract.schematic && route.body?.name !== contract.schematic) || capabilityMismatch;
   // Narration ("my brother wants to build a garden near the house") is never
   // turned into a build: a mismatched regex route on an unframed sentence goes
-  // to the brain, on every path.
+  // to the brain queue, on every path.
   if (mismatched && !contract.framed) {
-    log(`[IntentRouter] regex ${route.action} ${route.body?.name || ''} not built: unframed build mention`);
+    log(`[IntentRouter][contract-drop] regex ${route.action} ${route.body?.name || ''} not built: unframed build mention -> brain`);
     return { matched: false, nlp_zone: 'regex_build_unframed' };
   }
   // The object names a schematic, and the regex builds something else: a
@@ -76,7 +80,7 @@ export async function guardRegexBuildRoute(bot, body, sender, route, log = () =>
   }
   // The object is a body capability ("a tower near the hotel"), and the regex
   // placed a schematic: use the capability's skill.
-  if (!contract.schematic && contract.capability && route.body?.name) {
+  if (capabilityMismatch) {
     const skill = await contractCapabilityRoute(bot, body, sender, contract.capability);
     log(`[IntentRouter] regex ${route.action} ${route.body.name} -> ${skill ? skill.action : 'refused'}: request names ${contract.capability}`);
     if (skill) return { ...skill, build_framed: contract.framed };

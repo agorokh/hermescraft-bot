@@ -655,3 +655,56 @@ test('regex and NLP movement helpers agree on come-to-my-place phrasing', async 
   assert.equal(nlp.matched, true);
   assert.equal(nlp.action, 'goto');
 });
+
+// ── Build-request contract, frozen at hermescraft#501 ───────────────────────
+// A build sentence either starts the library structure it names, or is a
+// handled chat refusal. Before #501 these dispatched flowers (0.88, 0.94), a
+// 5-high pillar (0.97) and small_tower (0.99), or fell to the brain unhandled.
+// The act threshold is not changed; the library decides.
+const FROZEN_UNSUPPORTED_BUILDS = [
+  'make a roller coaster',
+  'make me a nether portal',
+  'build me a pirate ship',
+  'build me a statue of a cat',
+  'lets build the eiffel tower',
+  'Rosie design a castle with a moat',
+];
+for (const body of FROZEN_UNSUPPORTED_BUILDS) {
+  test(`#501 unsupported build: "${body}" is a handled chat refusal`, async () => {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    assert.equal(r.matched, true, `must be handled, not fall through to the brain: zone=${r.nlp_zone}`);
+    assert.equal(r.action, 'chat', `dispatched a world action: ${r.action}`);
+    assert.equal(r.intent_name, 'build_unsupported');
+    assert.equal(r.nlp_zone, 'build_unsupported');
+    assert.match(r.body.text, /^I can't build /);
+    assert.equal(r.skill_id, null, 'a refusal must not enter the repeat buffer');
+  });
+}
+
+test('#501 a refusal is not replayed by "do it again"', async () => {
+  const bot = stubBot('Adalynn', { bot: 'RefusalRepeatBot' });
+  const refused = await tryRoute(bot, 'make a roller coaster', 'Adalynn');
+  assert.equal(refused.intent_name, 'build_unsupported');
+  const again = await tryRoute(bot, 'do it again', 'Adalynn');
+  assert.notEqual(again.intent_name, 'build_unsupported');
+});
+
+test('#501 fairy treehouse named Aurora builds the library treehouse', async () => {
+  const r = await tryRoute(stubBot(), 'build a fairy treehouse and name it Aurora', 'Adalynn');
+  assert.equal(r.matched, true, `zone=${r.nlp_zone} intent=${r.nlp_intent} score=${r.nlp_score}`);
+  assert.equal(r.action, 'build_schematic');
+  assert.equal(r.body.name, 'treehouse');
+  assert.equal(r.body.kid_name, 'Aurora');
+});
+
+test('#501 "what did we build yesterday" dispatches no build', async () => {
+  const r = await tryRoute(stubBot(), 'what did we build yesterday', 'Adalynn');
+  const builds = ['build_tower', 'build_schematic', 'build_schematic_advanced', 'place_near_player'];
+  assert.ok(!(r.matched && builds.includes(r.action)), `dispatched ${r.action}`);
+  assert.notEqual(r.intent_name, 'build_unsupported', 'recall is not a build request');
+});
+
+test('#501 the default act threshold is unchanged (0.80)', { skip: Boolean(process.env.HERMES_NLP_ACT_THRESHOLD) }, async () => {
+  const { ACT_THRESHOLD } = await import('../lib/intent_router_nlp.js');
+  assert.equal(ACT_THRESHOLD, 0.80);
+});

@@ -30,6 +30,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { extractGatherBlockFromBody, extractKidName, extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
+import { buildRequestContract, unsupportedBuildReply } from './build_request_contract.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
 import { explicitSchematicBaseY, findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
@@ -579,6 +580,37 @@ const DISPATCHERS = {
   },
 };
 
+// ── Build-request contract (hermescraft#501) ─────────────────────────────
+/**
+ * Check a build sentence against the library before anything is dispatched.
+ * Returns { route, contract }. `route` is a handled chat refusal when the
+ * sentence asks for a structure the library does not contain; the refusal is
+ * a matched `chat` action so server.js marks the line handled and never queues
+ * it for the brain (which in May 2026 talked about building and placed nothing).
+ * See lib/build_request_contract.js for the rules.
+ */
+export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore = null) {
+  const contract = buildRequestContract(stripExplicitBaseYForNlp(body) || body, {
+    nlpIntent,
+    names: [bot?.username, sender].filter(Boolean),
+  });
+  if (contract.status !== 'unsupported') return { route: null, contract };
+  return {
+    contract,
+    route: {
+      matched: true,
+      intent_name: 'build_unsupported',
+      action: 'chat',
+      body: { text: unsupportedBuildReply(contract) },
+      skill_id: null,
+      nlp_intent: nlpIntent,
+      nlp_score: nlpScore,
+      nlp_zone: 'build_unsupported',
+      build_contract: contract,
+    },
+  };
+}
+
 // Public API — drop-in replacement for intent_router.tryRoute.
 // Same return shape: {matched, intent_name, action, body}.
 export async function tryRoute(bot, body, sender, opts = {}) {
@@ -680,17 +712,47 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   } catch (e) {
     // If the corpus is malformed or training fails, fail open — the brain
     // will handle the chat. Never blocking on NLP startup is critical for
-    // production health.
+    // production health. An unsupported "build ..." sentence is still refused:
+    // that check does not depend on the classifier.
+    const refused = checkBuildRequest(bot, body, sender).route;
+    if (refused) return { ...refused, error: e.message };
     return { matched: false, error: e.message };
   }
   let result;
   try {
     result = await nlp.process('en', stripExplicitBaseYForNlp(body) || body);
   } catch (e) {
+    const refused = checkBuildRequest(bot, body, sender).route;
+    if (refused) return { ...refused, error: e.message };
     return { matched: false, error: e.message, nlp_zone: 'process_error' };
   }
   const intent = result.intent === 'None' ? null : result.intent;
   const score = result.score || 0;
+  // Build-request contract (#501): the library decides, not the score. An
+  // unsupported build is a handled refusal in every confidence zone.
+  const { route: refusal, contract } = checkBuildRequest(bot, body, sender, intent, score);
+  if (refusal) return refusal;
+  // The classifier's own top intent is build_schematic but below the act
+  // threshold, and the catalog confirms the structure ("build a fairy
+  // treehouse and name it Aurora", 0.68): dispatch the library build.
+  if (intent === 'build_schematic'
+    && score >= CLARIFY_THRESHOLD
+    && score < ACT_THRESHOLD
+    && contract.status === 'supported'
+    && contract.schematic) {
+    const decision = await Promise.resolve(DISPATCHERS.build_schematic(bot, ctx));
+    if (decision) {
+      return {
+        matched: true,
+        intent_name: 'build_schematic',
+        action: decision.action,
+        body: decision.body,
+        skill_id: opts.dryRun ? null : recordLastSkill(bot, 'build_schematic', decision.action, decision.body, body),
+        nlp_score: score,
+        nlp_zone: 'catalog_confirmed',
+      };
+    }
+  }
   // Three-zone confidence band (council 2026-05-17):
   //   score >= ACT_THRESHOLD       → fire the skill
   //   CLARIFY <= score < ACT       → defer to brain; brain may clarify

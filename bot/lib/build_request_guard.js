@@ -56,16 +56,18 @@ export async function guardRegexBuildRoute(bot, body, sender, route, log = () =>
   if (!route?.matched || !REGEX_BUILD_ACTIONS.has(route.action)) return route;
   const { route: refusal, contract } = checkBuildRequest(bot, body, sender, route.intent_name, null, { acting: true });
   if (refusal) return refusal;
-  if (contract.status !== 'supported' || !route.body?.name) return route;
-  // The object names a schematic, and the regex placed a different one.
-  if (contract.schematic && route.body.name !== contract.schematic) {
+  if (contract.status !== 'supported') return route;
+  // The object names a schematic, and the regex builds something else: a
+  // different schematic ("a garden near the hotel" → grand_hotel) or no
+  // schematic at all (a build_tower pillar for "a tower of wizards").
+  if (contract.schematic && route.body?.name !== contract.schematic) {
     const remapped = await contractBuildRoute(bot, body, sender, contract.schematic);
-    log(`[IntentRouter] regex ${route.action} ${route.body.name} -> ${remapped ? contract.schematic : 'refused'}: request names ${contract.schematic}`);
+    log(`[IntentRouter] regex ${route.action} ${route.body?.name || ''} -> ${remapped ? contract.schematic : 'refused'}: request names ${contract.schematic}`);
     return remapped ? { ...remapped, build_framed: contract.framed } : cannotPlaceRoute(contract.schematic);
   }
   // The object is a body capability ("a tower near the hotel"), and the regex
   // placed a schematic: use the capability's skill.
-  if (!contract.schematic && contract.capability) {
+  if (!contract.schematic && contract.capability && route.body?.name) {
     const skill = await contractCapabilityRoute(bot, body, sender, contract.capability);
     log(`[IntentRouter] regex ${route.action} ${route.body.name} -> ${skill ? skill.action : 'refused'}: request names ${contract.capability}`);
     if (skill) return { ...skill, build_framed: contract.framed };

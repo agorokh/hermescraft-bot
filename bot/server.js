@@ -100,7 +100,12 @@ function guardRegexBuildRoute(bot, body, sender, route) {
 }
 
 async function tryRoute(bot, body, sender) {
-  if (!NLP_PRIMARY) return routeRegexPrimary(bot, body, sender, tryRouteRegex, log);
+  if (!NLP_PRIMARY) {
+    // Stop keeps its hot path in regex-primary mode too.
+    const stop = await tryStopRoute(bot, body, sender);
+    if (stop.matched) return stop;
+    return routeRegexPrimary(bot, body, sender, tryRouteRegex, log);
+  }
   // Safety primitive: stop/cancel must never depend on NLP classification.
   const stop = await tryStopRoute(bot, body, sender);
   if (stop.matched) return stop;

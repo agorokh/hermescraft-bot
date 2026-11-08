@@ -721,6 +721,13 @@ test('#501 a schematic route never builds a structure the object does not name',
   }
 });
 
+test('#501 a schematic-named tower never becomes a pillar', async () => {
+  for (const body of ['build a wizard tower', 'build a tower of wizards', 'build a castle']) {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    assert.ok(!(r.matched && r.action === 'build_tower'), `${body}: built a pillar (zone=${r.nlp_zone})`);
+  }
+});
+
 test('#501 a bare tower never places the small_tower schematic', async () => {
   for (const body of [
     'build a stone tower', 'build me a tower 4 tall', 'build a tower near the hotel',

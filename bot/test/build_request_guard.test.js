@@ -71,6 +71,18 @@ test('capability heads with a skill get it; those without get an honest refusal'
   assert.equal(farm.body.text, "I can't build a farm yet.");
 });
 
+// Review round 7: a nameless regex build is remapped when the object names a schematic.
+test('a regex pillar for a schematic-named object becomes that schematic', async () => {
+  const bot = stubBot();
+  const pillar = { matched: true, intent_name: 'build_tower', action: 'build_tower', body: { x: 2, y: 64, z: 0, height: 5 } };
+  const r = await guardRegexBuildRoute(bot, 'build a tower of wizards', 'Adalynn', pillar);
+  assert.equal(r.action, 'build_schematic_advanced');
+  assert.equal(r.body.name, 'wizard_tower');
+  assert.equal(r.nlp_zone, 'catalog_remap');
+  // A bare tower stays the pillar.
+  assert.deepEqual(await guardRegexBuildRoute(bot, 'build a stone tower', 'Adalynn', pillar), pillar);
+});
+
 test('a remap of narration is marked unframed so the NLP fallback leaves it to the brain', async () => {
   const bot = stubBot();
   const body = 'my brother wants to build a garden near the house';

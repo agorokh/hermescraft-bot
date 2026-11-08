@@ -818,10 +818,9 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   // verb sits in a plain request frame ("build a fairy treehouse and name it
   // Aurora" scored 0.68 in one training and 0.78 in another): dispatch exactly
   // the structure the catalog named. Classifier scores move between trainings,
-  // so this does not depend on the confidence zone. build_tower keeps its own
-  // dispatcher.
+  // so this does not depend on the confidence zone. A bare tower names no
+  // schematic (contract.capability), so it never reaches this branch.
   if (!acting
-    && intent !== 'build_tower'
     && contract.status === 'supported'
     && contract.framed
     && contract.schematic) {
@@ -888,10 +887,15 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     // some other noun resolves to. server.js tries the regex router under the guard.
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'capability_no_skill' };
   }
-  const dispatchCtx = intent === 'build_schematic' && contract.status === 'supported' && contract.schematic
-    ? { ...ctx, schematicName: contract.schematic }
-    : ctx;
-  const decision = await Promise.resolve(dispatch(bot, dispatchCtx));
+  // Any confident build intent whose object names a schematic builds that
+  // schematic: a build_tower pillar for "a tower of wizards" would be the wrong
+  // structure, as would a hotel for "a garden near the hotel".
+  const namesSchematic = (intent === 'build_schematic' || intent === 'build_tower')
+    && contract.status === 'supported' && contract.schematic;
+  const effectiveIntent = namesSchematic ? 'build_schematic' : intent;
+  const decision = namesSchematic
+    ? await Promise.resolve(DISPATCHERS.build_schematic(bot, { ...ctx, schematicName: contract.schematic }))
+    : await Promise.resolve(dispatch(bot, ctx));
   if (!decision) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
   }
@@ -899,10 +903,10 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   // (avoid recursion on "do it again ... do it again").
   const skill_id = opts.dryRun || intent === 'repeat_last_action'
     ? null
-    : recordLastSkill(bot, intent, decision.action, decision.body, body);
+    : recordLastSkill(bot, effectiveIntent, decision.action, decision.body, body);
   return {
     matched: true,
-    intent_name: decision.intent_name || intent,
+    intent_name: decision.intent_name || effectiveIntent,
     action: decision.action,
     body: decision.body,
     skill_id,

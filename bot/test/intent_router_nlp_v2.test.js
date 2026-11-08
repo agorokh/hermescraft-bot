@@ -697,6 +697,12 @@ test('#501 fairy treehouse named Aurora builds the library treehouse', async () 
   assert.equal(r.body.kid_name, 'Aurora');
 });
 
+test('#501 narration about building stays with the brain', async () => {
+  const r = await tryRoute(stubBot(), 'my brother wants to build a pirate ship', 'Adalynn');
+  assert.notEqual(r.intent_name, 'build_unsupported');
+  assert.ok(!(r.matched && ['build_tower', 'build_schematic', 'place_near_player'].includes(r.action)), r.action);
+});
+
 test('#501 "what did we build yesterday" dispatches no build', async () => {
   const r = await tryRoute(stubBot(), 'what did we build yesterday', 'Adalynn');
   const builds = ['build_tower', 'build_schematic', 'build_schematic_advanced', 'place_near_player'];

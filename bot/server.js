@@ -97,12 +97,28 @@ const REGEX_BUILD_ACTIONS = new Set(['build_tower', 'build_schematic', 'build_sc
 
 function guardRegexBuildRoute(bot, body, sender, route) {
   if (!route?.matched || !REGEX_BUILD_ACTIONS.has(route.action)) return route;
-  const { route: refusal } = checkBuildRequest(bot, body, sender, route.intent_name);
-  return refusal || route;
+  const { route: refusal, contract } = checkBuildRequest(bot, body, sender, route.intent_name, null, { acting: true });
+  if (refusal) return refusal;
+  // The regex router resolved a different structure than the one the sentence
+  // names ("build a garden near the hotel" → grand_hotel): do not build it.
+  if (contract.status === 'supported' && contract.schematic && route.body?.name
+    && route.body.name !== contract.schematic) {
+    log(`[IntentRouter] regex ${route.action} ${route.body.name} dropped: request names ${contract.schematic}`);
+    return { matched: false, nlp_zone: 'regex_build_mismatch' };
+  }
+  return route;
+}
+
+async function tryRouteRegexPrimary(bot, body, sender) {
+  const regex = guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
+  if (regex.matched) return regex;
+  // An unsupported "build ..." sentence the regex router did not match is still
+  // a handled refusal, not a brain turn.
+  return checkBuildRequest(bot, body, sender).route || regex;
 }
 
 async function tryRoute(bot, body, sender) {
-  if (!NLP_PRIMARY) return guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
+  if (!NLP_PRIMARY) return tryRouteRegexPrimary(bot, body, sender);
   // Safety primitive: stop/cancel must never depend on NLP classification.
   const stop = await tryStopRoute(bot, body, sender);
   if (stop.matched) return stop;

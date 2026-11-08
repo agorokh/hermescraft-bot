@@ -399,7 +399,8 @@ const DISPATCHERS = {
   },
 
   build_schematic: (bot, ctx) => {
-    const resolvedName = resolveSchematicName(ctx.body);
+    // ctx.schematicName: the build-request contract already named the structure (#501).
+    const resolvedName = ctx.schematicName || resolveSchematicName(ctx.body);
     if (isSpeculativeBuildDiscussion(ctx.body)) return null;
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
@@ -581,6 +582,12 @@ const DISPATCHERS = {
 };
 
 // ── Build-request contract (hermescraft#501) ─────────────────────────────
+// Intents whose dispatch only talks or emotes; acting on them changes no blocks.
+const NON_WORLD_INTENTS = new Set([
+  'report_position', 'report_inventory', 'give_compliment', 'show_me_diamonds', 'ask_about_pet',
+  'emote_wave', 'emote_jump', 'emote_dance', 'emote_sit',
+]);
+
 /**
  * Check a build sentence against the library before anything is dispatched.
  * Returns { route, contract }. `route` is a handled chat refusal when the
@@ -588,13 +595,19 @@ const DISPATCHERS = {
  * a matched `chat` action so server.js marks the line handled and never queues
  * it for the brain (which in May 2026 talked about building and placed nothing).
  * See lib/build_request_contract.js for the rules.
+ *
+ * The refusal fires when the sentence is a request to the companion ("can you
+ * build ...", "lets build ...") or when the caller would otherwise act on the
+ * world (`opts.acting`). A narrative line that only mentions building ("my
+ * brother wants to build a pirate ship") stays with the brain, as before.
  */
-export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore = null) {
+export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore = null, opts = {}) {
   const contract = buildRequestContract(stripExplicitBaseYForNlp(body) || body, {
     nlpIntent,
     names: [bot?.username, sender].filter(Boolean),
   });
   if (contract.status !== 'unsupported') return { route: null, contract };
+  if (!contract.framed && !opts.acting) return { route: null, contract };
   return {
     contract,
     route: {
@@ -730,17 +743,21 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   const score = result.score || 0;
   // Build-request contract (#501): the library decides, not the score. An
   // unsupported build is a handled refusal in every confidence zone.
-  const { route: refusal, contract } = checkBuildRequest(bot, body, sender, intent, score);
+  const acting = Boolean(intent) && score >= ACT_THRESHOLD && !NON_WORLD_INTENTS.has(intent);
+  const { route: refusal, contract } = checkBuildRequest(bot, body, sender, intent, score, { acting });
   if (refusal) return refusal;
-  // The classifier's own top intent is build_schematic but below the act
-  // threshold, and the catalog confirms the structure ("build a fairy
-  // treehouse and name it Aurora", 0.68): dispatch the library build.
-  if (intent === 'build_schematic'
-    && score >= CLARIFY_THRESHOLD
-    && score < ACT_THRESHOLD
+  // The classifier is not acting, the catalog confirms the structure, and the
+  // verb sits in a plain request frame ("build a fairy treehouse and name it
+  // Aurora" scored 0.68 in one training and 0.78 in another): dispatch exactly
+  // the structure the catalog named. Classifier scores move between trainings,
+  // so this does not depend on the confidence zone. build_tower keeps its own
+  // dispatcher.
+  if (!acting
+    && intent !== 'build_tower'
     && contract.status === 'supported'
+    && contract.framed
     && contract.schematic) {
-    const decision = await Promise.resolve(DISPATCHERS.build_schematic(bot, ctx));
+    const decision = await Promise.resolve(DISPATCHERS.build_schematic(bot, { ...ctx, schematicName: contract.schematic }));
     if (decision) {
       return {
         matched: true,

@@ -77,7 +77,8 @@ import { findPlayerEntity, normalizePlayerName } from './lib/player_utils.js';
 // the call returns matched=false with error set. To avoid silent drops,
 // we also try regex as a last-resort fallback when NLP returns
 // matched=false. This is belt-and-suspenders for the kids-tonight rollout.
-import { tryRoute as tryRouteNlp, checkBuildRequest, contractBuildRoute, markLastSkillFailed, recordLastSkill } from './lib/intent_router_nlp.js';
+import { tryRoute as tryRouteNlp, markLastSkillFailed, recordLastSkill } from './lib/intent_router_nlp.js';
+import { guardRegexBuildRoute as guardRegexBuildRouteLib, routeRegexPrimary } from './lib/build_request_guard.js';
 const NLP_PRIMARY = process.env.HERMES_NLP_PRIMARY !== '0';  // default ON
 // When NLP is primary, shadow the regex router by default for AGREE/DIFFER telemetry.
 const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '0'
@@ -91,35 +92,15 @@ const SURVIVAL_REGEX_FALLBACK = new Set([
 ]);
 
 // Build-request contract (hermescraft#501): the NLP router applies it itself;
-// the regex router does not, so guard every regex route that would build.
-// "lets build the eiffel tower" is build_tower on the regex router too.
-const REGEX_BUILD_ACTIONS = new Set(['build_tower', 'build_schematic', 'build_schematic_advanced', 'place_near_player']);
-
-async function guardRegexBuildRoute(bot, body, sender, route) {
-  if (!route?.matched || !REGEX_BUILD_ACTIONS.has(route.action)) return route;
-  const { route: refusal, contract } = checkBuildRequest(bot, body, sender, route.intent_name, null, { acting: true });
-  if (refusal) return refusal;
-  // The regex router resolved a different structure than the one the sentence
-  // names ("build a garden near the hotel" → grand_hotel): build the named one.
-  if (contract.status === 'supported' && contract.schematic && route.body?.name
-    && route.body.name !== contract.schematic) {
-    const remapped = await contractBuildRoute(bot, body, sender, contract.schematic);
-    log(`[IntentRouter] regex ${route.action} ${route.body.name} -> ${remapped ? contract.schematic : 'dropped'}: request names ${contract.schematic}`);
-    return remapped || { matched: false, nlp_zone: 'regex_build_mismatch' };
-  }
-  return route;
-}
-
-async function tryRouteRegexPrimary(bot, body, sender) {
-  const regex = await guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
-  if (regex.matched) return regex;
-  // An unsupported "build ..." sentence the regex router did not match is still
-  // a handled refusal, not a brain turn.
-  return checkBuildRequest(bot, body, sender).route || regex;
+// the regex router does not, so every regex route goes through
+// lib/build_request_guard.js. "lets build the eiffel tower" is build_tower on
+// the regex router too.
+function guardRegexBuildRoute(bot, body, sender, route) {
+  return guardRegexBuildRouteLib(bot, body, sender, route, log);
 }
 
 async function tryRoute(bot, body, sender) {
-  if (!NLP_PRIMARY) return tryRouteRegexPrimary(bot, body, sender);
+  if (!NLP_PRIMARY) return routeRegexPrimary(bot, body, sender, tryRouteRegex, log);
   // Safety primitive: stop/cancel must never depend on NLP classification.
   const stop = await tryStopRoute(bot, body, sender);
   if (stop.matched) return stop;

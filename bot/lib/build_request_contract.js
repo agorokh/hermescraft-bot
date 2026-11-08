@@ -25,8 +25,9 @@ import { isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_
 
 // "make" / "create" mean "build" only when the classifier also picked a build
 // intent: "make me a sword" is a crafting ask, while "make me a nether portal"
-// was routed to plant_flowers. build / construct / design always count.
-const SOFT_BUILD_VERBS = new Set(['make', 'create', 'set up', 'put up']);
+// was routed to plant_flowers. build / construct / design / set up / put up
+// always count.
+const SOFT_BUILD_VERBS = new Set(['make', 'create']);
 const WORLD_BUILD_INTENTS = new Set(['build_schematic', 'build_tower', 'plant_flowers']);
 
 // Intents the contract never overrides: stop is the safety primitive, and the
@@ -301,9 +302,9 @@ function phraseOf(obj) {
 function checkObject(obj, names) {
   const words = [...obj.words];
   if (words.some((t) => CANCEL_WORDS.has(t))) return { status: 'none' };
-  while (words.length && (TRAILING_WORDS.has(words[words.length - 1]) || names.has(words[words.length - 1]))) {
-    words.pop();
-  }
+  // Names are only accepted after a confirmed head (below), never stripped first:
+  // a word that happens to be a name must not hide "a house boat".
+  while (words.length && TRAILING_WORDS.has(words[words.length - 1])) words.pop();
   if (words.length === 0) return { status: 'none' };
   if (words.some((t) => FILLER_RE.test(t))) return { status: 'none' };
   if (NON_NAMING_HEADS.has(words[words.length - 1])) return { status: 'none' };
@@ -333,8 +334,17 @@ function checkObject(obj, names) {
   // Only the object is resolved, never the whole sentence, so "a garden near
   // the hotel" stays a garden.
   const objectEntry = resolvedEntry([...words, ...(obj.ofWords.length ? ['of', ...obj.ofWords] : [])].join(' '));
-  const schematic = objectEntry || (entry === 'capability' ? null : entry);
   const headWords = words.slice(headStart, headEnd);
+  const headOnly = entry === 'capability' ? null : entry;
+  let schematic = objectEntry || headOnly;
+  // A bare body capability ("a stone tower 4 tall") is the build_tower skill,
+  // not the small_tower schematic the resolver maps "tower" to. Only a word
+  // that changes the structure ("a tower of wizards") names a schematic.
+  const headLast = singular(headWords[headWords.length - 1]);
+  if (headWords.length === 1 && CAPABILITY_HEADS.has(headLast)
+    && (!objectEntry || objectEntry === headOnly)) {
+    schematic = null;
+  }
   const base = { phrase, schematic, head: headWords.join(' ') };
 
   // A descriptive modifier is fine ("a haunted house"). After "the", an unknown

@@ -97,6 +97,21 @@ test('schematic is resolved from the whole object, not the head alone or the sen
   }
 });
 
+// Review round 4: a bare body capability is the skill, not a schematic.
+test('a bare tower names no schematic; a word that changes it does', () => {
+  assert.equal(buildRequestContract('build me a tower 4 tall').schematic, null);
+  assert.equal(buildRequestContract('build a stone tower').schematic, null);
+  assert.equal(buildRequestContract('build a tower of wizards').schematic, 'wizard_tower');
+  assert.equal(buildRequestContract('build a wizard tower').schematic, 'wizard_tower');
+  assert.equal(buildRequestContract('build a castle').schematic, 'small_tower');
+});
+
+test('"set up" and "put up" are build verbs without a classifier intent', () => {
+  assert.equal(status('set up a campfire'), 'supported');
+  assert.equal(status('put up a garden'), 'supported');
+  assert.equal(status('set up a tent'), 'unsupported');
+});
+
 test('"make" is a build verb only when the classifier picked a build intent', () => {
   assert.equal(status('make me a sword'), 'none');
   assert.equal(status('make me a sword', { nlpIntent: 'gather_block' }), 'none');
@@ -153,7 +168,7 @@ test('refusal names the request and offers what the library can build', () => {
   const moat = unsupportedBuildReply(buildRequestContract('Rosie design a castle with a moat'));
   assert.equal(moat, "I can't build a castle with a moat yet. I can build a small tower, though.");
   const eiffel = unsupportedBuildReply(buildRequestContract('lets build the eiffel tower'));
-  assert.equal(eiffel, "I can't build an eiffel tower yet. I can build a small tower, though.");
+  assert.equal(eiffel, "I can't build an eiffel tower yet. I can build a tower, though.");
   const ship = unsupportedBuildReply(buildRequestContract('build me a pirate ship'));
   assert.match(ship, /^I can't build a pirate ship yet\. I can build a house, treehouse, tower/);
   assert.ok(ship.length < 256, 'fits one Minecraft chat line');

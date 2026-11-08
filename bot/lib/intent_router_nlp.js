@@ -602,9 +602,11 @@ const NON_WORLD_INTENTS = new Set([
  * brother wants to build a pirate ship") stays with the brain, as before.
  */
 export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore = null, opts = {}) {
+  // Only the companion's own name may trail the object ("build a house rosie");
+  // the sender's name is never a vocative and must not mask a trailing noun.
   const contract = buildRequestContract(stripExplicitBaseYForNlp(body) || body, {
     nlpIntent,
-    names: [bot?.username, sender].filter(Boolean),
+    names: [bot?.username].filter(Boolean),
   });
   if (contract.status !== 'unsupported') return { route: null, contract };
   if (!contract.framed && !opts.acting) return { route: null, contract };

@@ -626,6 +626,12 @@ export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore 
   };
 }
 
+// Intents whose dispatch places blocks near the child. On a supported build
+// request the contract, not the classifier, decides what they build.
+const PLACEMENT_INTENTS = new Set([
+  'build_schematic', 'build_tower', 'plant_flowers', 'torch_near_me', 'light_area',
+]);
+
 // Body capabilities the contract can name, and the dispatcher that builds each.
 // farm and base have no build skill here: farming is the survival path
 // (server.js regex fallback) and "a base" is the ambiguous creative-base case.
@@ -875,9 +881,13 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   // A confident build_schematic builds the structure the contract named from
   // the object, not whatever a keyword elsewhere in the sentence resolves to
   // ("build a garden near the hotel" is a garden).
+  // A confident placement intent on a build request the contract supports
+  // builds what the object names, whatever the classifier picked: flowers for
+  // "make me a watchtower" are the #501 failure itself.
+  const placingNamed = PLACEMENT_INTENTS.has(intent) && contract.status === 'supported';
   // A bare body capability ("build a stone tower") is the capability's skill,
   // not the schematic the resolver maps the word to.
-  if (intent === 'build_schematic' && contract.status === 'supported' && contract.capability) {
+  if (placingNamed && !contract.schematic && contract.capability) {
     const skill = await contractCapabilityRoute(bot, body, sender, contract.capability);
     if (skill) {
       const skill_id = opts.dryRun ? null : recordLastSkill(bot, skill.intent_name, skill.action, skill.body, body);
@@ -887,11 +897,10 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     // some other noun resolves to. server.js tries the regex router under the guard.
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'capability_no_skill' };
   }
-  // Any confident build intent whose object names a schematic builds that
-  // schematic: a build_tower pillar for "a tower of wizards" would be the wrong
-  // structure, as would a hotel for "a garden near the hotel".
-  const namesSchematic = (intent === 'build_schematic' || intent === 'build_tower')
-    && contract.status === 'supported' && contract.schematic;
+  // An object that names a schematic builds that schematic: a build_tower
+  // pillar for "a tower of wizards" would be the wrong structure, as would a
+  // hotel for "a garden near the hotel".
+  const namesSchematic = placingNamed && contract.schematic;
   const effectiveIntent = namesSchematic ? 'build_schematic' : intent;
   const decision = namesSchematic
     ? await Promise.resolve(DISPATCHERS.build_schematic(bot, { ...ctx, schematicName: contract.schematic }))

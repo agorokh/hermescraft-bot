@@ -721,6 +721,13 @@ test('#501 a schematic route never builds a structure the object does not name',
   }
 });
 
+test('#501 a supported build request never places flowers instead', async () => {
+  for (const body of ['make me a watchtower', 'design a flower garden', 'make a treehouse', 'make me a castle']) {
+    const r = await tryRoute(stubBot(), body, 'Adalynn');
+    assert.ok(!(r.matched && r.action === 'place_near_player'), `${body}: placed flowers (zone=${r.nlp_zone})`);
+  }
+});
+
 test('#501 a schematic-named tower never becomes a pillar', async () => {
   for (const body of ['build a wizard tower', 'build a tower of wizards', 'build a castle']) {
     const r = await tryRoute(stubBot(), body, 'Adalynn');

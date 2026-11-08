@@ -57,6 +57,15 @@ export async function guardRegexBuildRoute(bot, body, sender, route, log = () =>
   const { route: refusal, contract } = checkBuildRequest(bot, body, sender, route.intent_name, null, { acting: true });
   if (refusal) return refusal;
   if (contract.status !== 'supported') return route;
+  const mismatched = (contract.schematic && route.body?.name !== contract.schematic)
+    || (!contract.schematic && contract.capability && route.body?.name);
+  // Narration ("my brother wants to build a garden near the house") is never
+  // turned into a build: a mismatched regex route on an unframed sentence goes
+  // to the brain, on every path.
+  if (mismatched && !contract.framed) {
+    log(`[IntentRouter] regex ${route.action} ${route.body?.name || ''} not built: unframed build mention`);
+    return { matched: false, nlp_zone: 'regex_build_unframed' };
+  }
   // The object names a schematic, and the regex builds something else: a
   // different schematic ("a garden near the hotel" → grand_hotel) or no
   // schematic at all (a build_tower pillar for "a tower of wizards").

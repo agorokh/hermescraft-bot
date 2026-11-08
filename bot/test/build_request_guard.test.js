@@ -83,15 +83,17 @@ test('a regex pillar for a schematic-named object becomes that schematic', async
   assert.deepEqual(await guardRegexBuildRoute(bot, 'build a stone tower', 'Adalynn', pillar), pillar);
 });
 
-test('a remap of narration is marked unframed so the NLP fallback leaves it to the brain', async () => {
+// Review round 8: narration is never turned into a build, on any path.
+test('a mismatched regex build on narration goes to the brain', async () => {
   const bot = stubBot();
   const body = 'my brother wants to build a garden near the house';
   const raw = await tryRouteRegex(bot, body, 'Adalynn');
   assert.equal(raw.body?.name, 'small_house', 'precondition: the regex router picks the house');
   const r = await guarded(bot, body);
-  assert.equal(r.nlp_zone, 'catalog_remap');
-  assert.equal(r.body.name, 'garden');
-  assert.equal(r.build_framed, false);
+  assert.equal(r.matched, false);
+  assert.equal(r.nlp_zone, 'regex_build_unframed');
+  const primary = await routeRegexPrimary(bot, body, 'Adalynn', tryRouteRegex);
+  assert.equal(primary.matched, false);
 });
 
 test('a remap that cannot be anchored is a handled refusal, not a silent drop', async () => {

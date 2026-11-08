@@ -56,6 +56,21 @@ test('regex schematic for a capability object becomes the capability skill', asy
   assert.equal(r.build_framed, true);
 });
 
+// Review round 6: every capability head maps to a skill or an honest refusal.
+test('capability heads with a skill get it; those without get an honest refusal', async () => {
+  const bot = stubBot();
+  const hotel = { matched: true, intent_name: 'build_schematic', action: 'build_schematic_advanced', body: { name: 'grand_hotel', x: 2, y: 64, z: 0 } };
+  const shelter = await guardRegexBuildRoute(bot, 'build a shelter near the hotel', 'Adalynn', hotel);
+  assert.equal(shelter.action, 'build_shelter_for_night');
+  assert.equal(shelter.nlp_zone, 'catalog_remap');
+
+  const garden = { matched: true, intent_name: 'build_schematic', action: 'build_schematic', body: { name: 'garden', x: 2, y: 64, z: 0 } };
+  const farm = await guardRegexBuildRoute(bot, 'build a farm near the garden', 'Adalynn', garden);
+  assert.equal(farm.action, 'chat');
+  assert.equal(farm.nlp_zone, 'build_unsupported');
+  assert.equal(farm.body.text, "I can't build a farm yet.");
+});
+
 test('a remap of narration is marked unframed so the NLP fallback leaves it to the brain', async () => {
   const bot = stubBot();
   const body = 'my brother wants to build a garden near the house';

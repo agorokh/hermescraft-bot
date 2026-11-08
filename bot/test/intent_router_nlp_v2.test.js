@@ -722,7 +722,10 @@ test('#501 a schematic route never builds a structure the object does not name',
 });
 
 test('#501 a bare tower never places the small_tower schematic', async () => {
-  for (const body of ['build a stone tower', 'build me a tower 4 tall', 'build a tower near the hotel']) {
+  for (const body of [
+    'build a stone tower', 'build me a tower 4 tall', 'build a tower near the hotel',
+    'build a farm near the garden', 'build a shelter near the hotel', 'build a base near the hotel',
+  ]) {
     const r = await tryRoute(stubBot(), body, 'Adalynn');
     if (r.matched && ['build_schematic', 'build_schematic_advanced'].includes(r.action)) {
       assert.fail(`${body}: placed schematic ${r.body.name} (zone=${r.nlp_zone})`);

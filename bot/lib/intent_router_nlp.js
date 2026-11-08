@@ -627,14 +627,24 @@ export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore 
 }
 
 // Body capabilities the contract can name, and the dispatcher that builds each.
-// A capability with no entry here has no skill to fall back to.
+// farm and base have no build skill here: farming is the survival path
+// (server.js regex fallback) and "a base" is the ambiguous creative-base case.
+// Callers must never fall back to a schematic for them.
 const CAPABILITY_INTENTS = {
   tower: 'build_tower',
   pillar: 'build_tower',
   column: 'build_tower',
   spire: 'build_tower',
   flower: 'plant_flowers',
+  shelter: 'build_shelter_for_night',
+  bunker: 'build_shelter_for_night',
+  hideout: 'build_shelter_for_night',
 };
+
+/** Whether a contract capability has a build skill to dispatch. */
+export function capabilityHasSkill(capability) {
+  return Boolean(CAPABILITY_INTENTS[capability]);
+}
 
 /**
  * Skill route for a body capability the contract named ("a stone tower" is the
@@ -874,6 +884,9 @@ export async function tryRoute(bot, body, sender, opts = {}) {
       const skill_id = opts.dryRun ? null : recordLastSkill(bot, skill.intent_name, skill.action, skill.body, body);
       return { ...skill, skill_id, nlp_score: score, nlp_zone: 'act' };
     }
+    // No skill ("build a farm near the garden"): never fall back to a schematic
+    // some other noun resolves to. server.js tries the regex router under the guard.
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'capability_no_skill' };
   }
   const dispatchCtx = intent === 'build_schematic' && contract.status === 'supported' && contract.schematic
     ? { ...ctx, schematicName: contract.schematic }

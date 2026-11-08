@@ -5,23 +5,39 @@
 // here: in regex-primary mode (HERMES_NLP_PRIMARY=0) and in the NLP-primary
 // fallback branches. Kept out of server.js so it can be tested without a bot.
 
-import { checkBuildRequest, contractBuildRoute, contractCapabilityRoute, recordLastSkill } from './intent_router_nlp.js';
+import {
+  capabilityHasSkill,
+  checkBuildRequest,
+  contractBuildRoute,
+  contractCapabilityRoute,
+  recordLastSkill,
+} from './intent_router_nlp.js';
 
 // Regex actions that change the world with a structure or placement.
 export const REGEX_BUILD_ACTIONS = new Set([
   'build_tower', 'build_schematic', 'build_schematic_advanced', 'place_near_player',
 ]);
 
-function cannotPlaceRoute(schematic) {
-  const name = String(schematic || 'that').replace(/_/g, ' ');
+function refusalRoute(text) {
   return {
     matched: true,
     intent_name: 'build_unsupported',
     action: 'chat',
-    body: { text: `I can't place the ${name} right now.` },
+    body: { text },
     skill_id: null,
     nlp_zone: 'build_unsupported',
   };
+}
+
+// The structure is in the library, but there is no anchor to place it at.
+function cannotPlaceRoute(schematic) {
+  return refusalRoute(`I can't place the ${String(schematic || 'that').replace(/_/g, ' ')} right now.`);
+}
+
+// The capability has no build skill (farm, base).
+function noSkillRoute(capability) {
+  const name = String(capability || 'that');
+  return refusalRoute(`I can't build ${/^[aeiou]/.test(name) ? 'an' : 'a'} ${name} yet.`);
 }
 
 /**
@@ -52,7 +68,10 @@ export async function guardRegexBuildRoute(bot, body, sender, route, log = () =>
   if (!contract.schematic && contract.capability) {
     const skill = await contractCapabilityRoute(bot, body, sender, contract.capability);
     log(`[IntentRouter] regex ${route.action} ${route.body.name} -> ${skill ? skill.action : 'refused'}: request names ${contract.capability}`);
-    return skill ? { ...skill, build_framed: contract.framed } : cannotPlaceRoute(contract.capability);
+    if (skill) return { ...skill, build_framed: contract.framed };
+    return capabilityHasSkill(contract.capability)
+      ? cannotPlaceRoute(contract.capability)
+      : noSkillRoute(contract.capability);
   }
   return route;
 }

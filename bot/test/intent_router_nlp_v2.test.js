@@ -755,7 +755,7 @@ test('#501 an unframed build mention does not replace a non-build skill', async 
 });
 
 test('#501 narration about building stays with the brain', async () => {
-  for (const body of ['my brother wants to build a pirate ship', 'my brother wants to build the eiffel tower']) {
+  for (const body of ['my brother wants to build a pirate ship', 'my brother wants to build the eiffel tower', 'my brother wants to build a garden near the house', 'my brother wants to build a house', 'my brother wants to build a stone tower']) {
     const r = await tryRoute(stubBot(), body, 'Adalynn');
     assert.notEqual(r.intent_name, 'build_unsupported', body);
     assert.ok(!(r.matched && ['build_tower', 'build_schematic', 'place_near_player'].includes(r.action)), body);

@@ -188,3 +188,24 @@ test('regex-primary keeps stop ahead of builds using the regex router stop path'
     assert.equal(r.intent_name, 'stop', body);
   }
 });
+
+
+test('supported narration never places blocks on regex or confident NLP paths', async () => {
+  const bot = stubBot();
+  for (const body of [
+    'my brother wants to build a garden near the house',
+    'my brother wants to build a house',
+    'my brother wants to build a stone tower',
+  ]) {
+    const raw = await tryRouteRegex(bot, body, 'Adalynn');
+    assert.equal(raw.matched, true, body);
+    const r = await guarded(bot, body);
+    assert.equal(r.matched, false, body);
+    assert.equal(r.nlp_zone, 'regex_build_unframed', body);
+    assert.equal((await routeRegexPrimary(bot, body, 'Adalynn', tryRouteRegex)).matched, false, body);
+    const { route, contract } = checkBuildRequest(bot, body, 'Adalynn', 'build_schematic', 0.99, { acting: true });
+    assert.equal(contract.status, 'supported', body);
+    assert.equal(route.matched, false, body);
+    assert.equal(route.nlp_zone, 'build_unframed', body);
+  }
+});

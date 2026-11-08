@@ -592,8 +592,8 @@ const DISPATCHERS = {
  * See lib/build_request_contract.js for the rules.
  *
  * Refuse only requests to the companion ("can you build ...", "lets build
- * ..."). If a caller would place blocks for unsupported narration, return an
- * unmatched route to suppress that act and leave the line with the brain.
+ * ..."). If a caller would place blocks for narration, return an unmatched
+ * route to suppress that act and leave the line with the brain.
  */
 export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore = null, opts = {}) {
   // Only the companion's own name may trail the object ("build a house rosie");
@@ -602,7 +602,7 @@ export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore 
     nlpIntent,
     names: [bot?.username].filter(Boolean),
   });
-  if (contract.status !== 'unsupported') return { route: null, contract };
+  if (contract.status === 'none') return { route: null, contract };
   if (!contract.framed) {
     return {
       contract,
@@ -614,6 +614,7 @@ export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore 
       } : null,
     };
   }
+  if (contract.status !== 'unsupported') return { route: null, contract };
   return {
     contract,
     route: {

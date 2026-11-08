@@ -30,6 +30,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { extractGatherBlockFromBody, extractKidName, extractOreFromBody } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
+import { buildRequestContract, unsupportedBuildReply } from './build_request_contract.js';
 import { fileURLToPath } from 'node:url';
 import { dockStart } from '@nlpjs/basic';
 import { explicitSchematicBaseY, findPlayerEntity, normalizeBuildBaseY, schematicBuildBaseY, resolveAnchorPos, intFromMatch, pickTowerFootOffset } from './player_utils.js';
@@ -398,7 +399,8 @@ const DISPATCHERS = {
   },
 
   build_schematic: (bot, ctx) => {
-    const resolvedName = resolveSchematicName(ctx.body);
+    // ctx.schematicName: the build-request contract already named the structure (#501).
+    const resolvedName = ctx.schematicName || resolveSchematicName(ctx.body);
     if (isSpeculativeBuildDiscussion(ctx.body)) return null;
     const p = resolveAnchorPos(bot, ctx);
     if (!p) return null;
@@ -579,6 +581,141 @@ const DISPATCHERS = {
   },
 };
 
+// ── Build-request contract (hermescraft#501) ─────────────────────────────
+
+/**
+ * Check a build sentence against the library before anything is dispatched.
+ * Returns { route, contract }. `route` is a handled chat refusal when the
+ * sentence asks for a structure the library does not contain; the refusal is
+ * a matched `chat` action so server.js marks the line handled and never queues
+ * it for the brain (which in May 2026 talked about building and placed nothing).
+ * See lib/build_request_contract.js for the rules.
+ *
+ * Refuse only requests to the companion ("can you build ...", "lets build
+ * ..."). If a caller would place blocks for narration, return an unmatched
+ * route to suppress that act and leave the line with the brain.
+ */
+export function checkBuildRequest(bot, body, sender, nlpIntent = null, nlpScore = null, opts = {}) {
+  // Only the companion's own name may trail the object ("build a house rosie");
+  // the sender's name is never a vocative and must not mask a trailing noun.
+  const contract = buildRequestContract(stripExplicitBaseYForNlp(body) || body, {
+    nlpIntent,
+    names: [bot?.username].filter(Boolean),
+  });
+  if (contract.status === 'none') return { route: null, contract };
+  if (!contract.framed) {
+    return {
+      contract,
+      route: opts.acting ? {
+        matched: false,
+        nlp_intent: nlpIntent,
+        nlp_score: nlpScore,
+        nlp_zone: 'build_unframed',
+      } : null,
+    };
+  }
+  if (contract.status !== 'unsupported') return { route: null, contract };
+  return {
+    contract,
+    route: {
+      matched: true,
+      intent_name: 'build_unsupported',
+      action: 'chat',
+      body: { text: unsupportedBuildReply(contract) },
+      skill_id: null,
+      nlp_intent: nlpIntent,
+      nlp_score: nlpScore,
+      nlp_zone: 'build_unsupported',
+      build_contract: contract,
+    },
+  };
+}
+
+// Intents whose dispatch places blocks near the child. On a supported build
+// request the contract, not the classifier, decides what they build.
+const PLACEMENT_INTENTS = new Set([
+  'build_schematic', 'build_tower', 'plant_flowers', 'torch_near_me', 'light_area',
+]);
+
+// Body capabilities the contract can name, and the dispatcher that builds each.
+// farm and base have no build skill here: farming is the survival path
+// (server.js regex fallback) and "a base" is the ambiguous creative-base case.
+// Callers must never fall back to a schematic for them.
+const CAPABILITY_INTENTS = {
+  tower: 'build_tower',
+  pillar: 'build_tower',
+  column: 'build_tower',
+  spire: 'build_tower',
+  flower: 'plant_flowers',
+  shelter: 'build_shelter_for_night',
+  bunker: 'build_shelter_for_night',
+  hideout: 'build_shelter_for_night',
+};
+
+/** Whether a contract capability has a build skill to dispatch. */
+export function capabilityHasSkill(capability) {
+  return Boolean(CAPABILITY_INTENTS[capability]);
+}
+
+// The server action each capability skill dispatches.
+const CAPABILITY_ACTIONS = {
+  build_tower: 'build_tower',
+  plant_flowers: 'place_near_player',
+  build_shelter_for_night: 'build_shelter_for_night',
+};
+
+/** Whether a route already runs the skill a contract capability names. */
+export function routeIsCapabilitySkill(route, capability) {
+  const intent = CAPABILITY_INTENTS[capability];
+  return Boolean(intent && route?.intent_name === intent && route.action === CAPABILITY_ACTIONS[intent]);
+}
+
+/**
+ * Skill route for a body capability the contract named ("a stone tower" is the
+ * build_tower skill, not the small_tower schematic). Returns null when the
+ * capability has no skill or no anchor. The caller records the skill.
+ */
+export async function contractCapabilityRoute(bot, body, sender, capability) {
+  const intent = CAPABILITY_INTENTS[capability];
+  if (!bot || !body || !intent) return null;
+  const senderEntity = findPlayerEntity(bot, sender);
+  const ctx = { sender, senderEntity, message: body, body };
+  const decision = await Promise.resolve(DISPATCHERS[intent](bot, ctx));
+  if (!decision) return null;
+  return {
+    matched: true,
+    intent_name: intent,
+    action: decision.action,
+    body: decision.body,
+    skill_id: null,
+    nlp_score: null,
+    nlp_zone: 'catalog_remap',
+  };
+}
+
+/**
+ * Library build route for a schematic the contract already named. server.js
+ * uses it when the regex router resolved a different structure from the same
+ * sentence. Returns null when no anchor position is available. The caller
+ * records the skill.
+ */
+export async function contractBuildRoute(bot, body, sender, schematicName) {
+  if (!bot || !body || !schematicName) return null;
+  const senderEntity = findPlayerEntity(bot, sender);
+  const ctx = { sender, senderEntity, message: body, body, schematicName };
+  const decision = await Promise.resolve(DISPATCHERS.build_schematic(bot, ctx));
+  if (!decision) return null;
+  return {
+    matched: true,
+    intent_name: 'build_schematic',
+    action: decision.action,
+    body: decision.body,
+    skill_id: null,
+    nlp_score: null,
+    nlp_zone: 'catalog_remap',
+  };
+}
+
 // Public API — drop-in replacement for intent_router.tryRoute.
 // Same return shape: {matched, intent_name, action, body}.
 export async function tryRoute(bot, body, sender, opts = {}) {
@@ -680,17 +817,53 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   } catch (e) {
     // If the corpus is malformed or training fails, fail open — the brain
     // will handle the chat. Never blocking on NLP startup is critical for
-    // production health.
+    // production health. An unsupported "build ..." sentence is still refused:
+    // that check does not depend on the classifier.
+    const refused = checkBuildRequest(bot, body, sender).route;
+    if (refused) return { ...refused, error: e.message };
     return { matched: false, error: e.message };
   }
   let result;
   try {
     result = await nlp.process('en', stripExplicitBaseYForNlp(body) || body);
   } catch (e) {
+    const refused = checkBuildRequest(bot, body, sender).route;
+    if (refused) return { ...refused, error: e.message };
     return { matched: false, error: e.message, nlp_zone: 'process_error' };
   }
   const intent = result.intent === 'None' ? null : result.intent;
   const score = result.score || 0;
+  // Build-request contract (#501): the library decides, not the score. An
+  // unsupported build is a handled refusal in every confidence zone.
+  // "acting" means the classifier would place blocks. A confident movement,
+  // gather or chat skill is not a build, so a build mention inside it ("come
+  // here and build a pirate ship") does not replace that skill with a refusal.
+  const acting = Boolean(intent) && score >= ACT_THRESHOLD && PLACEMENT_INTENTS.has(intent);
+  const { route: refusal, contract } = checkBuildRequest(bot, body, sender, intent, score, { acting });
+  if (refusal) return refusal;
+  // The classifier is not acting, the catalog confirms the structure, and the
+  // verb sits in a plain request frame ("build a fairy treehouse and name it
+  // Aurora" scored 0.68 in one training and 0.78 in another): dispatch exactly
+  // the structure the catalog named. Classifier scores move between trainings,
+  // so this does not depend on the confidence zone. A bare tower names no
+  // schematic (contract.capability), so it never reaches this branch.
+  if (!acting
+    && contract.status === 'supported'
+    && contract.framed
+    && contract.schematic) {
+    const decision = await Promise.resolve(DISPATCHERS.build_schematic(bot, { ...ctx, schematicName: contract.schematic }));
+    if (decision) {
+      return {
+        matched: true,
+        intent_name: 'build_schematic',
+        action: decision.action,
+        body: decision.body,
+        skill_id: opts.dryRun ? null : recordLastSkill(bot, 'build_schematic', decision.action, decision.body, body),
+        nlp_score: score,
+        nlp_zone: 'catalog_confirmed',
+      };
+    }
+  }
   // Three-zone confidence band (council 2026-05-17):
   //   score >= ACT_THRESHOLD       → fire the skill
   //   CLARIFY <= score < ACT       → defer to brain; brain may clarify
@@ -726,7 +899,33 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     }
   }
   // ctx already constructed above for anaphora; reuse to avoid double-lookup
-  const decision = await Promise.resolve(dispatch(bot, ctx));
+  // A confident build_schematic builds the structure the contract named from
+  // the object, not whatever a keyword elsewhere in the sentence resolves to
+  // ("build a garden near the hotel" is a garden).
+  // A confident placement intent on a build request the contract supports
+  // builds what the object names, whatever the classifier picked: flowers for
+  // "make me a watchtower" are the #501 failure itself.
+  const placingNamed = PLACEMENT_INTENTS.has(intent) && contract.status === 'supported';
+  // A bare body capability ("build a stone tower") is the capability's skill,
+  // not the schematic the resolver maps the word to.
+  if (placingNamed && !contract.schematic && contract.capability) {
+    const skill = await contractCapabilityRoute(bot, body, sender, contract.capability);
+    if (skill) {
+      const skill_id = opts.dryRun ? null : recordLastSkill(bot, skill.intent_name, skill.action, skill.body, body);
+      return { ...skill, skill_id, nlp_score: score, nlp_zone: 'act' };
+    }
+    // No skill ("build a farm near the garden"): never fall back to a schematic
+    // some other noun resolves to. server.js tries the regex router under the guard.
+    return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'capability_no_skill' };
+  }
+  // An object that names a schematic builds that schematic: a build_tower
+  // pillar for "a tower of wizards" would be the wrong structure, as would a
+  // hotel for "a garden near the hotel".
+  const namesSchematic = placingNamed && contract.schematic;
+  const effectiveIntent = namesSchematic ? 'build_schematic' : intent;
+  const decision = namesSchematic
+    ? await Promise.resolve(DISPATCHERS.build_schematic(bot, { ...ctx, schematicName: contract.schematic }))
+    : await Promise.resolve(dispatch(bot, ctx));
   if (!decision) {
     return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'dispatcher_null', error: 'dispatcher returned null' };
   }
@@ -734,10 +933,10 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   // (avoid recursion on "do it again ... do it again").
   const skill_id = opts.dryRun || intent === 'repeat_last_action'
     ? null
-    : recordLastSkill(bot, intent, decision.action, decision.body, body);
+    : recordLastSkill(bot, effectiveIntent, decision.action, decision.body, body);
   return {
     matched: true,
-    intent_name: decision.intent_name || intent,
+    intent_name: decision.intent_name || effectiveIntent,
     action: decision.action,
     body: decision.body,
     skill_id,

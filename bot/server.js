@@ -78,6 +78,7 @@ import { findPlayerEntity, normalizePlayerName } from './lib/player_utils.js';
 // we also try regex as a last-resort fallback when NLP returns
 // matched=false. This is belt-and-suspenders for the kids-tonight rollout.
 import { tryRoute as tryRouteNlp, markLastSkillFailed, recordLastSkill } from './lib/intent_router_nlp.js';
+import { guardRegexBuildRoute as guardRegexBuildRouteLib, routeRegexPrimary } from './lib/build_request_guard.js';
 const NLP_PRIMARY = process.env.HERMES_NLP_PRIMARY !== '0';  // default ON
 // When NLP is primary, shadow the regex router by default for AGREE/DIFFER telemetry.
 const SHADOW_NLP = process.env.HERMES_SHADOW_NLP_ROUTER === '0'
@@ -90,8 +91,19 @@ const SURVIVAL_REGEX_FALLBACK = new Set([
   'fish_for_food', 'farm_food', 'cook_food', 'return_home', 'feed_player', 'build_shelter_for_night',
 ]);
 
+// Build-request contract (hermescraft#501): the NLP router applies it itself;
+// the regex router does not, so every regex route goes through
+// lib/build_request_guard.js. "lets build the eiffel tower" is build_tower on
+// the regex router too.
+function guardRegexBuildRoute(bot, body, sender, route) {
+  return guardRegexBuildRouteLib(bot, body, sender, route, log);
+}
+
 async function tryRoute(bot, body, sender) {
-  if (!NLP_PRIMARY) return tryRouteRegex(bot, body, sender);
+  if (!NLP_PRIMARY) {
+    // tryRouteRegex checks the same stop patterns first, before build routes.
+    return routeRegexPrimary(bot, body, sender, tryRouteRegex, log);
+  }
   // Safety primitive: stop/cancel must never depend on NLP classification.
   const stop = await tryStopRoute(bot, body, sender);
   if (stop.matched) return stop;
@@ -100,10 +112,18 @@ async function tryRoute(bot, body, sender) {
   const nlp = await tryRouteNlp(bot, body, sender);
   if (nlp.matched) return nlp;
   if (nlp.nlp_zone === 'clarify' || nlp.nlp_zone === 'oov' || nlp.nlp_zone === 'no_dispatcher') {
-    const regex = await tryRouteRegex(bot, body, sender);
+    const regex = await guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
+    if (regex.nlp_zone === 'build_unsupported') return {
+      ...regex,
+      _fallback_from_nlp_zone: nlp.nlp_zone,
+      _fallback_from_nlp_score: nlp.nlp_score,
+    };
     if (
       regex.matched
-      && (SURVIVAL_REGEX_FALLBACK.has(regex.intent_name) || regex.action === 'build_schematic_advanced')
+      && (SURVIVAL_REGEX_FALLBACK.has(regex.intent_name) || regex.action === 'build_schematic_advanced'
+        // A remap is admitted here only for a request to the companion; narration
+        // ("my brother wants to build a garden near the house") stays with the brain.
+        || (regex.nlp_zone === 'catalog_remap' && regex.build_framed === true))
     ) {
       regex._fallback_from_nlp_zone = nlp.nlp_zone;
       regex._fallback_from_nlp_score = nlp.nlp_score;
@@ -112,7 +132,12 @@ async function tryRoute(bot, body, sender) {
     }
     return nlp;
   }
-  const regex = await tryRouteRegex(bot, body, sender);
+  const regex = await guardRegexBuildRoute(bot, body, sender, await tryRouteRegex(bot, body, sender));
+  if (regex.nlp_zone === 'build_unsupported') return {
+    ...regex,
+    _fallback_from_nlp_zone: nlp.nlp_zone,
+    _fallback_from_nlp_score: nlp.nlp_score,
+  };
   if (regex.matched) {
     // Annotate so the log line shows it was a fallback decision
     regex._fallback_from_nlp_zone = nlp.nlp_zone;

@@ -211,6 +211,7 @@ let _bark_tear_down = null;
 let _quest_tear_down = null;
 let _survival_tear_down = null;
 let _follow_tear_down = null;
+let _follow_owner = null; // the bot object the installed follower belongs to
 let _quest_install_gen = 0;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
@@ -1166,6 +1167,7 @@ async function createBot() {
     _quest_install_gen++;
     try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch {}
     try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch {}
+    try { if (_follow_tear_down) { _follow_tear_down(); _follow_tear_down = null; _follow_owner = null; } } catch {}
     try { bot.quit(); } catch {}
     bot = null;
     botReady = false;
@@ -1182,6 +1184,7 @@ async function createBot() {
       auth: config.mc.auth,
     });
     trackWorldName(bot);
+    const thisBot = bot; // the module-level `bot` may be a newer one by the time 'end' fires
 
     const timeout = setTimeout(() => {
       reject(new Error(`Connection timeout — couldn't reach ${config.mc.host}:${config.mc.port}`));
@@ -1435,7 +1438,8 @@ async function createBot() {
       // HERMESCRAFT_FOLLOW_ON_JOIN=1.
       try {
         if (_follow_tear_down) _follow_tear_down();
-        _follow_tear_down = installFollowOnJoin(bot, log);
+        _follow_tear_down = installFollowOnJoin(thisBot, log);
+        _follow_owner = thisBot;
       } catch (e) {
         log(`follow-on-join install failed: ${e.message}`);
       }
@@ -1571,7 +1575,11 @@ async function createBot() {
         positionHistory = []; // clear stuck detection history
         if (bot?._soundCheckInterval) { clearInterval(bot._soundCheckInterval); bot._soundCheckInterval = null; }
         if (_survival_tear_down) { _survival_tear_down(); _survival_tear_down = null; }
-        if (_follow_tear_down) { _follow_tear_down(); _follow_tear_down = null; }
+        // Only the follower that belongs to the bot that just ended: a late 'end'
+        // from a replaced bot must not switch off the new bot's follower.
+        if (_follow_tear_down && _follow_owner === thisBot) {
+          _follow_tear_down(); _follow_tear_down = null; _follow_owner = null;
+        }
         try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch (e) {}
         _quest_install_gen++;
         try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch (e) {}

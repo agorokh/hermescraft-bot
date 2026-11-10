@@ -383,3 +383,18 @@ test('the roster passed to the follower decides who is a character, whatever the
   assert.equal(isFollowCandidate('KidOne', 'Steve', { companions }), true);
   assert.equal(isFollowCandidate('JCam_ab12', 'Steve', { companions }), false);
 });
+
+test('a damaged home file is replaced, a valid one is kept, and a strange character name gets none', () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, '_home-rosie.json'), '{"dim":"overw');     // crash mid-write
+  assert.equal(readHome(dir, 'Rosie'), null);
+  assert.equal(saveHome(dir, 'Rosie', { dim: 'overworld', x: 1, y: 64, z: 2 }), true, 'damaged: replaced');
+  assert.deepEqual(readHome(dir, 'Rosie'), { dim: 'overworld', x: 1, y: 64, z: 2 });
+  assert.equal(saveHome(dir, 'Rosie', { dim: 'overworld', x: 9, y: 9, z: 9 }), false, 'valid: kept');
+
+  const outside = path.join(dir, '..', 'escaped.json');
+  assert.equal(saveHome(dir, 'x/../../escaped', { dim: 'overworld', x: 1, y: 2, z: 3 }), false);
+  assert.equal(readHome(dir, '../escaped'), null);
+  assert.equal(fs.existsSync(outside), false);
+  assert.deepEqual(fs.readdirSync(dir), ['_home-rosie.json'], 'nothing else was written');
+});

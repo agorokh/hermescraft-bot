@@ -197,25 +197,38 @@ export function claimsHeldBy(dir, character) {
 // follow someone. Kept apart from the claims so it survives a restart and a
 // released claim. The '-' in the file name cannot occur in a player name, so it
 // never collides with a claim file.
+// The character name goes into a file name, so it must be a plain player name:
+// anything else (a slash, a dot-dot) gets no home file at all.
 function homePath(dir, character) {
-  return path.join(dir, `_home-${String(character).toLowerCase()}.json`);
+  if (!isSafePlayerName(character) || character.startsWith('.')) return null;
+  return path.join(dir, `_home-${character.toLowerCase()}.json`);
 }
 
 export function saveHome(dir, character, origin) {
-  if (!validOrigin(origin)) return false;
+  const file = homePath(dir, character);
+  if (!file || !validOrigin(origin)) return false;
   ensureDir(dir);
-  try {
-    fs.writeFileSync(homePath(dir, character), JSON.stringify(origin), { flag: 'wx' });
-    return true;
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-    return false; // keep the first one: later positions may already be abroad
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(file, JSON.stringify(origin), { flag: 'wx' });
+      return true;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      // A valid one is kept: later positions may already be abroad. A damaged
+      // one would strand the character, and only this character writes this
+      // file, so replace it.
+      if (readHome(dir, character)) return false;
+      try { fs.unlinkSync(file); } catch { return false; }
+    }
   }
+  return false;
 }
 
 export function readHome(dir, character) {
+  const file = homePath(dir, character);
+  if (!file) return null;
   try {
-    const origin = JSON.parse(fs.readFileSync(homePath(dir, character), 'utf8'));
+    const origin = JSON.parse(fs.readFileSync(file, 'utf8'));
     return validOrigin(origin) ? origin : null; // a damaged or planted file is not a destination
   } catch {
     return null;
@@ -223,7 +236,9 @@ export function readHome(dir, character) {
 }
 
 export function clearHome(dir, character) {
-  try { fs.unlinkSync(homePath(dir, character)); } catch { /* none saved */ }
+  const file = homePath(dir, character);
+  if (!file) return;
+  try { fs.unlinkSync(file); } catch { /* none saved */ }
 }
 
 // What the follower should do on this tick. Pure, so the timing rules are testable.
@@ -275,6 +290,11 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     return () => {};
   }
   const candidateOpts = { companions, exemptPrefixes: opts.exemptPrefixes };
+  if (!isSafePlayerName(bot.username) || String(bot.username).startsWith('.')) {
+    log('follow-on-join NOT installed: this character has no plain player name');
+    bot._hc_follow = { child: () => null, isVisiting: () => false };
+    return () => {};
+  }
 
   const cfg = { ...FOLLOW_DEFAULTS, ...(opts.config || {}) };
   const dir = opts.claimDir || claimDirFromEnv(env);

@@ -9,6 +9,7 @@ import {
   followEnabled,
   claimDirFromEnv,
   readClaim,
+  sweepBrokenClaims,
   isFollowCandidate,
   isSafePlayerName,
   tryClaim,
@@ -164,7 +165,7 @@ function fakeBot(name, { dimension = 'overworld', players = [] } = {}) {
 }
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const FAST = { tickMs: 20, arriveRetryMs: 40, stayRetryMs: 40, claimStaggerMs: 60, leaveGraceMs: 120 };
+const FAST = { tickMs: 20, arriveRetryMs: 40, stayRetryMs: 40, claimStaggerMs: 60, leaveGraceMs: 120, rescanMs: 80 };
 
 test('the world name comes from the login and respawn packets, not the dimension type', () => {
   assert.equal(worldNameFromPacket({ worldState: { dimension: 'minecraft:overworld', name: 'minecraft:bskyblock_world' } }), 'bskyblock_world');
@@ -321,4 +322,64 @@ test('following a player across its own world still ends with a trip back to the
       down();
     }
   });
+});
+
+test('a broken claim file cannot block a player forever, but a fresh one is left alone', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'kidone.json');
+  fs.writeFileSync(file, '');                                   // a sibling mid-write, or damage
+  assert.equal(tryClaim(dir, 'KidOne', 'Rosie'), 'taken', 'too young to judge: leave it');
+  const later = Date.now() + 5000;
+  assert.equal(tryClaim(dir, 'KidOne', 'Rosie', later), 'claimed', 'old and unreadable: replaced');
+  assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+  assert.equal(tryClaim(dir, 'KidOne', 'Steve', later + 5000), 'taken', 'a valid claim is never swept');
+
+  fs.writeFileSync(path.join(dir, 'kidtwo.json'), JSON.stringify({ child: 'Kid;op', character: 'x' }));
+  fs.writeFileSync(path.join(dir, '_home-steve.json'), 'not json');
+  assert.equal(sweepBrokenClaims(dir, later), 1, 'only the bad claim goes');
+  assert.ok(fs.existsSync(file), 'the valid claim stays');
+  assert.ok(fs.existsSync(path.join(dir, '_home-steve.json')), 'home files are not claims');
+});
+
+test('an idle character picks up a player whose character went away', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'Steve', 'KidOne'] });
+    const steve = fakeBot('Steve', { players: ['Rosie', 'Steve', 'KidOne'] });
+    const downRosie = installFollowOnJoin(rosie, () => {}, { env, claimDir: dir, config: FAST });
+    const downSteve = installFollowOnJoin(steve, () => {}, { env, claimDir: dir, config: FAST });
+    try {
+      await wait(1400);
+      assert.equal(rosie._hc_follow.child(), 'KidOne');
+      assert.equal(steve._hc_follow.child(), null);
+      downRosie();                                   // Rosie disconnects; her claim is released
+      await wait(400);
+      assert.equal(steve._hc_follow.child(), 'KidOne', 'no rejoin needed');
+      assert.ok(steve.sent.includes('/tp KidOne'));
+    } finally {
+      downRosie();                                   // idempotent; never leave a timer behind
+      downSteve();
+    }
+  });
+});
+
+test('with no roster the follower refuses to run, so a character never follows a character', () => {
+  const dir = tmpDir();
+  const logs = [];
+  const steve = fakeBot('Steve', { players: ['Rosie', 'Steve'] });
+  const down = installFollowOnJoin(steve, (m) => logs.push(m), { env: { HERMESCRAFT_FOLLOW_ON_JOIN: '1' }, claimDir: dir });
+  assert.equal(steve.listenerCount('playerJoined'), 0);
+  assert.ok(logs.some((m) => m.includes('NOT installed')));
+  assert.deepEqual(fs.readdirSync(dir), []);
+  down();
+});
+
+test('the roster passed to the follower decides who is a character, whatever the process env says', () => {
+  const companions = new Set(['rosie', 'steve']);
+  assert.equal(isFollowCandidate('Rosie', 'Steve', { companions }), false);
+  assert.equal(isFollowCandidate('.Rosie', 'Steve', { companions }), false);
+  assert.equal(isFollowCandidate('Steve', 'Steve', { companions }), false);
+  assert.equal(isFollowCandidate('KidOne', 'Steve', { companions }), true);
+  assert.equal(isFollowCandidate('JCam_ab12', 'Steve', { companions }), false);
 });

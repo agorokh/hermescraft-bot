@@ -29,7 +29,12 @@ export const FOLLOW_DEFAULTS = Object.freeze({
   claimStaggerMs: 1500,   // per roster position, so the first-listed character wins ties
   leaveGraceMs: 3000,     // a Bedrock join drops and re-adds the tab-list entry; wait before believing a leave
   homeRadius: 2,          // blocks: this close to the saved spot counts as back home
+  rescanMs: 10000,        // an idle character looks again for a player nobody has
 });
+
+// A claim file is written in one call, but a reader can still catch it empty.
+// Only a file that has been unreadable for this long is treated as broken.
+const BROKEN_CLAIM_AGE_MS = 2000;
 
 // mineflayer's bot.game.dimension is the dimension TYPE: a skyblock world and
 // the main world both read "overworld". The world's own name only appears in
@@ -84,9 +89,21 @@ export function isSafePlayerName(name) {
   return typeof name === 'string' && NAME_RE.test(name);
 }
 
+// The roster of characters, lower-cased, from the same variable the launcher
+// exports for the quest engine.
+export function companionNamesFromEnv(env = process.env) {
+  return new Set(String(env.HERMESCRAFT_COMPANION_NAMES || '')
+    .split(',').map((s) => s.trim().toLowerCase().replace(/^\./, '')).filter(Boolean));
+}
+
 export function isFollowCandidate(username, botName, opts = {}) {
   if (!isSafePlayerName(username)) return false;
-  if (isCompanionSpeaker(username, botName)) return false;
+  const bare = username.toLowerCase().replace(/^\./, '');
+  if (opts.companions) {
+    if (bare === String(botName || '').toLowerCase() || opts.companions.has(bare)) return false;
+  } else if (isCompanionSpeaker(username, botName)) {
+    return false;
+  }
   const prefixes = opts.exemptPrefixes || DEFAULT_EXEMPT_PREFIXES;
   return !prefixes.some((p) => username.startsWith(p));
 }
@@ -104,18 +121,48 @@ export function readClaim(dir, child) {
   }
 }
 
+// Remove a claim file nobody can read (damaged, or planted with a bad body), so
+// it cannot block a player forever. A file younger than BROKEN_CLAIM_AGE_MS is
+// left alone: it may be a sibling's claim that is still being written.
+export function removeBrokenClaim(file, now = Date.now()) {
+  let stat;
+  try { stat = fs.statSync(file); } catch { return false; }
+  if (now - stat.mtimeMs < BROKEN_CLAIM_AGE_MS) return false;
+  try {
+    const claim = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (claim && typeof claim.character === 'string' && isSafePlayerName(claim.child)) return false;
+  } catch { /* unreadable: broken */ }
+  try { fs.unlinkSync(file); return true; } catch { return false; }
+}
+
+export function sweepBrokenClaims(dir, now = Date.now()) {
+  let names;
+  try {
+    names = fs.readdirSync(dir).filter((n) => n.endsWith('.json') && !n.startsWith('_home-'));
+  } catch {
+    return 0;
+  }
+  return names.filter((n) => removeBrokenClaim(path.join(dir, n), now)).length;
+}
+
 // Returns 'claimed' (we now own it), 'mine' (we already did) or 'taken'.
-export function tryClaim(dir, child, character) {
+export function tryClaim(dir, child, character, now = Date.now()) {
   if (!isSafePlayerName(child)) return 'taken';
   ensureDir(dir);
+  const file = claimPath(dir, child);
   const body = JSON.stringify({ child, character, claimed_at: new Date().toISOString() });
-  try {
-    fs.writeFileSync(claimPath(dir, child), body, { flag: 'wx' });
-    return 'claimed';
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-    return readClaim(dir, child)?.character === character ? 'mine' : 'taken';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(file, body, { flag: 'wx' });
+      return 'claimed';
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      const owner = readClaim(dir, child)?.character;
+      if (owner) return owner === character ? 'mine' : 'taken';
+      if (!removeBrokenClaim(file, now)) return 'taken'; // fresh: someone is writing it
+    }
   }
+  return 'taken';
 }
 
 export function releaseClaim(dir, child, character) {
@@ -219,6 +266,16 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     return () => {};
   }
 
+  // Without the roster a character cannot tell another character from a player,
+  // and would follow it. Refuse to run instead.
+  const companions = opts.companions || companionNamesFromEnv(env);
+  if (companions.size === 0) {
+    log('follow-on-join NOT installed: HERMESCRAFT_COMPANION_NAMES is empty, so characters cannot be told from players');
+    bot._hc_follow = { child: () => null, isVisiting: () => false };
+    return () => {};
+  }
+  const candidateOpts = { companions, exemptPrefixes: opts.exemptPrefixes };
+
   const cfg = { ...FOLLOW_DEFAULTS, ...(opts.config || {}) };
   const dir = opts.claimDir || claimDirFromEnv(env);
   const homeDim = opts.homeDimension || homeDimensionFromEnv(env);
@@ -278,7 +335,7 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   }
 
   function consider(child) {
-    if (!running || !isFollowCandidate(child, me, opts)) return;
+    if (!running || !isFollowCandidate(child, me, candidateOpts)) return;
     if (!isOnline(child)) return;
     // One player per character. Busy means "has a player", online or not: during
     // the leave grace the player is briefly absent, and taking a second one then
@@ -297,7 +354,9 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     logFollow(`following ${child} (${result})`);
   }
 
+  let lastScanAt = 0;
   function scanForUnclaimed() {
+    lastScanAt = Date.now();
     const names = Object.keys(bot.players || {}).sort((a, b) => a.localeCompare(b));
     for (const name of names) {
       if (state) break;
@@ -318,6 +377,9 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     if (!running || !bot.entity) return;
     if (!state) {
       if (Date.now() - lastHomeTryAt >= cfg.stayRetryMs) goHome('');
+      // A sibling that disconnected has released its player: nobody announces
+      // that, so an idle character looks again now and then.
+      if (Date.now() - lastScanAt >= cfg.rescanMs) scanForUnclaimed();
       return;
     }
     if (!isOnline(state.child)) {
@@ -348,6 +410,7 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   for (const claim of claimsHeldBy(dir, me)) {
     try { releaseClaim(dir, claim.child, me); } catch { /* best effort */ }
   }
+  try { sweepBrokenClaims(dir); } catch { /* best effort */ }
   goHome('start');
 
   const onJoin = (player) => later(() => consider(player?.username), stagger + 250);

@@ -180,7 +180,10 @@ export function returnHomeCommand(origin) {
   const coords = [origin.x, origin.y, origin.z].map((v) => Number(v));
   if (!coords.every(Number.isFinite)) return null;
   const [x, y, z] = coords.map((v) => v.toFixed(2));
-  return `/execute in minecraft:${origin.dim} run tp @s ${x} ${y} ${z}`;
+  // minecraft:tp, not tp: EssentialsX owns the bare command and refuses spots
+  // it judges unsafe ("Hole in floor!"). The saved home is where the character
+  // was standing, so the vanilla teleport is the right one.
+  return `/execute in minecraft:${origin.dim} run minecraft:tp @s ${x} ${y} ${z}`;
 }
 
 function rosterIndex(botName, env = process.env) {
@@ -233,17 +236,20 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     return { dim: homeDim, x: pos.x, y: pos.y, z: pos.z };
   }
 
+  // The saved home is only dropped once the character is seen back in its home
+  // world, so a refused teleport is retried by the tick instead of forgotten.
+  let lastHomeTryAt = 0;
   function goHome(why) {
     if (currentDim() === homeDim) { clearHome(dir, me); return; }
     const origin = readHome(dir, me);
     const cmd = returnHomeCommand(origin);
     if (!cmd) {
-      logFollow(`${why}: no saved home, staying put (use the console's Anchor home)`);
+      if (why) logFollow(`${why}: no saved home, staying put (use the console's Anchor home)`);
       return;
     }
-    logFollow(`${why}: returning to ${origin.dim} ${Math.floor(origin.x)},${Math.floor(origin.y)},${Math.floor(origin.z)}`);
+    lastHomeTryAt = Date.now();
+    logFollow(`${why || 'still away'}: returning to ${origin.dim} ${Math.floor(origin.x)},${Math.floor(origin.y)},${Math.floor(origin.z)}`);
     say(cmd);
-    clearHome(dir, me);
   }
 
   function consider(child) {
@@ -281,7 +287,11 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   }
 
   function tick() {
-    if (!running || !state || !bot.entity) return;
+    if (!running || !bot.entity) return;
+    if (!state) {
+      if (Date.now() - lastHomeTryAt >= cfg.stayRetryMs) goHome('');
+      return;
+    }
     if (!isOnline(state.child)) {
       state.missingSince = state.missingSince || Date.now();
       if (Date.now() - state.missingSince >= cfg.leaveGraceMs) release('left');

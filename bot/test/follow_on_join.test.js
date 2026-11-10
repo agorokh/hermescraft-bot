@@ -115,7 +115,7 @@ test('once settled, only a player gone from view pulls the character along', () 
 test('the way home is a fixed-shape command, or nothing', () => {
   assert.equal(
     returnHomeCommand({ dim: 'overworld', x: 1658.1, y: 63, z: 1723.3 }),
-    '/execute in minecraft:overworld run tp @s 1658.10 63.00 1723.30',
+    '/execute in minecraft:overworld run minecraft:tp @s 1658.10 63.00 1723.30',
   );
   assert.equal(returnHomeCommand(null), null);
   assert.equal(returnHomeCommand({ dim: 'overworld run op x', x: 1, y: 2, z: 3 }), null);
@@ -229,8 +229,21 @@ test('when the player leaves, the character goes back where it set out from', as
       delete rosie.players.KidOne;
       await wait(300);
       assert.equal(rosie._hc_follow.child(), null);
-      assert.equal(rosie.sent.at(-1), '/execute in minecraft:overworld run tp @s 1658.10 63.00 1723.30');
-      assert.equal(readHome(dir, 'Rosie'), null);
+      const home = '/execute in minecraft:overworld run minecraft:tp @s 1658.10 63.00 1723.30';
+      assert.equal(rosie.sent.at(-1), home);
+      assert.ok(readHome(dir, 'Rosie'), 'home is kept until the character is seen back');
+
+      // The server refused that teleport: the character is still away, so it asks again.
+      const before = rosie.sent.filter((m) => m === home).length;
+      await wait(200);
+      assert.ok(rosie.sent.filter((m) => m === home).length > before, 'a refused return is retried');
+
+      rosie._hc_world = 'overworld';
+      await wait(200);
+      assert.equal(readHome(dir, 'Rosie'), null, 'back home: the saved spot is dropped');
+      const settled = rosie.sent.length;
+      await wait(150);
+      assert.equal(rosie.sent.length, settled, 'and nothing more is sent');
     } finally {
       down();
     }

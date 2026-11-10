@@ -28,6 +28,7 @@ export const FOLLOW_DEFAULTS = Object.freeze({
   tickMs: 2000,
   claimStaggerMs: 1500,   // per roster position, so the first-listed character wins ties
   leaveGraceMs: 3000,     // a Bedrock join drops and re-adds the tab-list entry; wait before believing a leave
+  homeRadius: 2,          // blocks: this close to the saved spot counts as back home
 });
 
 // mineflayer's bot.game.dimension is the dimension TYPE: a skyblock world and
@@ -57,8 +58,21 @@ export function followEnabled(env = process.env) {
   return env.HERMESCRAFT_FOLLOW_ON_JOIN === '1';
 }
 
+// Default under the user's home, not the temp dir: every character run by this
+// user sees the same directory (a per-process private tmp would hide the claims
+// from each other), and no other local user can plant files in it.
 export function claimDirFromEnv(env = process.env) {
-  return env.HERMESCRAFT_FOLLOW_CLAIM_DIR || path.join(os.tmpdir(), 'hermescraft-follow-claims');
+  return env.HERMESCRAFT_FOLLOW_CLAIM_DIR || path.join(os.homedir(), '.hermescraft', 'follow-claims');
+}
+
+function ensureDir(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+}
+
+function validOrigin(origin) {
+  return !!origin
+    && DIMENSION_RE.test(String(origin.dim || ''))
+    && [origin.x, origin.y, origin.z].every((v) => typeof v === 'number' && Number.isFinite(v));
 }
 
 export function homeDimensionFromEnv(env = process.env) {
@@ -83,7 +97,8 @@ function claimPath(dir, child) {
 
 export function readClaim(dir, child) {
   try {
-    return JSON.parse(fs.readFileSync(claimPath(dir, child), 'utf8'));
+    const claim = JSON.parse(fs.readFileSync(claimPath(dir, child), 'utf8'));
+    return claim && typeof claim.character === 'string' && isSafePlayerName(claim.child) ? claim : null;
   } catch {
     return null;
   }
@@ -92,7 +107,7 @@ export function readClaim(dir, child) {
 // Returns 'claimed' (we now own it), 'mine' (we already did) or 'taken'.
 export function tryClaim(dir, child, character) {
   if (!isSafePlayerName(child)) return 'taken';
-  fs.mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   const body = JSON.stringify({ child, character, claimed_at: new Date().toISOString() });
   try {
     fs.writeFileSync(claimPath(dir, child), body, { flag: 'wx' });
@@ -140,8 +155,8 @@ function homePath(dir, character) {
 }
 
 export function saveHome(dir, character, origin) {
-  if (!origin) return false;
-  fs.mkdirSync(dir, { recursive: true });
+  if (!validOrigin(origin)) return false;
+  ensureDir(dir);
   try {
     fs.writeFileSync(homePath(dir, character), JSON.stringify(origin), { flag: 'wx' });
     return true;
@@ -153,7 +168,8 @@ export function saveHome(dir, character, origin) {
 
 export function readHome(dir, character) {
   try {
-    return JSON.parse(fs.readFileSync(homePath(dir, character), 'utf8'));
+    const origin = JSON.parse(fs.readFileSync(homePath(dir, character), 'utf8'));
+    return validOrigin(origin) ? origin : null; // a damaged or planted file is not a destination
   } catch {
     return null;
   }
@@ -176,10 +192,8 @@ export function nextFollowAction(state, now, cfg = FOLLOW_DEFAULTS) {
 }
 
 export function returnHomeCommand(origin) {
-  if (!origin || !DIMENSION_RE.test(String(origin.dim || ''))) return null;
-  const coords = [origin.x, origin.y, origin.z].map((v) => Number(v));
-  if (!coords.every(Number.isFinite)) return null;
-  const [x, y, z] = coords.map((v) => v.toFixed(2));
+  if (!validOrigin(origin)) return null;
+  const [x, y, z] = [origin.x, origin.y, origin.z].map((v) => v.toFixed(2));
   // minecraft:tp, not tp: EssentialsX owns the bare command and refuses spots
   // it judges unsafe ("Hole in floor!"). The saved home is where the character
   // was standing, so the vanilla teleport is the right one.
@@ -225,9 +239,11 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     .some((n) => n.toLowerCase() === String(name).toLowerCase());
   const say = (cmd) => { try { bot.chat(cmd); } catch (e) { logFollow(`chat failed: ${e.message}`); } };
 
+  // Visiting is a fact about where the character is, not about whom it follows:
+  // after its player leaves it is still a guest until it is back in its own world.
   bot._hc_follow = {
     child: () => state?.child || null,
-    isVisiting: () => !!state && currentDim() !== homeDim,
+    isVisiting: () => currentDim() !== homeDim,
   };
 
   function originNow() {
@@ -236,17 +252,26 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     return { dim: homeDim, x: pos.x, y: pos.y, z: pos.z };
   }
 
-  // The saved home is only dropped once the character is seen back in its home
-  // world, so a refused teleport is retried by the tick instead of forgotten.
+  // "Home" is the saved spot, not merely the home world: a character that
+  // followed a player across its own world is still away. The saved spot is only
+  // dropped once the character is seen standing on it, so a refused teleport is
+  // retried by the tick instead of forgotten.
   let lastHomeTryAt = 0;
+  function atSavedSpot(origin) {
+    const pos = bot.entity?.position;
+    if (!pos || currentDim() !== origin.dim) return false;
+    return Math.hypot(pos.x - origin.x, pos.y - origin.y, pos.z - origin.z) <= cfg.homeRadius;
+  }
   function goHome(why) {
-    if (currentDim() === homeDim) { clearHome(dir, me); return; }
     const origin = readHome(dir, me);
-    const cmd = returnHomeCommand(origin);
-    if (!cmd) {
-      if (why) logFollow(`${why}: no saved home, staying put (use the console's Anchor home)`);
+    if (!origin) {
+      if (why && currentDim() !== homeDim) {
+        logFollow(`${why}: no saved home, staying put (use the console's Anchor home)`);
+      }
       return;
     }
+    if (atSavedSpot(origin)) { clearHome(dir, me); return; }
+    const cmd = returnHomeCommand(origin);
     lastHomeTryAt = Date.now();
     logFollow(`${why || 'still away'}: returning to ${origin.dim} ${Math.floor(origin.x)},${Math.floor(origin.y)},${Math.floor(origin.z)}`);
     say(cmd);
@@ -255,7 +280,10 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   function consider(child) {
     if (!running || !isFollowCandidate(child, me, opts)) return;
     if (!isOnline(child)) return;
-    if (state && isOnline(state.child)) return; // one child per character
+    // One player per character. Busy means "has a player", online or not: during
+    // the leave grace the player is briefly absent, and taking a second one then
+    // would orphan the first claim.
+    if (state) return;
     let result;
     try {
       result = tryClaim(dir, child, me);
@@ -308,6 +336,10 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     if (action !== 'tp') return;
     state.lastTpAt = Date.now();
     logFollow(`tp to ${state.child} (visible=${!!entity}, dim=${currentDim()})`);
+    // Bare /tp on purpose. Where EssentialsX owns it, a player-target teleport
+    // refuses an unsafe landing instead of dropping the character into the void
+    // under a player who is mid-air, and this tick simply asks again. The trip
+    // home is different: that spot is known good, so it uses minecraft:tp.
     say(`/tp ${state.child}`);
   }
 

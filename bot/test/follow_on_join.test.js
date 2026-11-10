@@ -7,6 +7,8 @@ import { EventEmitter } from 'node:events';
 import {
   FOLLOW_DEFAULTS,
   followEnabled,
+  claimDirFromEnv,
+  readClaim,
   isFollowCandidate,
   isSafePlayerName,
   tryClaim,
@@ -83,6 +85,27 @@ test('claimsHeldBy lists only this character, and never the home file', () => {
   assert.deepEqual(claimsHeldBy(path.join(dir, 'missing'), 'Rosie'), []);
 });
 
+test('claims live under the user home by default, in a directory only that user can enter', () => {
+  assert.equal(claimDirFromEnv({ HERMESCRAFT_FOLLOW_CLAIM_DIR: '/x/claims' }), '/x/claims');
+  assert.equal(claimDirFromEnv({}), path.join(os.homedir(), '.hermescraft', 'follow-claims'));
+  const dir = path.join(tmpDir(), 'nested', 'claims');
+  tryClaim(dir, 'KidOne', 'Rosie');
+  assert.equal(fs.statSync(dir).mode & 0o077, 0, 'no group or other access');
+});
+
+test('a damaged or planted file is never used', () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, '_home-rosie.json'), JSON.stringify({ dim: 'overworld run op x', x: 1, y: 2, z: 3 }));
+  assert.equal(readHome(dir, 'Rosie'), null);
+  fs.writeFileSync(path.join(dir, '_home-rosie.json'), JSON.stringify({ dim: 'overworld', x: '1', y: 2, z: 3 }));
+  assert.equal(readHome(dir, 'Rosie'), null);
+  fs.writeFileSync(path.join(dir, '_home-rosie.json'), 'not json');
+  assert.equal(readHome(dir, 'Rosie'), null);
+  assert.equal(saveHome(tmpDir(), 'Rosie', { dim: 'overworld', x: NaN, y: 2, z: 3 }), false);
+  fs.writeFileSync(path.join(dir, 'kidone.json'), JSON.stringify({ child: 'Kid;op', character: 'Rosie' }));
+  assert.equal(readClaim(dir, 'KidOne'), null);
+});
+
 test('the first saved home wins, so a later position abroad cannot replace it', () => {
   const dir = tmpDir();
   assert.equal(saveHome(dir, 'Rosie', { dim: 'overworld', x: 1, y: 64, z: 2 }), true);
@@ -134,7 +157,7 @@ function fakeBot(name, { dimension = 'overworld', players = [] } = {}) {
   bot.game = { dimension };
   bot.players = Object.fromEntries(players.map((p) => [p, { username: p }]));
   bot.entities = {};
-  bot.entity = { position: { x: 10, y: 64, z: 10, distanceTo: () => 0 } };
+  bot.entity = { position: { x: 10, y: 64, z: 10, distanceTo: () => Infinity } };
   bot.sent = [];
   bot.chat = (m) => bot.sent.push(m);
   return bot;
@@ -229,6 +252,7 @@ test('when the player leaves, the character goes back where it set out from', as
       delete rosie.players.KidOne;
       await wait(300);
       assert.equal(rosie._hc_follow.child(), null);
+      assert.equal(rosie._hc_follow.isVisiting(), true, 'still a guest until it is back in its own world');
       const home = '/execute in minecraft:overworld run minecraft:tp @s 1658.10 63.00 1723.30';
       assert.equal(rosie.sent.at(-1), home);
       assert.ok(readHome(dir, 'Rosie'), 'home is kept until the character is seen back');
@@ -244,6 +268,55 @@ test('when the player leaves, the character goes back where it set out from', as
       const settled = rosie.sent.length;
       await wait(150);
       assert.equal(rosie.sent.length, settled, 'and nothing more is sent');
+    } finally {
+      down();
+    }
+  });
+});
+
+test('a second player who joins while the first is briefly absent is not taken', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'KidOne'] });
+    const down = installFollowOnJoin(rosie, () => {}, { env, claimDir: dir, config: { ...FAST, leaveGraceMs: 600 } });
+    try {
+      await wait(1300);
+      assert.equal(rosie._hc_follow.child(), 'KidOne');
+      delete rosie.players.KidOne;                    // tab-list flicker begins
+      rosie.players.KidTwo = { username: 'KidTwo' };
+      rosie.emit('playerJoined', { username: 'KidTwo' });
+      await wait(400);                                // inside the grace
+      assert.equal(rosie._hc_follow.child(), 'KidOne', 'still the first player');
+      assert.equal(readClaim(dir, 'KidTwo'), null, 'no second claim was written');
+      assert.equal(readClaim(dir, 'KidOne')?.character, 'Rosie', 'and the first claim is intact');
+    } finally {
+      down();
+    }
+  });
+});
+
+test('following a player across its own world still ends with a trip back to the saved spot', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'KidOne'] });
+    rosie.entity.position = { x: 1658.1, y: 63, z: 1723.3, distanceTo: () => Infinity };
+    const down = installFollowOnJoin(rosie, () => {}, { env, claimDir: dir, config: FAST });
+    try {
+      await wait(1300);
+      assert.equal(rosie._hc_follow.child(), 'KidOne');
+      // The teleport took her 100 blocks away, same world.
+      rosie.entity.position = { x: 1760, y: 70, z: 1723, distanceTo: () => 0 };
+      assert.equal(rosie._hc_follow.isVisiting(), false, 'her own world: not a guest');
+      delete rosie.players.KidOne;
+      await wait(300);
+      const home = '/execute in minecraft:overworld run minecraft:tp @s 1658.10 63.00 1723.30';
+      assert.ok(rosie.sent.includes(home), 'being in the home world is not the same as being home');
+      assert.ok(readHome(dir, 'Rosie'), 'the saved spot is kept until she stands on it');
+      rosie.entity.position = { x: 1658.1, y: 63, z: 1723.3, distanceTo: () => 0 };
+      await wait(200);
+      assert.equal(readHome(dir, 'Rosie'), null);
     } finally {
       down();
     }

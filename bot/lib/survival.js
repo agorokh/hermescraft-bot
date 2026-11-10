@@ -88,6 +88,12 @@ function clearGoalIfStill(bot, goal) {
   } catch { /* swallow */ }
 }
 
+// A character that followed a player into another world (hermescraft#544) is a
+// guest there: it must not place torches on someone's island or build plot.
+export function torchSuppressedByVisit(opts = {}) {
+  return typeof opts.isVisiting === 'function' && opts.isVisiting() === true;
+}
+
 export function formatStuckPos(pos) {
   return `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
 }
@@ -102,6 +108,7 @@ export function formatStuckPos(pos) {
  *   eatEnabled:       boolean (default true)
  *   fleeEnabled:      boolean (default true)
  *   torchEnabled:     boolean (default true)
+ *   isVisiting:       () => boolean; true suppresses torch placement
  *   unstuckEnabled:   boolean (default true)
  */
 export function startSurvivalTick(bot, log, opts = {}) {
@@ -199,6 +206,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
       await sleep(8000);
       if (!running || !bot.entity) continue;
       if (opts.torchEnabled === false) continue;
+      if (torchSuppressedByVisit(opts)) continue;
       if (shouldDeferSurvivalActivity()) continue;
 
       const now = Date.now();

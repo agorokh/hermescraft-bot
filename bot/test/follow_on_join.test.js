@@ -1,0 +1,210 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import {
+  FOLLOW_DEFAULTS,
+  followEnabled,
+  isFollowCandidate,
+  isSafePlayerName,
+  tryClaim,
+  releaseClaim,
+  claimsHeldBy,
+  saveHome,
+  readHome,
+  nextFollowAction,
+  returnHomeCommand,
+  installFollowOnJoin,
+} from '../lib/follow_on_join.js';
+import { torchSuppressedByVisit } from '../lib/survival.js';
+
+function tmpDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'hc-follow-test-'));
+}
+
+function withCompanions(names, fn) {
+  const prev = process.env.HERMESCRAFT_COMPANION_NAMES;
+  process.env.HERMESCRAFT_COMPANION_NAMES = names;
+  try { return fn(); } finally {
+    if (prev === undefined) delete process.env.HERMESCRAFT_COMPANION_NAMES;
+    else process.env.HERMESCRAFT_COMPANION_NAMES = prev;
+  }
+}
+
+test('off unless HERMESCRAFT_FOLLOW_ON_JOIN=1', () => {
+  assert.equal(followEnabled({}), false);
+  assert.equal(followEnabled({ HERMESCRAFT_FOLLOW_ON_JOIN: '0' }), false);
+  assert.equal(followEnabled({ HERMESCRAFT_FOLLOW_ON_JOIN: '1' }), true);
+});
+
+test('player names that could carry a command are refused', () => {
+  assert.equal(isSafePlayerName('KidOne'), true);
+  assert.equal(isSafePlayerName('.BedrockKid_7'), true);
+  assert.equal(isSafePlayerName('Kid One'), false);
+  assert.equal(isSafePlayerName('Kid;op'), false);
+  assert.equal(isSafePlayerName('@a'), false);
+  assert.equal(isSafePlayerName(''), false);
+  assert.equal(isSafePlayerName(null), false);
+});
+
+test('companions, the bot itself and judge cameras are not followed', () => {
+  withCompanions('Rosie,Steve', () => {
+    assert.equal(isFollowCandidate('KidOne', 'Rosie'), true);
+    assert.equal(isFollowCandidate('.KidOne', 'Rosie'), true);
+    assert.equal(isFollowCandidate('Steve', 'Rosie'), false);
+    assert.equal(isFollowCandidate('Rosie', 'Rosie'), false);
+    assert.equal(isFollowCandidate('JCam_ab12', 'Rosie'), false);
+    assert.equal(isFollowCandidate('PCam_ab12', 'Rosie'), false);
+  });
+});
+
+test('the first character to claim a player keeps them', () => {
+  const dir = tmpDir();
+  assert.equal(tryClaim(dir, 'KidOne', 'Rosie'), 'claimed');
+  assert.equal(tryClaim(dir, 'KidOne', 'Steve'), 'taken');
+  assert.equal(tryClaim(dir, 'kidone', 'Steve'), 'taken', 'claims ignore case');
+  assert.equal(tryClaim(dir, 'KidOne', 'Rosie'), 'mine');
+  assert.equal(releaseClaim(dir, 'KidOne', 'Steve'), false, 'only the owner releases');
+  assert.equal(releaseClaim(dir, 'KidOne', 'Rosie'), true);
+  assert.equal(tryClaim(dir, 'KidOne', 'Steve'), 'claimed');
+});
+
+test('claimsHeldBy lists only this character, and never the home file', () => {
+  const dir = tmpDir();
+  tryClaim(dir, 'KidOne', 'Rosie');
+  tryClaim(dir, 'KidTwo', 'Steve');
+  saveHome(dir, 'Rosie', { dim: 'overworld', x: 1, y: 64, z: 2 });
+  assert.deepEqual(claimsHeldBy(dir, 'Rosie').map((c) => c.child), ['KidOne']);
+  assert.deepEqual(claimsHeldBy(path.join(dir, 'missing'), 'Rosie'), []);
+});
+
+test('the first saved home wins, so a later position abroad cannot replace it', () => {
+  const dir = tmpDir();
+  assert.equal(saveHome(dir, 'Rosie', { dim: 'overworld', x: 1, y: 64, z: 2 }), true);
+  assert.equal(saveHome(dir, 'Rosie', { dim: 'overworld', x: 9, y: 9, z: 9 }), false);
+  assert.equal(saveHome(dir, 'Rosie', null), false);
+  assert.deepEqual(readHome(dir, 'Rosie'), { dim: 'overworld', x: 1, y: 64, z: 2 });
+});
+
+test('while arriving, any gap is closed, no faster than the retry spacing', () => {
+  const cfg = FOLLOW_DEFAULTS;
+  const base = { claimedAt: 0, lastTpAt: 0 };
+  assert.equal(nextFollowAction({ ...base, childVisible: false, distance: Infinity }, 6000, cfg), 'tp');
+  assert.equal(nextFollowAction({ ...base, childVisible: true, distance: 30 }, 6000, cfg), 'tp');
+  assert.equal(nextFollowAction({ ...base, childVisible: true, distance: 3 }, 6000, cfg), 'wait');
+  assert.equal(nextFollowAction({ ...base, lastTpAt: 4000, childVisible: false, distance: Infinity }, 6000, cfg), 'wait');
+});
+
+test('once settled, only a player gone from view pulls the character along', () => {
+  const cfg = FOLLOW_DEFAULTS;
+  const settled = { claimedAt: 0, lastTpAt: 0 };
+  const now = cfg.arriveWindowMs + 30000;
+  assert.equal(nextFollowAction({ ...settled, childVisible: true, distance: 40 }, now, cfg), 'wait');
+  assert.equal(nextFollowAction({ ...settled, childVisible: false, distance: Infinity }, now, cfg), 'tp');
+  assert.equal(
+    nextFollowAction({ ...settled, lastTpAt: now - 3000, childVisible: false, distance: Infinity }, now, cfg),
+    'wait',
+  );
+});
+
+test('the way home is a fixed-shape command, or nothing', () => {
+  assert.equal(
+    returnHomeCommand({ dim: 'overworld', x: 1658.1, y: 63, z: 1723.3 }),
+    '/execute in minecraft:overworld run tp @s 1658.10 63.00 1723.30',
+  );
+  assert.equal(returnHomeCommand(null), null);
+  assert.equal(returnHomeCommand({ dim: 'overworld run op x', x: 1, y: 2, z: 3 }), null);
+  assert.equal(returnHomeCommand({ dim: 'overworld', x: 'a', y: 2, z: 3 }), null);
+});
+
+test('torches are suppressed only while visiting', () => {
+  assert.equal(torchSuppressedByVisit({}), false);
+  assert.equal(torchSuppressedByVisit({ isVisiting: () => false }), false);
+  assert.equal(torchSuppressedByVisit({ isVisiting: () => true }), true);
+});
+
+function fakeBot(name, { dimension = 'overworld', players = [] } = {}) {
+  const bot = new EventEmitter();
+  bot.username = name;
+  bot.game = { dimension };
+  bot.players = Object.fromEntries(players.map((p) => [p, { username: p }]));
+  bot.entities = {};
+  bot.entity = { position: { x: 10, y: 64, z: 10, distanceTo: () => 0 } };
+  bot.sent = [];
+  bot.chat = (m) => bot.sent.push(m);
+  return bot;
+}
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const FAST = { tickMs: 20, arriveRetryMs: 40, stayRetryMs: 40, claimStaggerMs: 60 };
+
+test('installed but disabled: no listeners, nothing claimed', () => {
+  const dir = tmpDir();
+  const bot = fakeBot('Rosie', { players: ['KidOne'] });
+  const teardown = installFollowOnJoin(bot, () => {}, { env: {}, claimDir: dir });
+  assert.equal(bot.listenerCount('playerJoined'), 0);
+  assert.equal(bot._hc_follow.isVisiting(), false);
+  teardown();
+});
+
+test('two players get two different characters; a lone player gets exactly one', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'Steve'] });
+    const steve = fakeBot('Steve', { players: ['Rosie', 'Steve'] });
+    const logs = [];
+    const downs = [rosie, steve].map((b) => installFollowOnJoin(b, (m) => logs.push(`${b.username} ${m}`), {
+      env, claimDir: dir, config: FAST,
+    }));
+    try {
+      for (const b of [rosie, steve]) {
+        b.players.KidOne = { username: 'KidOne' };
+        b.emit('playerJoined', { username: 'KidOne' });
+      }
+      await wait(700);
+      assert.equal(rosie._hc_follow.child(), 'KidOne');
+      assert.equal(steve._hc_follow.child(), null, 'a claimed player is not followed twice');
+      assert.ok(rosie.sent.includes('/tp KidOne'));
+      assert.equal(steve.sent.length, 0);
+
+      for (const b of [rosie, steve]) {
+        b.players.KidTwo = { username: 'KidTwo' };
+        b.emit('playerJoined', { username: 'KidTwo' });
+      }
+      await wait(700);
+      assert.equal(rosie._hc_follow.child(), 'KidOne', 'a busy character takes no second player');
+      assert.equal(steve._hc_follow.child(), 'KidTwo');
+      assert.ok(steve.sent.includes('/tp KidTwo'));
+    } finally {
+      downs.forEach((d) => d());
+    }
+    assert.deepEqual(fs.readdirSync(dir).filter((n) => !n.startsWith('_home-')), [], 'teardown releases claims');
+  });
+});
+
+test('when the player leaves, the character goes back where it set out from', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'KidOne'] });
+    rosie.entity.position = { x: 1658.1, y: 63, z: 1723.3, distanceTo: () => 0 };
+    const down = installFollowOnJoin(rosie, () => {}, { env, claimDir: dir, config: FAST });
+    try {
+      await wait(1300); // startup scan finds the player who was already online
+      assert.equal(rosie._hc_follow.child(), 'KidOne');
+      assert.deepEqual(readHome(dir, 'Rosie'), { dim: 'overworld', x: 1658.1, y: 63, z: 1723.3 });
+      rosie.game.dimension = 'bskyblock_world';
+      assert.equal(rosie._hc_follow.isVisiting(), true);
+      delete rosie.players.KidOne;
+      rosie.emit('playerLeft', { username: 'KidOne' });
+      assert.equal(rosie._hc_follow.child(), null);
+      assert.equal(rosie.sent.at(-1), '/execute in minecraft:overworld run tp @s 1658.10 63.00 1723.30');
+      assert.equal(readHome(dir, 'Rosie'), null);
+    } finally {
+      down();
+    }
+  });
+});

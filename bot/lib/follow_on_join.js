@@ -27,7 +27,31 @@ export const FOLLOW_DEFAULTS = Object.freeze({
   stayRetryMs: 10000,     // spacing of teleports once settled
   tickMs: 2000,
   claimStaggerMs: 1500,   // per roster position, so the first-listed character wins ties
+  leaveGraceMs: 3000,     // a Bedrock join drops and re-adds the tab-list entry; wait before believing a leave
 });
+
+// mineflayer's bot.game.dimension is the dimension TYPE: a skyblock world and
+// the main world both read "overworld". The world's own name only appears in
+// the login and respawn packets, so remember it from there.
+export function worldNameFromPacket(packet) {
+  const state = packet?.worldState || packet || {};
+  const raw = state.name ?? state.worldName;
+  return typeof raw === 'string' && raw ? raw.replace(/^minecraft:/, '') : null;
+}
+
+// Call right after createBot, before login, so the first world is seen too.
+export function trackWorldName(bot) {
+  const onPacket = (packet) => {
+    const name = worldNameFromPacket(packet);
+    if (name) bot._hc_world = name;
+  };
+  bot._client?.on('login', onPacket);
+  bot._client?.on('respawn', onPacket);
+}
+
+export function currentWorldName(bot) {
+  return bot._hc_world || String(bot.game?.dimension || '').replace(/^minecraft:/, '');
+}
 
 export function followEnabled(env = process.env) {
   return env.HERMESCRAFT_FOLLOW_ON_JOIN === '1';
@@ -186,14 +210,14 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   const logFollow = (msg) => log(`[follow] ${msg}`);
 
   let running = true;
-  let state = null; // { child, claimedAt, lastTpAt }
+  let state = null; // { child, claimedAt, lastTpAt, missingSince }
   const timers = new Set();
 
   const later = (fn, ms) => {
     const t = setTimeout(() => { timers.delete(t); if (running) fn(); }, ms);
     timers.add(t);
   };
-  const currentDim = () => String(bot.game?.dimension || '').replace(/^minecraft:/, '');
+  const currentDim = () => currentWorldName(bot);
   const isOnline = (name) => Object.keys(bot.players || {})
     .some((n) => n.toLowerCase() === String(name).toLowerCase());
   const say = (cmd) => { try { bot.chat(cmd); } catch (e) { logFollow(`chat failed: ${e.message}`); } };
@@ -258,7 +282,12 @@ export function installFollowOnJoin(bot, log, opts = {}) {
 
   function tick() {
     if (!running || !state || !bot.entity) return;
-    if (!isOnline(state.child)) { release('left'); return; }
+    if (!isOnline(state.child)) {
+      state.missingSince = state.missingSince || Date.now();
+      if (Date.now() - state.missingSince >= cfg.leaveGraceMs) release('left');
+      return;
+    }
+    state.missingSince = 0;
     const entity = findPlayerEntity(bot, state.child);
     const distance = entity ? bot.entity.position.distanceTo(entity.position) : Infinity;
     const action = nextFollowAction(
@@ -280,11 +309,9 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   goHome('start');
 
   const onJoin = (player) => later(() => consider(player?.username), stagger + 250);
-  const onLeft = (player) => {
-    if (state && String(player?.username || '').toLowerCase() === state.child.toLowerCase()) release('left');
-  };
+  // No handler for playerLeft: the tick notices an absent player and releases
+  // after leaveGraceMs, which rides out a tab-list flicker.
   bot.on('playerJoined', onJoin);
-  bot.on('playerLeft', onLeft);
   later(scanForUnclaimed, stagger + 1000);
   const interval = setInterval(tick, cfg.tickMs);
 
@@ -296,7 +323,6 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     for (const t of timers) clearTimeout(t);
     timers.clear();
     try { bot.removeListener('playerJoined', onJoin); } catch {}
-    try { bot.removeListener('playerLeft', onLeft); } catch {}
     if (state) { try { releaseClaim(dir, state.child, me); } catch {} state = null; }
   };
 }

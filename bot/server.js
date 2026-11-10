@@ -204,7 +204,7 @@ async function shadowRoute(bot, body, sender, primaryResult) {
   }
 }
 import { installQuestEngine, isCompanionSpeaker } from './lib/quests.js';
-import { installFollowOnJoin } from './lib/follow_on_join.js';
+import { installFollowOnJoin, trackWorldName } from './lib/follow_on_join.js';
 import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
@@ -1181,6 +1181,7 @@ async function createBot() {
       username: config.mc.username,
       auth: config.mc.auth,
     });
+    trackWorldName(bot);
 
     const timeout = setTimeout(() => {
       reject(new Error(`Connection timeout — couldn't reach ${config.mc.host}:${config.mc.port}`));

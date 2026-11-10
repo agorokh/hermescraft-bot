@@ -17,6 +17,9 @@ import {
   nextFollowAction,
   returnHomeCommand,
   installFollowOnJoin,
+  worldNameFromPacket,
+  trackWorldName,
+  currentWorldName,
 } from '../lib/follow_on_join.js';
 import { torchSuppressedByVisit } from '../lib/survival.js';
 
@@ -138,7 +141,23 @@ function fakeBot(name, { dimension = 'overworld', players = [] } = {}) {
 }
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const FAST = { tickMs: 20, arriveRetryMs: 40, stayRetryMs: 40, claimStaggerMs: 60 };
+const FAST = { tickMs: 20, arriveRetryMs: 40, stayRetryMs: 40, claimStaggerMs: 60, leaveGraceMs: 120 };
+
+test('the world name comes from the login and respawn packets, not the dimension type', () => {
+  assert.equal(worldNameFromPacket({ worldState: { dimension: 'minecraft:overworld', name: 'minecraft:bskyblock_world' } }), 'bskyblock_world');
+  assert.equal(worldNameFromPacket({ dimension: 'minecraft:overworld', worldName: 'minecraft:scenario_world' }), 'scenario_world');
+  assert.equal(worldNameFromPacket({ dimension: 'minecraft:overworld' }), null);
+  assert.equal(worldNameFromPacket(null), null);
+
+  const bot = { game: { dimension: 'overworld' }, _client: new EventEmitter() };
+  assert.equal(currentWorldName(bot), 'overworld', 'falls back to the type until a packet arrives');
+  trackWorldName(bot);
+  bot._client.emit('login', { worldState: { name: 'minecraft:overworld' } });
+  assert.equal(currentWorldName(bot), 'overworld');
+  bot._client.emit('respawn', { worldState: { name: 'minecraft:bskyblock_world' } });
+  assert.equal(bot.game.dimension, 'overworld', 'the type did not change');
+  assert.equal(currentWorldName(bot), 'bskyblock_world');
+});
 
 test('installed but disabled: no listeners, nothing claimed', () => {
   const dir = tmpDir();
@@ -196,10 +215,19 @@ test('when the player leaves, the character goes back where it set out from', as
       await wait(1300); // startup scan finds the player who was already online
       assert.equal(rosie._hc_follow.child(), 'KidOne');
       assert.deepEqual(readHome(dir, 'Rosie'), { dim: 'overworld', x: 1658.1, y: 63, z: 1723.3 });
-      rosie.game.dimension = 'bskyblock_world';
+      rosie._hc_world = 'bskyblock_world'; // game.dimension still says "overworld"
       assert.equal(rosie._hc_follow.isVisiting(), true);
+
+      // A Bedrock join drops and re-adds the tab-list entry. That is not a leave.
       delete rosie.players.KidOne;
-      rosie.emit('playerLeft', { username: 'KidOne' });
+      await wait(50);
+      rosie.players.KidOne = { username: 'KidOne' };
+      await wait(200);
+      assert.equal(rosie._hc_follow.child(), 'KidOne', 'a flicker shorter than the grace keeps the claim');
+      assert.ok(!rosie.sent.some((m) => m.startsWith('/execute')), 'and sends nobody home');
+
+      delete rosie.players.KidOne;
+      await wait(300);
       assert.equal(rosie._hc_follow.child(), null);
       assert.equal(rosie.sent.at(-1), '/execute in minecraft:overworld run tp @s 1658.10 63.00 1723.30');
       assert.equal(readHome(dir, 'Rosie'), null);

@@ -397,7 +397,10 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     logFollow(`following ${child} (${result})`);
   }
 
-  let lastScanAt = 0;
+  // Starts at "now", so the first scan is the staggered one scheduled at install
+  // and not an early tick: with several characters started together, roster
+  // order decides who gets a player who was already online.
+  let lastScanAt = Date.now();
   function scanForUnclaimed() {
     lastScanAt = Date.now();
     const names = Object.keys(bot.players || {}).sort((a, b) => a.localeCompare(b));

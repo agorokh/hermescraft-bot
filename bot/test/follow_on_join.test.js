@@ -466,3 +466,20 @@ test('a character abroad with a home still on file may take the next player', as
     }
   });
 });
+
+test('characters started together take already-online players in roster order', async () => {
+  const dir = tmpDir();
+  const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve,Reed' };
+  const config = { ...FAST, claimStaggerMs: 300, rescanMs: 60000 };
+  const names = ['Rosie', 'Steve', 'Reed'];
+  const online = [...names, 'KidA', 'KidB', 'KidC'];
+  const bots = names.map((n) => fakeBot(n, { players: online }));
+  // Installed in reverse, so start order cannot be what decides it.
+  const downs = [...bots].reverse().map((b) => installFollowOnJoin(b, () => {}, { env, claimDir: dir, config }));
+  try {
+    await wait(2200);
+    assert.deepEqual(bots.map((b) => b._hc_follow.child()), ['KidA', 'KidB', 'KidC']);
+  } finally {
+    downs.forEach((d) => d());
+  }
+});

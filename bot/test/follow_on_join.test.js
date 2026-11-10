@@ -10,6 +10,7 @@ import {
   claimDirFromEnv,
   readClaim,
   sweepBrokenClaims,
+  refreshClaim,
   isFollowCandidate,
   isSafePlayerName,
   tryClaim,
@@ -482,4 +483,42 @@ test('characters started together take already-online players in roster order', 
   } finally {
     downs.forEach((d) => d());
   }
+});
+
+test('a claim left by a dead process expires; a re-stamped one does not', () => {
+  const dir = tmpDir();
+  const t0 = Date.now();
+  assert.equal(tryClaim(dir, 'KidOne', 'Rosie', t0), 'claimed');
+  assert.equal(tryClaim(dir, 'KidOne', 'Steve', t0 + 29000, 30000), 'taken', 'inside the TTL');
+  assert.equal(refreshClaim(dir, 'KidOne', 'Rosie', t0 + 29000), true, 'Rosie is alive and re-stamps it');
+  assert.equal(tryClaim(dir, 'KidOne', 'Steve', t0 + 50000, 30000), 'taken', 'so it is still hers');
+  assert.equal(tryClaim(dir, 'KidOne', 'Steve', t0 + 70000, 30000), 'claimed', 'no stamp for 41 s: her process is gone');
+  assert.equal(refreshClaim(dir, 'KidOne', 'Rosie', t0 + 71000), false, 'a late Rosie learns she lost it');
+  assert.equal(readClaim(dir, 'KidOne').character, 'Steve');
+});
+
+test('a following character keeps its claim fresh, and lets go if a sibling took it', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'KidOne'] });
+    const config = { ...FAST, claimBeatMs: 40, claimTtlMs: 400, rescanMs: 60000 };
+    const down = installFollowOnJoin(rosie, () => {}, { env, claimDir: dir, config });
+    try {
+      await wait(1300);
+      assert.equal(rosie._hc_follow.child(), 'KidOne');
+      const file = path.join(dir, 'kidone.json');
+      const before = fs.statSync(file).mtimeMs;
+      await wait(600);                                   // longer than the TTL
+      assert.ok(fs.statSync(file).mtimeMs > before, 'the claim was re-stamped');
+      assert.equal(tryClaim(dir, 'KidOne', 'Steve', Date.now(), 400), 'taken', 'a live claim outlasts the TTL');
+
+      fs.writeFileSync(file, JSON.stringify({ child: 'KidOne', character: 'Steve' }));   // a sibling took it
+      await wait(200);
+      assert.equal(rosie._hc_follow.child(), null, 'she lets go');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Steve', 'without touching the sibling\'s claim');
+    } finally {
+      down();
+    }
+  });
 });

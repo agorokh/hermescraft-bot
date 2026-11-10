@@ -30,6 +30,8 @@ export const FOLLOW_DEFAULTS = Object.freeze({
   leaveGraceMs: 3000,     // a Bedrock join drops and re-adds the tab-list entry; wait before believing a leave
   homeRadius: 2,          // blocks: this close to the saved spot counts as back home
   rescanMs: 10000,        // an idle character looks again for a player nobody has
+  claimBeatMs: 5000,      // a following character re-stamps its claim this often
+  claimTtlMs: 30000,      // a claim not re-stamped for this long belonged to a dead process
 });
 
 // A claim file is written in one call, but a reader can still catch it empty.
@@ -153,8 +155,28 @@ export function sweepBrokenClaims(dir, now = Date.now()) {
   return names.filter((n) => removeBrokenClaim(path.join(dir, n), now)).length;
 }
 
+// A following character re-stamps its claim file every claimBeatMs. Returns
+// false when the claim is no longer this character's (a sibling took it after
+// this process stalled past the TTL), so the caller can let go.
+export function refreshClaim(dir, child, character, now = Date.now()) {
+  if (readClaim(dir, child)?.character !== character) return false;
+  try {
+    const stamp = new Date(now);
+    fs.utimesSync(claimPath(dir, child), stamp, stamp);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function claimAgeMs(file, now) {
+  try { return now - fs.statSync(file).mtimeMs; } catch { return 0; }
+}
+
 // Returns 'claimed' (we now own it), 'mine' (we already did) or 'taken'.
-export function tryClaim(dir, child, character, now = Date.now()) {
+// A valid claim that has not been re-stamped for ttlMs was left by a process
+// that died without releasing it, and is replaced.
+export function tryClaim(dir, child, character, now = Date.now(), ttlMs = FOLLOW_DEFAULTS.claimTtlMs) {
   if (!isSafePlayerName(child)) return 'taken';
   ensureDir(dir);
   const file = claimPath(dir, child);
@@ -166,7 +188,12 @@ export function tryClaim(dir, child, character, now = Date.now()) {
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
       const owner = readClaim(dir, child)?.character;
-      if (owner) return owner === character ? 'mine' : 'taken';
+      if (owner === character) return 'mine';
+      if (owner) {
+        if (claimAgeMs(file, now) < ttlMs) return 'taken';
+        try { fs.unlinkSync(file); } catch { return 'taken'; } // stale: its owner is gone
+        continue;
+      }
       if (!removeBrokenClaim(file, now)) return 'taken'; // fresh: someone is writing it
     }
   }
@@ -371,7 +398,7 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     if (state) return;
     let result;
     try {
-      result = tryClaim(dir, child, me);
+      result = tryClaim(dir, child, me, Date.now(), cfg.claimTtlMs);
     } catch (e) {
       logFollow(`claim error for ${child}: ${e.message}`);
       return;
@@ -393,7 +420,7 @@ export function installFollowOnJoin(bot, log, opts = {}) {
       try { releaseClaim(dir, child, me); } catch { /* best effort */ }
       return;
     }
-    state = { child, claimedAt: Date.now(), lastTpAt: 0 };
+    state = { child, claimedAt: Date.now(), lastTpAt: 0, lastBeatAt: Date.now() };
     logFollow(`following ${child} (${result})`);
   }
 
@@ -434,6 +461,16 @@ export function installFollowOnJoin(bot, log, opts = {}) {
       return;
     }
     state.missingSince = 0;
+    if (Date.now() - state.lastBeatAt >= cfg.claimBeatMs) {
+      state.lastBeatAt = Date.now();
+      if (!refreshClaim(dir, state.child, me)) {
+        // This process stalled long enough for a sibling to take the player.
+        const lost = state.child;
+        state = null;
+        goHome(`lost the claim on ${lost}`);
+        return;
+      }
+    }
     const entity = findPlayerEntity(bot, state.child);
     const distance = entity ? bot.entity.position.distanceTo(entity.position) : Infinity;
     const action = nextFollowAction(

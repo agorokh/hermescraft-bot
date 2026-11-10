@@ -398,3 +398,33 @@ test('a damaged home file is replaced, a valid one is kept, and a strange charac
   assert.equal(fs.existsSync(outside), false);
   assert.deepEqual(fs.readdirSync(dir), ['_home-rosie.json'], 'nothing else was written');
 });
+
+test('a claim file only counts for the player it is named after', () => {
+  const dir = tmpDir();
+  const file = path.join(dir, 'kidone.json');
+  fs.writeFileSync(file, JSON.stringify({ child: 'OtherKid', character: 'Steve' }));
+  assert.equal(readClaim(dir, 'KidOne'), null, 'the body names someone else');
+  assert.deepEqual(claimsHeldBy(dir, 'Steve'), [], 'and it is not Steve\'s claim on anyone');
+  assert.equal(tryClaim(dir, 'KidOne', 'Rosie', Date.now() + 5000), 'claimed', 'so it cannot block KidOne');
+  assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+  assert.equal(readClaim(dir, 'kidone').character, 'Rosie', 'lookup ignores case');
+});
+
+test('if no way home can be recorded, the player is given back', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'KidOne'] });
+    fs.mkdirSync(path.join(dir, '_home-rosie.json'));   // a directory where the home file should go
+    const logs = [];
+    const down = installFollowOnJoin(rosie, (m) => logs.push(m), { env, claimDir: dir, config: { ...FAST, rescanMs: 60000 } });
+    try {
+      await wait(1300);
+      assert.equal(rosie._hc_follow.child(), null);
+      assert.equal(readClaim(dir, 'KidOne'), null, 'no claim is left behind');
+      assert.ok(logs.some((m) => m.includes('cannot save home')));
+    } finally {
+      down();
+    }
+  });
+});

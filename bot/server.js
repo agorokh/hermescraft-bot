@@ -1456,7 +1456,7 @@ async function createBot() {
             || currentTask?.status === 'running'
             || (bot._hc_intent_action_depth || 0) > 0
           ),
-          isVisiting: () => !!bot._hc_follow?.isVisiting?.(),
+          isVisiting: () => !!thisBot._hc_follow?.isVisiting?.(),
         });
       } catch (e) {
         log(`survival tick install failed: ${e.message}`);

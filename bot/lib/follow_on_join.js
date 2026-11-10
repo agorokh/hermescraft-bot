@@ -112,10 +112,18 @@ function claimPath(dir, child) {
   return path.join(dir, `${child.toLowerCase()}.json`);
 }
 
+// A claim is only valid for the player its file is named after.
+function validClaim(claim, stem) {
+  return !!claim
+    && typeof claim.character === 'string'
+    && isSafePlayerName(claim.child)
+    && claim.child.toLowerCase() === String(stem).toLowerCase();
+}
+
 export function readClaim(dir, child) {
   try {
     const claim = JSON.parse(fs.readFileSync(claimPath(dir, child), 'utf8'));
-    return claim && typeof claim.character === 'string' && isSafePlayerName(claim.child) ? claim : null;
+    return validClaim(claim, child) ? claim : null;
   } catch {
     return null;
   }
@@ -130,7 +138,7 @@ export function removeBrokenClaim(file, now = Date.now()) {
   if (now - stat.mtimeMs < BROKEN_CLAIM_AGE_MS) return false;
   try {
     const claim = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (claim && typeof claim.character === 'string' && isSafePlayerName(claim.child)) return false;
+    if (validClaim(claim, path.basename(file, '.json'))) return false;
   } catch { /* unreadable: broken */ }
   try { fs.unlinkSync(file); return true; } catch { return false; }
 }
@@ -187,7 +195,7 @@ export function claimsHeldBy(dir, character) {
   for (const n of names) {
     try {
       const claim = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8'));
-      if (claim?.character === character && isSafePlayerName(claim.child)) held.push(claim);
+      if (claim?.character === character && validClaim(claim, path.basename(n, '.json'))) held.push(claim);
     } catch { /* unreadable claim: leave it for its owner */ }
   }
   return held;
@@ -364,12 +372,27 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     let result;
     try {
       result = tryClaim(dir, child, me);
-      if (result !== 'taken') saveHome(dir, me, originNow());
     } catch (e) {
       logFollow(`claim error for ${child}: ${e.message}`);
       return;
     }
     if (result === 'taken') return;
+    // Setting out from its own world, the character must have a way back on
+    // record. If none can be written, give the player back rather than hold a
+    // claim it is not acting on or leave with no way home.
+    const origin = originNow();
+    let homeProblem = null;
+    try {
+      saveHome(dir, me, origin);
+      if (origin && !readHome(dir, me)) homeProblem = 'home file is not readable';
+    } catch (e) {
+      homeProblem = e.message;
+    }
+    if (homeProblem) {
+      logFollow(`cannot save home (${homeProblem}); not following ${child}`);
+      try { releaseClaim(dir, child, me); } catch { /* best effort */ }
+      return;
+    }
     state = { child, claimedAt: Date.now(), lastTpAt: 0 };
     logFollow(`following ${child} (${result})`);
   }

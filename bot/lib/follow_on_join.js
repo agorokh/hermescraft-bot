@@ -377,14 +377,14 @@ export function installFollowOnJoin(bot, log, opts = {}) {
       return;
     }
     if (result === 'taken') return;
-    // Setting out from its own world, the character must have a way back on
-    // record. If none can be written, give the player back rather than hold a
-    // claim it is not acting on or leave with no way home.
-    const origin = originNow();
+    // A character only follows with a way back on record: one saved just now
+    // from its own world, or an earlier one still on file while it is abroad.
+    // With none, it gives the player back rather than hold a claim it is not
+    // acting on or travel with no way home.
     let homeProblem = null;
     try {
-      saveHome(dir, me, origin);
-      if (origin && !readHome(dir, me)) homeProblem = 'home file is not readable';
+      saveHome(dir, me, originNow());
+      if (!readHome(dir, me)) homeProblem = 'no readable home on file';
     } catch (e) {
       homeProblem = e.message;
     }

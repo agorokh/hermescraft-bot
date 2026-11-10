@@ -428,3 +428,41 @@ test('if no way home can be recorded, the player is given back', async () => {
     }
   });
 });
+
+test('a character that is abroad with no home on file does not take a player', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'KidOne'] });
+    rosie._hc_world = 'bskyblock_world';               // restarted while visiting, breadcrumb gone
+    const logs = [];
+    const down = installFollowOnJoin(rosie, (m) => logs.push(m), { env, claimDir: dir, config: { ...FAST, rescanMs: 60000 } });
+    try {
+      await wait(1300);
+      assert.equal(rosie._hc_follow.child(), null);
+      assert.equal(readClaim(dir, 'KidOne'), null, 'the player stays free for another character');
+      assert.ok(!rosie.sent.some((m) => m.startsWith('/tp ')), 'and she goes nowhere');
+      assert.ok(logs.some((m) => m.includes('cannot save home')));
+    } finally {
+      down();
+    }
+  });
+});
+
+test('a character abroad with a home still on file may take the next player', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    saveHome(dir, 'Rosie', { dim: 'overworld', x: 1658.1, y: 63, z: 1723.3 });
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'KidOne'] });
+    rosie._hc_world = 'bskyblock_world';
+    const down = installFollowOnJoin(rosie, () => {}, { env, claimDir: dir, config: { ...FAST, stayRetryMs: 60000 } });
+    try {
+      await wait(1300);
+      assert.equal(rosie._hc_follow.child(), 'KidOne');
+      assert.deepEqual(readHome(dir, 'Rosie'), { dim: 'overworld', x: 1658.1, y: 63, z: 1723.3 }, 'the first home is kept');
+    } finally {
+      down();
+    }
+  });
+});

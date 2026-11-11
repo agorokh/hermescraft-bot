@@ -58,7 +58,7 @@ import {
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
-import { installBuildClaimExperiment, buildStatus } from './lib/build_claims.js';
+import { installBuildClaimExperiment, resolveBuildRequest, parseBuildClaimPeers, cleanKidBuildName } from './lib/build_claims.js';
 import { actionOutcomeFailed, isSurvivalBlock, publicActionResult } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
@@ -171,14 +171,6 @@ function actionBodyForRoute(route) {
   return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true };
 }
 
-function cleanKidBuildName(value) {
-  const clean = String(value || '')
-    .replace(/[`"'<>/\\{}[\]|$;]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return clean.length > 80 ? clean.slice(0, 80).trim() : clean;
-}
-
 async function shadowRoute(bot, body, sender, primaryResult) {
   if (!SHADOW_NLP) return;
   try {
@@ -262,6 +254,8 @@ for (let i = 2; i < process.argv.length; i++) {
 
 let bot = null;
 const BUILD_CLAIMS_EXPERIMENT = process.env.HERMESCRAFT_BUILD_CLAIMS_EXPERIMENT === '1';
+const BUILD_CLAIM_PEERS = BUILD_CLAIMS_EXPERIMENT
+  ? parseBuildClaimPeers(process.env.HERMESCRAFT_BUILD_CLAIM_PEERS, log) : {};
 let readBuildClaimResult = () => null;
 let mcData = null;
 let botReady = false;
@@ -855,7 +849,7 @@ function isBrainVisibleChatMessage(entry) {
 }
 
 function publicRouterResult(route, result) {
-  if (result?.build_readback) return buildStatus(result.build_readback);
+  if (result?.build_readback) return null; // The body already emitted its terminal count.
   if (
     route.body?.kid_name
     && ['build_tower', 'build_schematic', 'build_schematic_advanced'].includes(route.action)
@@ -918,7 +912,7 @@ async function handleIntentRouterActionResult({ username, route, result, channel
       queueSurvivalEscalation({ username, route, outcomeText: failureText, channel, viaMention });
     } else {
       log(`[IntentRouter failure] ${route.intent_name}: ${String(failureText).slice(0, 160)}`);
-      if (!intentRouterFailureWasInterrupted(result)) {
+      if (!result?.build_readback && !intentRouterFailureWasInterrupted(result)) {
         const fallback = await tryNamedTowerFallback(route);
         if (fallback?.ok) {
           const publicFallback = fallback.publicText || publicActionResult('build_schematic', fallback.result);
@@ -937,6 +931,7 @@ async function handleIntentRouterActionResult({ username, route, result, channel
       if (route.skill_id != null) {
         try { markLastSkillFailed(bot, route.skill_id); } catch {}
       }
+      if (result?.build_readback) return false; // Its failure count is already public.
       const publicFailure = intentRouterFailureWasInterrupted(result)
         ? 'ok, stopped.'
         : /^Task ".+" is already running\./.test(failureText)
@@ -1231,8 +1226,8 @@ async function createBot() {
         if (BUILD_CLAIMS_EXPERIMENT) {
           readBuildClaimResult = installBuildClaimExperiment(ACTIONS, ensureBot, {
             actor: config.mc.username,
-            getRequest: () => commandQueue.at(-1),
-            peers: JSON.parse(process.env.HERMESCRAFT_BUILD_CLAIM_PEERS || '{}'),
+            getRequest: body => resolveBuildRequest(commandQueue, body),
+            peers: BUILD_CLAIM_PEERS,
           });
         }
         // ── Auto-memory wrappers on marquee skills (issue #68 / cherry-picked
@@ -4255,6 +4250,9 @@ const httpServer = http.createServer(async (req, res) => {
     // ── GET endpoints (observation) ──────────────
     if (req.method === 'GET') {
       if (path === '/build-result' && BUILD_CLAIMS_EXPERIMENT) {
+        if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) {
+          return respond(res, 403, { ok: false, error: 'Local access only' });
+        }
         return respond(res, 200, { ok: true, data: readBuildClaimResult() });
       }
       if (path === '/health' || path === '/') {

@@ -17,9 +17,10 @@ export function readBuildResult(bot, expected) {
 }
 
 export function buildStatus(r) {
-  if (r.total == null) return `I can verify ${r.placed} placed blocks, but cannot verify the whole build.`;
+  const label = r.kid_name ? ` For "${r.kid_name}".` : '';
+  if (r.total == null) return `I can verify ${r.placed} placed blocks, but cannot verify the whole build.` + label;
   return `I got ${r.placed} of ${r.total} ${r.shape} blocks down.`
-    + (r.unverified ? ` I could not check ${r.unverified} cells.` : '');
+    + (r.unverified ? ` I could not check ${r.unverified} cells.` : '') + label;
 }
 
 const OBJECT = /\b(wall|tower|cottage|house|schematic|build|blocks?)\b/i;
@@ -62,7 +63,7 @@ export function checkBuildClaim(message, speaker, records) {
 // Keep one in-memory result per body. Free placements in one queue request are
 // grouped by request id, not by time proximity. Unknown request size remains
 // unknown rather than turning a successful one-block action into a whole wall.
-export function expectedBuild(action, body, request, previous, result) {
+export function expectedBuild(action, body, request, previous) {
   if (action === 'place') {
     const count = String(request?.command || '').match(/\b(\d+)[ -]?(?:blocks?|tall)\b/i);
     const same = request?.id != null && previous?.request_id === request.id;
@@ -76,22 +77,49 @@ export function expectedBuild(action, body, request, previous, result) {
     return { shape: 'tower', total, cells: Array.from({ length: total }, (_, i) =>
       ({ x: Math.floor(body.x), y: Math.floor(body.y) + i, z: Math.floor(body.z), block: body.material || 'oak_planks' })) };
   }
-  return result?.build_expected || null;
+  return null;
+}
+
+export function cleanKidBuildName(value) {
+  const clean = String(value || '')
+    .replace(/[`"'<>/\\{}[\]|$;]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.length > 80 ? clean.slice(0, 80).trim() : clean;
+}
+
+// Only an explicit queue identity can bind independent place actions to a build.
+export function resolveBuildRequest(queue, body = {}) {
+  const raw = body.request_id ?? body.in_reply_to;
+  const id = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : raw;
+  if (!Number.isSafeInteger(id)) return null;
+  return queue.find(request => request.id === id) || null;
+}
+
+export function parseBuildClaimPeers(value, warn = () => {}) {
+  try {
+    const peers = JSON.parse(value || '{}');
+    if (!peers || typeof peers !== 'object' || Array.isArray(peers)) throw new Error('invalid peers');
+    return peers;
+  } catch {
+    warn('[build-claims] Invalid HERMESCRAFT_BUILD_CLAIM_PEERS; peer evidence disabled.');
+    return {};
+  }
 }
 
 export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequest, peers = {} }) {
   let last = null;
   const read = () => last ? readBuildResult(ensureBot(), last) : null;
-  for (const action of ['place', 'build_tower', 'build_schematic', 'build_schematic_advanced']) {
+  for (const action of ['place', 'build_tower']) {
     const current = actions[action];
     if (!current) continue;
     const original = current._buildClaimOriginal || current;
     const wrapped = async body => {
-      const request = getRequest();
+      const request = getRequest(body);
       // Clear evidence for a new build before awaiting its outcome: a concurrent
       // chat must not vouch for the preceding successful request.
       const previous = last;
-      const known = expectedBuild(action, body, request, previous, null);
+      const known = expectedBuild(action, body, request, previous);
       last = known ? { ...known, actor } : null;
       let result;
       try { result = await original(body); }
@@ -99,9 +127,10 @@ export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequ
         if (!last) throw error;
         result = { error: error.message };
       }
-      const expected = expectedBuild(action, body, request, previous, result);
+      const expected = expectedBuild(action, body, request, previous);
       if (!expected) return result;
-      last = { ...expected, actor };
+      const kidName = cleanKidBuildName(body.kid_name);
+      last = { ...expected, actor, ...(kidName ? { kid_name: kidName } : {}) };
       const verified = read();
       const line = buildStatus(verified);
       ensureBot().chat(line);

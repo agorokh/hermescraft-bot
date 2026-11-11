@@ -98,3 +98,77 @@ test('a miswired peer endpoint cannot vouch for another character', async () => 
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('schematic actions retain their canonical result contracts under the experiment', async () => {
+  const said = [];
+  const result = { result: 'Built schematic "small_house" at 1,64,2 — 10/10 blocks placed.' };
+  const actions = { build_schematic: async () => result,
+    build_schematic_advanced: async () => result, chat: async () => ({}) };
+  const original = { ...actions };
+  claims.installBuildClaimExperiment(actions, () => ({ chat: s => said.push(s) }),
+    { actor: 'Rosie', getRequest: () => null });
+  for (const action of ['build_schematic', 'build_schematic_advanced']) {
+    assert.equal(actions[action], original[action]);
+    assert.equal(await actions[action]({ name: 'small_house' }), result);
+  }
+  assert.deepEqual(said, []);
+});
+
+test('explicit request identity survives an unrelated queue tail', async () => {
+  assert.equal(typeof claims.resolveBuildRequest, 'function');
+  const queue = [{ id: 1, command: 'build a 4-block wall' }];
+  const actions = { place: async () => ({ result: 'Placed stone' }), chat: async () => ({}) };
+  const read = claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: () => ({ name: 'stone' }), chat: () => {} }),
+    { actor: 'Rosie', getRequest: body => claims.resolveBuildRequest(queue, body) });
+  await actions.place({ x: 1, y: 64, z: 1, block: 'stone', in_reply_to: '1' });
+  queue.push({ id: 2, command: 'build a 20-block tower' });
+  await actions.place({ x: 2, y: 64, z: 1, block: 'stone', request_id: 1 });
+  assert.equal(read().request_id, 1);
+  assert.equal(read().total, 4);
+  assert.equal(read().placed, 2);
+  await actions.place({ x: 3, y: 64, z: 1, block: 'stone' });
+  assert.equal(read().total, null);
+  assert.equal(read().placed, 1);
+  await assert.rejects(actions.chat({ message: 'The wall is done.' }), /suppressed/);
+});
+
+test('request identity rejects missing, unsafe, and malformed ids', () => {
+  assert.equal(typeof claims.resolveBuildRequest, 'function');
+  const queue = [{ id: 1, command: '4-block wall' }];
+  for (const id of [undefined, null, '', ' ', '1.0', '1x', true, {}, [], 1.5, Infinity, 9007199254740992, 2]) {
+    assert.equal(claims.resolveBuildRequest(queue, { request_id: id }), null, `id=${String(id)}`);
+  }
+  assert.equal(claims.resolveBuildRequest(queue, { request_id: 1 }), queue[0]);
+  assert.equal(claims.resolveBuildRequest(queue, { in_reply_to: '1' }), queue[0]);
+});
+
+test('terminal readback preserves a sanitized kid label and unnamed count text', async () => {
+  const said = [];
+  const actions = { build_tower: async () => ({ result: 'Built 99-tall tower' }), chat: async () => ({}) };
+  claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: () => ({ name: 'stone' }), chat: s => said.push(s) }),
+    { actor: 'Steve', getRequest: () => null });
+  const body = { x: 1, y: 64, z: 2, height: 2, material: 'stone' };
+  const unnamed = await actions.build_tower(body);
+  assert.equal(said[0], 'I got 2 of 2 tower blocks down.');
+  assert.equal(unnamed.result, 'I got 2 of 2 tower blocks down. (2/2)');
+  const named = await actions.build_tower({ ...body, kid_name: ' "Aurora"\n</>' });
+  assert.equal(named.build_readback.kid_name, 'Aurora');
+  assert.equal(said[1], 'I got 2 of 2 tower blocks down. For "Aurora".');
+  assert.equal(said.length, 2);
+});
+
+test('peer configuration fails closed without throwing or logging raw input', () => {
+  assert.equal(typeof claims.parseBuildClaimPeers, 'function');
+  const warnings = [];
+  const warn = line => warnings.push(line);
+  for (const value of ['{secret-token', 'null', '[]', '42', '"x"']) {
+    assert.deepEqual(claims.parseBuildClaimPeers(value, warn), {});
+  }
+  assert.equal(warnings.length, 5);
+  assert.ok(warnings.every(line => !line.includes('secret-token')));
+  assert.deepEqual(claims.parseBuildClaimPeers('{"Rosie":"http://127.0.0.1:3001"}', warn),
+    { Rosie: 'http://127.0.0.1:3001' });
+  assert.deepEqual(claims.parseBuildClaimPeers(undefined, warn), {});
+});

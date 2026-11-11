@@ -33,6 +33,9 @@ const RESULT = /\b(built|placed|put up|made|done|finished|completed|complete|rea
 const AUXILIARIES = new Set('am is are was were be been being have has had do does did will shall would could can may might must should not never yet'.split(' '));
 const FUTURE_AUXILIARIES = new Set('will shall'.split(' '));
 const PRONOUN_SUBJECTS = new Set('i we you he she it they rosie steve'.split(' '));
+// Recognizing subject syntax does not resolve a builder's identity. There is
+// no discourse/group ledger for the other personal or collective pronouns.
+const RESOLVED_ACTOR_SUBJECTS = new Set('i rosie steve'.split(' '));
 const DETERMINERS = new Set("the a an my our your his her their this that these those rosie's steve's".split(' '));
 const SHAPES = /\b(wall|tower|cottage|house|schematic)\b/gi;
 const NUMBER_WORDS = Object.fromEntries('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split(' ').map((word, i) => [word, i]));
@@ -79,10 +82,18 @@ function coveredSubject(prefix) {
   const tokens = words(prefix);
   while (AUXILIARIES.has(tokens.at(-1)) || ['just', 'already', 'now'].includes(tokens.at(-1))) tokens.pop();
   if (!tokens.length || (tokens.length === 1 && tokens[0] === 'all')) return true;
-  if (subjectPhrase(tokens.join(' '), true)) return true;
+  if (subjectPhrase(tokens.join(' '), true)) {
+    return tokens.join(' ').split(/\band\b/).every(part => {
+      const subject = words(part);
+      // A determiner+noun is an object subject, not a claim about who built
+      // it. Only bare actor subjects need a resolved personal identity here.
+      return subject.length !== 1 || !PRONOUN_SUBJECTS.has(subject[0])
+        || RESOLVED_ACTOR_SUBJECTS.has(subject[0]);
+    });
+  }
   // A fronted imperative object may have a relative actor subject. Its object
   // and subject are explicit; an arbitrary unknown actor cannot use this form.
-  if (tokens[0] === 'go' && PRONOUN_SUBJECTS.has(tokens.at(-1))) {
+  if (tokens[0] === 'go' && RESOLVED_ACTOR_SUBJECTS.has(tokens.at(-1))) {
     return subjectPhrase(tokens.slice(2, -1).join(' '), true);
   }
   return false;

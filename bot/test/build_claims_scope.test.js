@@ -140,6 +140,33 @@ test('every quantified proposition requires one resolved singular actor proof', 
   }
 });
 
+test('syntactically valid actor pronouns cannot borrow speaker identity proof', () => {
+  const records = { Steve: record('Steve', 'wall', 4), Rosie: record('Rosie', 'wall', 0) };
+  for (const subject of ['He', 'She', 'You', 'They', 'We', 'It']) {
+    for (const message of [`${subject} built the wall.`, `${subject} has built the wall.`,
+      `${subject} built the wall and finished.`, `I built the wall and ${subject} placed 4 blocks.`,
+      `Go climb that wall ${subject} made!`, `Rosie and ${subject} built the wall.`]) {
+      assert.equal(checkBuildClaim(message, 'Steve', records).allow, false, message);
+    }
+    assert.equal(checkBuildClaim(`${subject} will have built the wall tomorrow.`, 'Steve', records).allow, true);
+    assert.equal(checkBuildClaim(`${subject} has not built the wall.`, 'Steve', records).allow, true);
+  }
+  for (const message of ['I built the wall.', 'Steve built the wall.', 'Go climb that wall I made!',
+    'I built the wall for you.', 'I built the wall and placed 4 blocks for you.']) {
+    assert.equal(checkBuildClaim(message, 'Steve', records).allow, true, message);
+  }
+  assert.equal(checkBuildClaim('Rosie built the wall.', 'Steve', records).allow, false);
+  assert.equal(checkBuildClaim('Steve built the wall.', 'Rosie', records).allow, true);
+});
+
+test('object ownership and recipients do not become unresolved builder subjects', () => {
+  const records = { Steve: record('Steve', 'wall', 4) };
+  for (const owner of ['The', 'Your', 'Her', 'His', 'Their', 'Our']) {
+    assert.equal(checkBuildClaim(`${owner} wall is done.`, 'Steve', records).allow, true);
+  }
+  assert.equal(checkBuildClaim('I built your wall for you.', 'Steve', records).allow, true);
+});
+
 test('all frozen forty body decisions retain their labeled truth without editing the corpus', () => {
   const { cases } = JSON.parse(readFileSync(new URL('./fixtures/build_claims_cases.json', import.meta.url), 'utf8'));
   const byId = new Map(cases.map(c => [c.id, c]));

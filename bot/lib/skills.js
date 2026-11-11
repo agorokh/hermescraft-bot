@@ -942,6 +942,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
 
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
+  const claimEvidence = process.env.HERMESCRAFT_BUILD_CLAIMS_EXPERIMENT === '1'
+    ? { build_expected: { shape: name, total: buildPlan.totalBlocks, cells: buildPlan.placements } }
+    : {};
   let buildState = null;
   let placementsSinceSave = 0;
   const saveEveryN = bodyArgs.record_state === true ? 1 : BUILD_STATE_SAVE_EVERY_N;
@@ -960,6 +963,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     if (doneCount >= buildPlan.totalBlocks) {
       return {
         result: `Build "${name}" at ${baseX},${baseY},${baseZ} is already complete (${doneCount}/${buildPlan.totalBlocks} blocks).`,
+        ...claimEvidence,
       };
     }
     savedState = { ...verifiedState, status: 'running' };
@@ -1198,7 +1202,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       buildState = { ...buildState, updated_at: Date.now() };
       await persistBuildState(true);
     }
-    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placedCount}/${total} blocks placed${mode}.${foundationStr}${unverifiedStr}` };
+    return { result: `Built schematic "${name}" at ${baseX},${baseY},${baseZ} — ${placedCount}/${total} blocks placed${mode}.${foundationStr}${unverifiedStr}`, ...claimEvidence };
   }
   if (buildState && placed + failed >= sorted.length) {
     buildState.status = placedCount === total ? 'done' : 'partial';
@@ -1209,6 +1213,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
   return {
     result: `Built ${placedCount}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${foundationStr}${missingStr}${unverifiedStr}`,
+    ...claimEvidence,
   };
   } finally {
     bot._schematicBuildActive = false;

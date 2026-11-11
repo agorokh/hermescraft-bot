@@ -58,6 +58,7 @@ import {
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
+import { installBuildClaimExperiment, buildStatus } from './lib/build_claims.js';
 import { actionOutcomeFailed, isSurvivalBlock, publicActionResult } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
@@ -260,6 +261,8 @@ for (let i = 2; i < process.argv.length; i++) {
 // ═══════════════════════════════════════════════════════════════════
 
 let bot = null;
+const BUILD_CLAIMS_EXPERIMENT = process.env.HERMESCRAFT_BUILD_CLAIMS_EXPERIMENT === '1';
+let readBuildClaimResult = () => null;
 let mcData = null;
 let botReady = false;
 let chatLog = [];
@@ -852,6 +855,7 @@ function isBrainVisibleChatMessage(entry) {
 }
 
 function publicRouterResult(route, result) {
+  if (result?.build_readback) return buildStatus(result.build_readback);
   if (
     route.body?.kid_name
     && ['build_tower', 'build_schematic', 'build_schematic_advanced'].includes(route.action)
@@ -1224,6 +1228,13 @@ async function createBot() {
       // doesn't burn anything.
       try {
         registerHighLevelSkills(ACTIONS, ensureBot);
+        if (BUILD_CLAIMS_EXPERIMENT) {
+          readBuildClaimResult = installBuildClaimExperiment(ACTIONS, ensureBot, {
+            actor: config.mc.username,
+            getRequest: () => commandQueue.at(-1),
+            peers: JSON.parse(process.env.HERMESCRAFT_BUILD_CLAIM_PEERS || '{}'),
+          });
+        }
         // ── Auto-memory wrappers on marquee skills (issue #68 / cherry-picked
         // from f557003 after PR #69 bumped vendor to the wrong commit). The
         // brain reliably calls these high-level verbs; auto-write the
@@ -4243,6 +4254,9 @@ const httpServer = http.createServer(async (req, res) => {
   try {
     // ── GET endpoints (observation) ──────────────
     if (req.method === 'GET') {
+      if (path === '/build-result' && BUILD_CLAIMS_EXPERIMENT) {
+        return respond(res, 200, { ok: true, data: readBuildClaimResult() });
+      }
       if (path === '/health' || path === '/') {
         return respond(res, 200, {
           ok: true,

@@ -25,40 +25,161 @@ export function buildStatus(r) {
 }
 
 const OBJECT = /\b(wall|tower|cottage|house|schematic|build|blocks?)\b/i;
-const RESULT = /\b(built|placed|put up|made|done|finished|completed|complete|ready)\b|\bgot\b.*\bdown\b/i;
-const FUTURE = /\b(will|want to|going to|let's)\b/i;
-const NEGATIVE = /\b(could not|couldn't|can't|cannot|did not|didn't|not yet)\b/i;
+const RESULT = /\b(built|placed|put up|made|done|finished|completed|complete|ready)\b|\bgot\b(?=[\s\S]*\bdown\b)/i;
+// This is a conservative grammar, not a general English semantic parser.
+// Only a direct subject + auxiliary verb group can establish non-realis or
+// negative scope. Embedded/unknown syntax must still obtain world proof.
+const AUXILIARIES = new Set('am is are was were be been being have has had do does did will shall would could can may might must should not never yet'.split(' '));
+const FUTURE_AUXILIARIES = new Set('will shall'.split(' '));
+const PRONOUN_SUBJECTS = new Set('i we you he she it they rosie steve'.split(' '));
+const DETERMINERS = new Set("the a an my our your his her their this that these those rosie's steve's".split(' '));
+const SHAPES = /\b(wall|tower|cottage|house|schematic)\b/gi;
 
-export function isBuildClaim(message) {
-  const text = String(message || '');
-  if (FUTURE.test(text) || NEGATIVE.test(text)) return false;
-  return RESULT.test(text) && (OBJECT.test(text) || /\b(all done|finished|completed)\b/i.test(text));
+function normalizedSpeech(message) {
+  return String(message || '').toLowerCase().replace(/[’‘]/g, "'")
+    .replace(/\bcannot\b/g, 'can not').replace(/\bcan't\b/g, 'can not')
+    .replace(/\bwon't\b/g, 'will not').replace(/\b([a-z]+)n't\b/g, '$1 not');
 }
 
+function words(text) { return text.match(/[a-z]+(?:'[a-z]+)?|\d+(?:-[a-z]+)?/g) || []; }
+
+function subjectPhrase(text, descriptors = false) {
+  return text.split(/\band\b/).every(part => {
+    const tokens = words(part);
+    if (!tokens.length) return false;
+    if (tokens.length === 1 && PRONOUN_SUBJECTS.has(tokens[0])) return true;
+    if (DETERMINERS.has(tokens[0])) tokens.shift();
+    const noun = tokens.pop();
+    if (!/^(wall|tower|cottage|house|schematic|build|blocks?)$/.test(noun || '')) return false;
+    // Only closed subject forms can waive proof. Unknown lexical modifiers
+    // may be predicates/embeddings, so they cannot establish negative scope.
+    return tokens.every(token => /^\d+(?:-blocks?|-tall)?$/.test(token)
+      || (descriptors && !PRONOUN_SUBJECTS.has(token) && !AUXILIARIES.has(token)
+        && !DETERMINERS.has(token) && !/^(to|if|when|because|which|who|only)$/.test(token)));
+  });
+}
+
+function directNonResult(prefix) {
+  const tokens = words(prefix);
+  let start = tokens.length;
+  while (start && AUXILIARIES.has(tokens[start - 1])) start--;
+  const group = tokens.slice(start);
+  const negatives = group.filter(token => token === 'not' || token === 'never');
+  if (negatives.length > 1) return false;
+  if (!negatives.length && !group.some(token => FUTURE_AUXILIARIES.has(token))) return false;
+  const subject = tokens.slice(0, start).join(' ');
+  return !subject || subjectPhrase(subject);
+}
+
+function propositions(message) {
+  const spans = [];
+  let prior = null;
+  for (const sentence of normalizedSpeech(message).split(/[.!?;:\n—]+|\b(?:but|so|or|however|although|while|whereas)\b/)) {
+    let pending = [];
+    const coordinated = [];
+    for (const fragment of sentence.split(/,|\band\b/).map(s => s.trim()).filter(Boolean)) {
+      if (RESULT.test(fragment)) {
+        const startsPredicate = new RegExp(RESULT.source, 'i').exec(fragment)?.index === 0;
+        const context = !pending.length && (startsPredicate || AUXILIARIES.has(words(fragment)[0]))
+          ? coordinated.at(-1) || prior : null;
+        coordinated.push({ text: [...pending, fragment].join(' and '), context });
+        pending = [];
+      } else if (subjectPhrase(fragment, true) || pending.length) pending.push(fragment);
+    }
+    // A trailing nominal conjunct shares the preceding result predicate.
+    if (pending.length && coordinated.length) coordinated.at(-1).text += ` and ${pending.join(' and ')}`;
+    spans.push(...coordinated);
+    prior = coordinated.at(-1) || prior;
+  }
+  const claims = [];
+  for (const span of spans) {
+    const { text } = span;
+    if (!OBJECT.test(text) && !/\b(all done|finished|completed)\b/.test(text) && !span.context) continue;
+    const predicates = [...text.matchAll(new RegExp(RESULT.source, 'gi'))];
+    for (let i = 0; i < predicates.length; i++) {
+      const predicate = predicates[i];
+      if (directNonResult(text.slice(0, predicate.index))) continue;
+      // Counts belong to their own predicate, never to a neighboring result.
+      const local = text.slice(predicate.index, predicates[i + 1]?.index ?? text.length);
+      const ratios = [...local.matchAll(/\b(\d+)\s*(?:of|\/)\s*(\d+)\b/g)];
+      const quantifiedAction = /^(?:got|placed|built|made|put up)\s+\d+\s*(?:of|\/)\s*\d+\b/.test(local);
+      claims.push({ span, ratios, completion: !quantifiedAction });
+    }
+  }
+  return claims;
+}
+
+function actorNames(text, speaker) {
+  return [...new Set([...text.matchAll(/\b(rosie|steve|i|my|we|our)\b/g)].map(match => {
+    if (match[1] === 'rosie') return 'Rosie';
+    if (match[1] === 'steve') return 'Steve';
+    return speaker;
+  }))];
+}
+
+function directProofObligations(text, speaker) {
+  const obligations = [];
+  let actors = [speaker], end = 0;
+  const shapes = [...text.matchAll(SHAPES)];
+  for (const shape of shapes) {
+    const explicit = actorNames(text.slice(end, shape.index), speaker);
+    if (explicit.length) actors = explicit;
+    for (const actor of actors) obligations.push({ actor, shape: shape[1] });
+    end = shape.index + shape[0].length;
+  }
+  if (!shapes.length) return (actorNames(text, speaker).length ? actorNames(text, speaker) : [speaker])
+    .map(actor => ({ actor, shape: null }));
+  // Postnominal actor subjects ("the tower Steve made") also require proof.
+  for (const actor of actorNames(text.slice(end), speaker)) {
+    if (!obligations.some(item => item.actor === actor)) obligations.push({ actor, shape: shapes.at(-1)[1] });
+  }
+  return obligations;
+}
+
+function proofObligations(span, speaker) {
+  const chain = [];
+  for (let cursor = span; cursor; cursor = cursor.context) chain.push(cursor);
+  let inherited = null;
+  for (const clause of chain.reverse()) {
+    let own = directProofObligations(clause.text, speaker);
+    // Predicate-only coordination inherits arguments, never auxiliary scope,
+    // result status or ratios. Explicit subjects start a separate obligation.
+    if (inherited && !actorNames(clause.text, speaker).length) {
+      const shapes = [...clause.text.matchAll(SHAPES)].map(match => match[1]);
+      own = shapes.length
+        ? [...new Set(inherited.map(item => item.actor))].flatMap(actor => shapes.map(shape => ({ actor, shape })))
+        : inherited;
+    }
+    inherited = own;
+  }
+  return inherited;
+}
+
+export function isBuildClaim(message) { return propositions(message).length > 0; }
+
 export function checkBuildClaim(message, speaker, records) {
-  const text = String(message || '');
-  if (!isBuildClaim(text)) return { allow: true, claim: false, reason: 'no-result-claim' };
-  const named = ['Rosie', 'Steve'].filter(name => new RegExp(`\\b${name}\\b`, 'i').test(text));
-  const actors = [...new Set([
-    ...named,
-    ...(!named.length || /\b(i|my|we|our)\b/i.test(text) ? [speaker] : []),
-  ])];
-  const evidence = actors.map(name => records[name]);
-  if (evidence.some(r => !r || r.unverified || !r.total)) {
-    return { allow: false, claim: true, reason: 'missing-or-unverified-result' };
+  const claims = propositions(message);
+  if (!claims.length) return { allow: true, claim: false, reason: 'no-result-claim' };
+  for (const claim of claims) {
+    const obligations = proofObligations(claim.span, speaker);
+    const evidence = obligations.map(item => records[item.actor]);
+    if (evidence.some(r => !r || r.unverified || !r.total)) {
+      return { allow: false, claim: true, reason: 'missing-or-unverified-result' };
+    }
+    if (obligations.some((item, i) => item.shape && evidence[i].shape !== item.shape)) {
+      return { allow: false, claim: true, reason: 'different-build' };
+    }
+    if (claim.ratios.length) {
+      const actors = new Set(obligations.map(item => item.actor));
+      if (actors.size !== 1 || claim.ratios.some(ratio => evidence.some(r => r.placed !== Number(ratio[1]) || r.total !== Number(ratio[2])))) {
+        return { allow: false, claim: true, reason: 'count-mismatch' };
+      }
+    }
+    if (claim.completion && evidence.some(r => r.placed !== r.total)) {
+      return { allow: false, claim: true, reason: 'incomplete-build' };
+    }
   }
-  const shapes = [...new Set((text.toLowerCase().match(/\b(wall|tower|cottage|house|schematic)\b/g) || []))];
-  if (shapes.some(shape => !evidence.some(r => r.shape === shape))) {
-    return { allow: false, claim: true, reason: 'different-build' };
-  }
-  const ratio = text.match(/\b(\d+)\s*(?:of|\/)\s*(\d+)\b/i);
-  if (ratio) {
-    const allow = evidence.length === 1 && evidence[0].placed === Number(ratio[1])
-      && evidence[0].total === Number(ratio[2]);
-    return { allow, claim: true, reason: allow ? 'verified-count' : 'count-mismatch' };
-  }
-  const allow = evidence.every(r => r.placed === r.total);
-  return { allow, claim: true, reason: allow ? 'verified-completion' : 'incomplete-build' };
+  return { allow: true, claim: true, reason: 'verified-propositions' };
 }
 
 // Keep one in-memory result per body. Free placements in one queue request are

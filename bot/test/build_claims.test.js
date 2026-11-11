@@ -172,3 +172,72 @@ test('peer configuration fails closed without throwing or logging raw input', ()
     { Rosie: 'http://127.0.0.1:3001' });
   assert.deepEqual(claims.parseBuildClaimPeers(undefined, warn), {});
 });
+
+test('failed actions preserve their cause without announcing a successful count', async () => {
+  for (const failure of [{ result: 'No stone in my inventory.' }, { result: 'build_tower interrupted' },
+    { error: 'Placement failed: disconnected' }]) {
+    const said = [];
+    const actions = { build_tower: async () => failure, chat: async () => ({}) };
+    claims.installBuildClaimExperiment(actions,
+      () => ({ blockAt: () => ({ name: 'air' }), chat: s => said.push(s) }),
+      { actor: 'Steve', getRequest: () => null });
+    const actual = await actions.build_tower({ x: 1, y: 64, z: 2, height: 4, material: 'stone' });
+    assert.equal(actual.result, failure.result);
+    assert.equal(actual.error, failure.error);
+    assert.equal(actual.build_readback.placed, 0);
+    assert.notEqual(actual.build_claim_announced, true);
+    assert.deepEqual(said, []);
+  }
+});
+
+test('invalid build coordinates preserve the original validation result without world reads', async () => {
+  const actions = { build_tower: async () => ({ result: 'build_tower needs x, y, z' }), chat: async () => ({}) };
+  const read = claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: () => assert.fail('invalid cell read'), chat: () => assert.fail('invalid build announced') }),
+    { actor: 'Steve', getRequest: () => null });
+  for (const body of [{}, { x: NaN, y: 64, z: 2 }, { x: 1, y: Infinity, z: 2 }]) {
+    assert.deepEqual(await actions.build_tower(body), { result: 'build_tower needs x, y, z' });
+    assert.equal(read(), null);
+  }
+});
+
+test('partial progress retains interruption cause beside truthful readback counts', async () => {
+  const said = [];
+  const actions = { build_tower: async () => ({ result: 'build_tower interrupted' }), chat: async () => ({}) };
+  claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: p => ({ name: p.y === 64 ? 'stone' : 'air' }), chat: s => said.push(s) }),
+    { actor: 'Steve', getRequest: () => null });
+  const r = await actions.build_tower({ x: 1, y: 64, z: 2, height: 4, material: 'stone' });
+  assert.equal(r.result, 'I got 1 of 4 tower blocks down. (1/4)');
+  assert.equal(r.build_failure_cause, 'build_tower interrupted');
+  assert.equal(r.error, 'build_tower interrupted', 'existing failure consumers must retain the cause');
+  assert.equal(r.build_claim_announced, true);
+  assert.deepEqual(said, ['I got 1 of 4 tower blocks down.']);
+});
+
+test('peer redirects are rejected without following the redirected target', async () => {
+  let targetCalls = 0;
+  const target = http.createServer((_req, res) => {
+    targetCalls++;
+    res.end(JSON.stringify({ data: { actor: 'Rosie', shape: 'wall', placed: 4, total: 4, unverified: 0 } }));
+  });
+  await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
+  const redirect = http.createServer((_req, res) => {
+    res.writeHead(302, { Location: `http://127.0.0.1:${target.address().port}/build-result` });
+    res.end();
+  });
+  await new Promise(resolve => redirect.listen(0, '127.0.0.1', resolve));
+  try {
+    const actions = { chat: async () => ({ result: 'sent' }) };
+    claims.installBuildClaimExperiment(actions, () => ({}), { actor: 'Steve', getRequest: () => null,
+      peers: { Rosie: `http://127.0.0.1:${redirect.address().port}` } });
+    await assert.rejects(actions.chat({ message: 'Rosie finished the wall.' }), /suppressed/);
+    assert.equal(targetCalls, 0);
+  } finally {
+    await Promise.all([new Promise(resolve => target.close(resolve)), new Promise(resolve => redirect.close(resolve))]);
+  }
+});
+
+test('native WHATWG URLs keep IPv6 loopback brackets used by the peer allowlist', () => {
+  assert.equal(new URL('http://[::1]:3301').hostname, '[::1]');
+});

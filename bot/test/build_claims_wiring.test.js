@@ -30,7 +30,8 @@ test('router does not repeat the terminal count already emitted by the body', ()
     publicActionResult: () => 'ordinary result',
   });
   assert.equal(publicResult({ action: 'build_tower', body: { kid_name: 'Aurora' } },
-    { build_readback: { placed: 2, total: 2 } }), null);
+    { build_claim_announced: true, build_readback: { placed: 2, total: 2 } }), null);
+  assert.equal(publicResult({ action: 'place' }, { build_readback: { placed: 0, total: 2 } }), 'ordinary result');
   assert.equal(publicResult({ action: 'place' }, { result: 'Placed stone' }), 'ordinary result');
 });
 
@@ -44,10 +45,16 @@ test('failed readback keeps failure bookkeeping without duplicate chat or schema
     bot: { chat: text => said.push(text) }, log: () => {},
   });
   assert.equal(await handle({ username: 'Adalynn', route: { action: 'build_tower', skill_id: 1 },
-    result: { result: 'I got 1 of 4 tower blocks down. (1/4)', build_readback: { placed: 1, total: 4 } } }), false);
+    result: { result: 'I got 1 of 4 tower blocks down. (1/4)', build_claim_announced: true,
+      build_readback: { placed: 1, total: 4 } } }), false);
   assert.equal(failed, 1);
   assert.equal(fallback, 0);
   assert.deepEqual(said, []);
+  await handle({ username: 'Adalynn', route: { action: 'build_tower', skill_id: 2 },
+    result: { result: 'No stone in my inventory.', build_readback: { placed: 0, total: 4 } } });
+  assert.equal(failed, 2);
+  assert.equal(fallback, 1);
+  assert.deepEqual(said, ['duplicate failure'], 'unannounced failure retains normal presentation');
 });
 
 test('build-result route denies nonlocal sockets before evaluating evidence', () => {

@@ -849,7 +849,7 @@ function isBrainVisibleChatMessage(entry) {
 }
 
 function publicRouterResult(route, result) {
-  if (result?.build_readback) return null; // The body already emitted its terminal count.
+  if (result?.build_claim_announced) return null; // The body already emitted its terminal count.
   if (
     route.body?.kid_name
     && ['build_tower', 'build_schematic', 'build_schematic_advanced'].includes(route.action)
@@ -912,7 +912,7 @@ async function handleIntentRouterActionResult({ username, route, result, channel
       queueSurvivalEscalation({ username, route, outcomeText: failureText, channel, viaMention });
     } else {
       log(`[IntentRouter failure] ${route.intent_name}: ${String(failureText).slice(0, 160)}`);
-      if (!result?.build_readback && !intentRouterFailureWasInterrupted(result)) {
+      if (!result?.build_claim_announced && !intentRouterFailureWasInterrupted(result)) {
         const fallback = await tryNamedTowerFallback(route);
         if (fallback?.ok) {
           const publicFallback = fallback.publicText || publicActionResult('build_schematic', fallback.result);
@@ -931,7 +931,7 @@ async function handleIntentRouterActionResult({ username, route, result, channel
       if (route.skill_id != null) {
         try { markLastSkillFailed(bot, route.skill_id); } catch {}
       }
-      if (result?.build_readback) return false; // Its failure count is already public.
+      if (result?.build_claim_announced) return false; // Its failure count is already public.
       const publicFailure = intentRouterFailureWasInterrupted(result)
         ? 'ok, stopped.'
         : /^Task ".+" is already running\./.test(failureText)

@@ -3,6 +3,7 @@
 // No phrase exceptions may be added after the experiment corpus is frozen.
 import { Vec3 } from 'vec3';
 import { blockReadbackMatches } from './advanced_build_pipeline.js';
+import { actionOutcomeFailed } from './action_outcome.js';
 
 export function readBuildResult(bot, expected) {
   let placed = 0, unverified = 0;
@@ -64,6 +65,7 @@ export function checkBuildClaim(message, speaker, records) {
 // grouped by request id, not by time proximity. Unknown request size remains
 // unknown rather than turning a successful one-block action into a whole wall.
 export function expectedBuild(action, body, request, previous) {
+  if (![body.x, body.y, body.z].every(Number.isFinite)) return null;
   if (action === 'place') {
     const count = String(request?.command || '').match(/\b(\d+)[ -]?(?:blocks?|tall)\b/i);
     const same = request?.id != null && previous?.request_id === request.id;
@@ -73,6 +75,7 @@ export function expectedBuild(action, body, request, previous) {
       cells: [...(same ? previous.cells : []), { x: body.x, y: body.y, z: body.z, block: body.block }] };
   }
   if (action === 'build_tower') {
+    if (body.height != null && !Number.isFinite(body.height)) return null;
     const total = Math.max(1, Math.min(20, Math.floor(body.height ?? 5)));
     return { shape: 'tower', total, cells: Array.from({ length: total }, (_, i) =>
       ({ x: Math.floor(body.x), y: Math.floor(body.y) + i, z: Math.floor(body.z), block: body.material || 'oak_planks' })) };
@@ -132,10 +135,16 @@ export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequ
       const kidName = cleanKidBuildName(body.kid_name);
       last = { ...expected, actor, ...(kidName ? { kid_name: kidName } : {}) };
       const verified = read();
+      const failed = actionOutcomeFailed(result, { allowPartialPlacement: true });
+      // Validation/skill failures still need their original presentation. A
+      // readback record alone does not mean this wrapper announced anything.
+      if (failed && verified.placed === 0) return { ...result, build_readback: verified };
       const line = buildStatus(verified);
       ensureBot().chat(line);
       return { ...result, result: `${line} (${verified.placed}/${verified.total ?? '?'})`,
-        build_readback: verified };
+        ...(failed ? { error: result.error || result.result,
+          build_failure_cause: result.error || result.result } : {}),
+        build_readback: verified, build_claim_announced: true };
     };
     wrapped._buildClaimOriginal = original;
     actions[action] = wrapped;
@@ -152,7 +161,7 @@ export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequ
         try {
           const url = new URL('/build-result', peers[name]);
           if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || url.protocol !== 'http:') continue;
-          const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
+          const response = await fetch(url, { signal: AbortSignal.timeout(2000), redirect: 'error' });
           if (response.ok) {
             const record = (await response.json()).data;
             if (record?.actor === name) records[name] = record;

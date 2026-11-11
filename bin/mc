@@ -21,6 +21,7 @@
 #   mc eat                       # eat best food
 #   mc equip stone_sword         # equip item to hand
 #   mc place cobblestone 10 65 5 # place block at position
+#   mc place stone 10 65 5 --request-id 42 # bind every block to one mc commands request
 #   mc dig 10 65 5               # dig block at position
 #   mc find_blocks iron_ore      # find block locations
 #   mc find_entities creeper     # find entities nearby
@@ -91,6 +92,46 @@ require_int() {
 
 json_str() {
     python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$1"
+}
+
+# Shared queue-identity flags for speech replies and individual placements.
+# Emit JSON only after validating an ID representable exactly by JavaScript.
+request_binding_json() {
+    local kind="$1" field="" id="" next_field=""
+    shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --in-reply-to|-r) next_field="in_reply_to" ;;
+            --request-id)
+                if [[ "$kind" != "place" ]]; then
+                    echo "mc $kind: --request-id is only supported by place" >&2
+                    return 2
+                fi
+                next_field="request_id"
+                ;;
+            *) echo "mc $kind: unknown flag '$1'" >&2; return 2 ;;
+        esac
+        if [[ -n "$field" ]]; then
+            echo "mc $kind: supply only one request binding flag" >&2
+            return 2
+        fi
+        if [[ $# -lt 2 || -z "${2:-}" ]]; then
+            echo "mc $kind: $1 requires a positive safe integer id" >&2
+            return 2
+        fi
+        field="$next_field"
+        id="$2"
+        shift 2
+    done
+    python3 - "$kind" "$field" "$id" <<'PY'
+import json, sys
+kind, field, value = sys.argv[1:]
+if field and not (0 < len(value) <= 16 and value.isascii() and value.isdecimal()
+                  and value[0] != "0" and int(value) <= 9007199254740991):
+    print(f"mc {kind}: binding id must be a positive safe integer", file=sys.stderr)
+    raise SystemExit(2)
+print(json.dumps({field: int(value)} if field else {}))
+PY
 }
 
 api_get() {
@@ -380,30 +421,13 @@ except: print(sys.argv[1])
         # voice channel (fail-closed) and chat replies to in-game chat.
         MSG="${1:?Usage: mc chat \"message\" [--in-reply-to <id>]}"
         shift
-        IRT=""
-        while [[ $# -gt 0 ]]; do
-            case "$1" in
-                --in-reply-to|-r)
-                    if [[ $# -lt 2 || -z "${2:-}" ]]; then
-                        echo "mc chat: --in-reply-to requires a positive integer id" >&2
-                        exit 2
-                    fi
-                    IRT="$2"
-                    shift 2
-                    ;;
-                *) echo "mc chat: unknown flag '$1' (expected --in-reply-to <id>)" >&2; exit 2 ;;
-            esac
-        done
-        ESCAPED_MSG=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$MSG")
-        if [[ -n "$IRT" ]]; then
-            if ! [[ "$IRT" =~ ^[1-9][0-9]*$ ]]; then
-                echo "mc chat: --in-reply-to must be a positive integer (got '$IRT')" >&2
-                exit 2
-            fi
-            pretty "$(api_post '/action/chat' "{\"message\":$ESCAPED_MSG,\"in_reply_to\":$IRT}")"
-        else
-            pretty "$(api_post '/action/chat' "{\"message\":$ESCAPED_MSG}")"
-        fi
+        BINDING_JSON=$(request_binding_json chat "$@") || exit 2
+        DATA=$(python3 - "$MSG" "$BINDING_JSON" <<'PY'
+import json, sys
+print(json.dumps({"message": sys.argv[1], **json.loads(sys.argv[2])}))
+PY
+        ) || exit 2
+        pretty "$(api_post '/action/chat' "$DATA")"
         ;;
 
     read_chat|messages|msg)
@@ -571,11 +595,27 @@ except: print(sys.argv[1])
 
     # Building
     place|pl)
-        BLOCK="${1:?Usage: mc place BLOCK X Y Z}"
+        BLOCK="${1:?Usage: mc place BLOCK X Y Z [--request-id ID | --in-reply-to ID]}"
         X="${2:?Usage: mc place BLOCK X Y Z}"
         Y="${3:?Usage: mc place BLOCK X Y Z}"
         Z="${4:?Usage: mc place BLOCK X Y Z}"
-        pretty "$(api_post '/action/place' "{\"block\":\"$BLOCK\",\"x\":$X,\"y\":$Y,\"z\":$Z}")"
+        shift 4
+        BINDING_JSON=$(request_binding_json place "$@") || exit 2
+        DATA=$(python3 - "$BLOCK" "$X" "$Y" "$Z" "$BINDING_JSON" <<'PY'
+import json, math, sys
+try:
+    coordinates = [json.loads(value) for value in sys.argv[2:5]]
+    if any(type(value) not in (int, float) or not math.isfinite(value) for value in coordinates):
+        raise ValueError("coordinates must be finite numbers")
+    data = dict(zip(("x", "y", "z"), coordinates), block=sys.argv[1])
+    data.update(json.loads(sys.argv[5]))
+    print(json.dumps(data, allow_nan=False))
+except (ValueError, OverflowError):
+    print("mc place: coordinates must be finite JSON numbers", file=sys.stderr)
+    raise SystemExit(2)
+PY
+        ) || exit 2
+        pretty "$(api_post '/action/place' "$DATA")"
         ;;
 
     fill)
@@ -971,7 +1011,8 @@ ADVANCED COMBAT:
   mc bg_strafe [tgt] [d] Strafe in background
 
 BUILDING:
-  mc place BLOCK X Y Z                     Place single block
+  mc place|pl BLOCK X Y Z [--request-id ID | --in-reply-to ID]  Place single block
+    Use the same ID from mc commands for every block in one build.
   mc fill BLOCK X1 Y1 Z1 X2 Y2 Z2 [hollow] Fill rectangular area (hollow=true for walls/shells)
   mc interact X Y Z                        Right-click/activate block (chests, doors, etc)
 
@@ -1041,6 +1082,8 @@ UTILITY:
 
 FLAGS:
   --json                 Output raw JSON instead of human-readable
+  --in-reply-to ID, -r ID Bind chat or place to a positive safe integer mc commands ID
+  --request-id ID        Bind place to the same mc commands ID (place/pl only)
 
 ENVIRONMENT:
   MC_API_URL             Bot server URL (default: http://localhost:3001)

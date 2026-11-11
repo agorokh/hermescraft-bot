@@ -58,6 +58,7 @@ import {
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
+import { installBuildClaimExperiment, createBuildClaimState, resolveBuildRequest, parseBuildClaimPeers, cleanKidBuildName } from './lib/build_claims.js';
 import { actionOutcomeFailed, isSurvivalBlock, publicActionResult } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
@@ -170,14 +171,6 @@ function actionBodyForRoute(route) {
   return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true };
 }
 
-function cleanKidBuildName(value) {
-  const clean = String(value || '')
-    .replace(/[`"'<>/\\{}[\]|$;]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return clean.length > 80 ? clean.slice(0, 80).trim() : clean;
-}
-
 async function shadowRoute(bot, body, sender, primaryResult) {
   if (!SHADOW_NLP) return;
   try {
@@ -260,6 +253,11 @@ for (let i = 2; i < process.argv.length; i++) {
 // ═══════════════════════════════════════════════════════════════════
 
 let bot = null;
+const BUILD_CLAIMS_EXPERIMENT = process.env.HERMESCRAFT_BUILD_CLAIMS_EXPERIMENT === '1';
+const BUILD_CLAIM_PEERS = BUILD_CLAIMS_EXPERIMENT
+  ? parseBuildClaimPeers(process.env.HERMESCRAFT_BUILD_CLAIM_PEERS, log) : {};
+let readBuildClaimResult = () => null;
+const BUILD_CLAIM_STATE = BUILD_CLAIMS_EXPERIMENT ? createBuildClaimState(config.mc.username) : null;
 let mcData = null;
 let botReady = false;
 let chatLog = [];
@@ -852,6 +850,7 @@ function isBrainVisibleChatMessage(entry) {
 }
 
 function publicRouterResult(route, result) {
+  if (result?.build_claim_announced || result?.build_claim_superseded) return null;
   if (
     route.body?.kid_name
     && ['build_tower', 'build_schematic', 'build_schematic_advanced'].includes(route.action)
@@ -914,7 +913,7 @@ async function handleIntentRouterActionResult({ username, route, result, channel
       queueSurvivalEscalation({ username, route, outcomeText: failureText, channel, viaMention });
     } else {
       log(`[IntentRouter failure] ${route.intent_name}: ${String(failureText).slice(0, 160)}`);
-      if (!intentRouterFailureWasInterrupted(result)) {
+      if (!result?.build_claim_announced && !result?.build_claim_superseded && !intentRouterFailureWasInterrupted(result)) {
         const fallback = await tryNamedTowerFallback(route);
         if (fallback?.ok) {
           const publicFallback = fallback.publicText || publicActionResult('build_schematic', fallback.result);
@@ -933,6 +932,7 @@ async function handleIntentRouterActionResult({ username, route, result, channel
       if (route.skill_id != null) {
         try { markLastSkillFailed(bot, route.skill_id); } catch {}
       }
+      if (result?.build_claim_announced || result?.build_claim_superseded) return false;
       const publicFailure = intentRouterFailureWasInterrupted(result)
         ? 'ok, stopped.'
         : /^Task ".+" is already running\./.test(failureText)
@@ -1224,6 +1224,14 @@ async function createBot() {
       // doesn't burn anything.
       try {
         registerHighLevelSkills(ACTIONS, ensureBot);
+        if (BUILD_CLAIMS_EXPERIMENT) {
+          readBuildClaimResult = installBuildClaimExperiment(ACTIONS, ensureBot, {
+            actor: config.mc.username,
+            state: BUILD_CLAIM_STATE,
+            getRequest: body => resolveBuildRequest(commandQueue, body),
+            peers: BUILD_CLAIM_PEERS,
+          });
+        }
         // ── Auto-memory wrappers on marquee skills (issue #68 / cherry-picked
         // from f557003 after PR #69 bumped vendor to the wrong commit). The
         // brain reliably calls these high-level verbs; auto-write the
@@ -1256,6 +1264,7 @@ async function createBot() {
             return result;
           };
           _wrapBuildSchematic._hc_automem_wrapped = true;
+          _wrapBuildSchematic._buildClaimState = _origBuildSchematic._buildClaimState;
           ACTIONS.build_schematic = _wrapBuildSchematic;
         }
         const _origBuildSchematicAdvanced = ACTIONS.build_schematic_advanced;
@@ -1283,6 +1292,7 @@ async function createBot() {
             return result;
           };
           _wrapBuildSchematicAdvanced._hc_automem_wrapped = true;
+          _wrapBuildSchematicAdvanced._buildClaimState = _origBuildSchematicAdvanced._buildClaimState;
           ACTIONS.build_schematic_advanced = _wrapBuildSchematicAdvanced;
         }
         const _origBuildTower = ACTIONS.build_tower;
@@ -1293,7 +1303,7 @@ async function createBot() {
               const r = result?.result || '';
               const full = r.match(/\bBuilt\s+(\d+)-tall\s+([\w:-]+)\s+tower\s+at\s+(-?\d+),\s*(-?\d+),\s*(-?\d+)/i);
               const ratio = r.match(/\b(\d+)\s*\/\s*(\d+)\b/);
-              if (full || (ratio && Number(ratio[1]) === Number(ratio[2]))) {
+              if (!actionOutcomeFailed(result) && (full || (ratio && Number(ratio[1]) === Number(ratio[2])))) {
                 const x = full ? full[3] : body.x;
                 const y = full ? full[4] : body.y;
                 const z = full ? full[5] : body.z;
@@ -1310,6 +1320,7 @@ async function createBot() {
             return result;
           };
           _wrapBuildTower._hc_automem_wrapped = true;
+          _wrapBuildTower._buildClaimState = _origBuildTower._buildClaimState;
           ACTIONS.build_tower = _wrapBuildTower;
         }
         const _origGiveToPlayer = ACTIONS.give_to_player;
@@ -4243,6 +4254,12 @@ const httpServer = http.createServer(async (req, res) => {
   try {
     // ── GET endpoints (observation) ──────────────
     if (req.method === 'GET') {
+      if (path === '/build-result' && BUILD_CLAIMS_EXPERIMENT) {
+        if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) {
+          return respond(res, 403, { ok: false, error: 'Local access only' });
+        }
+        return respond(res, 200, { ok: true, data: readBuildClaimResult() });
+      }
       if (path === '/health' || path === '/') {
         return respond(res, 200, {
           ok: true,

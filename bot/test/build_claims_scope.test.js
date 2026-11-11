@@ -83,6 +83,42 @@ test('predicate-only coordination inherits its subject arguments but never polar
   assert.equal(checkBuildClaim('I got 2 of 4 wall blocks down and finished.', 'Rosie', records).allow, false);
 });
 
+test('quantity arguments bind on both sides of action predicates and cannot be ignored', () => {
+  const records = { Steve: record('Steve', 'wall', 10, 10) };
+  for (const n of [1, 5, 9, 11, 20]) {
+    for (const message of [`${n} of 10 wall blocks are placed.`, `I placed ${n} of 10 wall blocks.`,
+      `${n} wall blocks are placed.`, `I placed ${n} blocks.`, `I built a ${n}-block wall.`]) {
+      assert.equal(checkBuildClaim(message, 'Steve', records).allow, false, message);
+    }
+  }
+  for (const message of ['10 of 10 wall blocks are placed.', 'I placed 10 of 10 wall blocks.',
+    '10 wall blocks are placed.', 'I placed ten blocks.', 'I built a 10-block wall.']) {
+    assert.equal(checkBuildClaim(message, 'Steve', records).allow, true, message);
+  }
+  assert.equal(checkBuildClaim('I placed all four blocks of the wall.', 'Steve', records).allow, false);
+  assert.equal(checkBuildClaim('5 of 10 wall blocks are placed.', 'Steve',
+    { Steve: record('Steve', 'wall', 5, 10) }).allow, true);
+  for (const message of ['I placed a dozen blocks.', 'I placed two dozen blocks.',
+    'I placed one hundred blocks.', 'A block is placed.']) {
+    assert.equal(checkBuildClaim(message, 'Steve', records).allow, false, `uncovered cardinality: ${message}`);
+  }
+});
+
+test('unresolved participants and result ellipses cannot disappear during segmentation', () => {
+  const records = { Steve: record('Steve', 'wall', 10, 10) };
+  for (const participant of ['Rosie', 'Alex', 'Taylor']) {
+    for (const fragment of [`${participant} the tower`, `${participant} too`, `so did ${participant}`]) {
+      for (const join of [', ', ' and ', '; ']) {
+        const message = `I built the wall${join}${fragment}.`;
+        assert.equal(checkBuildClaim(message, 'Steve', records).allow, false, message);
+      }
+    }
+    for (const message of [`${participant} finished the wall.`, `${participant}'s wall is done.`]) {
+      assert.equal(checkBuildClaim(message, 'Steve', records).allow, false, message);
+    }
+  }
+});
+
 test('all frozen forty body decisions retain their labeled truth without editing the corpus', () => {
   const { cases } = JSON.parse(readFileSync(new URL('./fixtures/build_claims_cases.json', import.meta.url), 'utf8'));
   const byId = new Map(cases.map(c => [c.id, c]));

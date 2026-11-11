@@ -34,6 +34,11 @@ const FUTURE_AUXILIARIES = new Set('will shall'.split(' '));
 const PRONOUN_SUBJECTS = new Set('i we you he she it they rosie steve'.split(' '));
 const DETERMINERS = new Set("the a an my our your his her their this that these those rosie's steve's".split(' '));
 const SHAPES = /\b(wall|tower|cottage|house|schematic)\b/gi;
+const NUMBER_WORDS = Object.fromEntries('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split(' ').map((word, i) => [word, i]));
+Object.assign(NUMBER_WORDS, { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 });
+const ONES = 'one|two|three|four|five|six|seven|eight|nine';
+const NUMBER = `(?:\\d+|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[ -](?:${ONES}))?|${Object.keys(NUMBER_WORDS).join('|')})`;
+const numericValue = value => /^\d+$/.test(value) ? Number(value) : value.split(/[ -]+/).reduce((sum, word) => sum + NUMBER_WORDS[word], 0);
 
 function normalizedSpeech(message) {
   return String(message || '').toLowerCase().replace(/[’‘]/g, "'")
@@ -55,8 +60,63 @@ function subjectPhrase(text, descriptors = false) {
     // may be predicates/embeddings, so they cannot establish negative scope.
     return tokens.every(token => /^\d+(?:-blocks?|-tall)?$/.test(token)
       || (descriptors && !PRONOUN_SUBJECTS.has(token) && !AUXILIARIES.has(token)
-        && !DETERMINERS.has(token) && !/^(to|if|when|because|which|who|only)$/.test(token)));
+        && !DETERMINERS.has(token) && !token.endsWith("'s") && !/^(to|if|when|because|which|who|only)$/.test(token)));
   });
+}
+
+function independentNonResult(text) {
+  const tokens = words(text);
+  if (!PRONOUN_SUBJECTS.has(tokens.shift())) return false;
+  let auxiliaries = 0;
+  while (tokens.length && AUXILIARIES.has(tokens[0])) { tokens.shift(); auxiliaries++; }
+  if (tokens[0] === 'want' && tokens[1] === 'to') { tokens.splice(0, 2); auxiliaries++; }
+  if (tokens[0] === 'going' && tokens[1] === 'to') { tokens.splice(0, 2); auxiliaries++; }
+  return auxiliaries > 0 && tokens.length > 0 && !PRONOUN_SUBJECTS.has(tokens[0]) && !DETERMINERS.has(tokens[0]);
+}
+
+function coveredSubject(prefix) {
+  const tokens = words(prefix);
+  while (AUXILIARIES.has(tokens.at(-1)) || ['just', 'already', 'now'].includes(tokens.at(-1))) tokens.pop();
+  if (!tokens.length || (tokens.length === 1 && tokens[0] === 'all')) return true;
+  if (subjectPhrase(tokens.join(' '), true)) return true;
+  // A fronted imperative object may have a relative actor subject. Its object
+  // and subject are explicit; an arbitrary unknown actor cannot use this form.
+  if (tokens[0] === 'go' && PRONOUN_SUBJECTS.has(tokens.at(-1))) {
+    return subjectPhrase(tokens.slice(2, -1).join(' '), true);
+  }
+  return false;
+}
+
+function quantityArguments(text) {
+  const ratios = [], counts = [], sizes = [], ranges = [];
+  const range = match => [match.index, match.index + match[0].length];
+  const overlaps = match => ranges.some(([start, end]) => match.index >= start && match.index < end);
+  for (const match of text.matchAll(new RegExp(`\\b(${NUMBER})\\s*(?:of|/)\\s*(${NUMBER})\\b`, 'g'))) {
+    ratios.push([numericValue(match[1]), numericValue(match[2])]); ranges.push(range(match));
+  }
+  for (const match of text.matchAll(new RegExp(`\\b(${NUMBER})[ -]+(?:blocks?|tall)(?:[ -]+[a-z_]+){0,3}[ -]+(?:wall|tower|cottage|house|schematic)\\b`, 'g'))) {
+    if (!overlaps(match)) { sizes.push(numericValue(match[1])); ranges.push(range(match)); }
+  }
+  for (const match of text.matchAll(new RegExp(`\\b(${NUMBER})((?:[ -]+[a-z_]+){0,3})[ -]+blocks?\\b`, 'g'))) {
+    if (!overlaps(match)) {
+      // Unit modifiers must also be covered. An unknown modifier may itself
+      // be a cardinal multiplier, so treating it as decoration is unsafe.
+      if (words(match[2]).some(word => !/^(wall|tower|cottage|house|schematic)$/.test(word))) return { invalid: true };
+      counts.push(numericValue(match[1])); ranges.push(range(match));
+      if (/\ball\s*$/.test(text.slice(0, match.index))) sizes.push(numericValue(match[1]));
+    }
+  }
+  // A number outside a recognized quantity slot is unresolved, never ignored.
+  for (const match of text.matchAll(/\b(?:\d+|[a-z]+)\b/g)) {
+    if ((/^\d+$/.test(match[0]) || match[0] in NUMBER_WORDS || /^(hundred|thousand|million)$/.test(match[0])) && !overlaps(match)) return { invalid: true };
+  }
+  for (const match of text.matchAll(/\bblocks?\b/g)) {
+    if (overlaps(match)) continue;
+    if (ranges.some(([, end]) => end <= match.index && !text.slice(end, match.index).trim())) continue;
+    const prefix = words(text.slice(0, match.index)).at(-1);
+    if (prefix && !/^(the|my|our|your|his|her|their|these|those|all|wall|tower|cottage|house|schematic|placed|built|made)$/.test(prefix)) return { invalid: true };
+  }
+  return { ratios, counts, sizes, invalid: false };
 }
 
 function directNonResult(prefix) {
@@ -73,6 +133,7 @@ function directNonResult(prefix) {
 
 function propositions(message) {
   const spans = [];
+  const uncovered = [];
   let prior = null;
   for (const sentence of normalizedSpeech(message).split(/[.!?;:\n—]+|\b(?:but|so|or|however|although|while|whereas)\b/)) {
     let pending = [];
@@ -84,7 +145,8 @@ function propositions(message) {
           ? coordinated.at(-1) || prior : null;
         coordinated.push({ text: [...pending, fragment].join(' and '), context });
         pending = [];
-      } else if (subjectPhrase(fragment, true) || pending.length) pending.push(fragment);
+      } else if (subjectPhrase(fragment, true)) pending.push(fragment);
+      else if (!independentNonResult(fragment)) uncovered.push(fragment);
     }
     // A trailing nominal conjunct shares the preceding result predicate.
     if (pending.length && coordinated.length) coordinated.at(-1).text += ` and ${pending.join(' and ')}`;
@@ -101,11 +163,13 @@ function propositions(message) {
       if (directNonResult(text.slice(0, predicate.index))) continue;
       // Counts belong to their own predicate, never to a neighboring result.
       const local = text.slice(predicate.index, predicates[i + 1]?.index ?? text.length);
-      const ratios = [...local.matchAll(/\b(\d+)\s*(?:of|\/)\s*(\d+)\b/g)];
-      const quantifiedAction = /^(?:got|placed|built|made|put up)\s+\d+\s*(?:of|\/)\s*\d+\b/.test(local);
-      claims.push({ span, ratios, completion: !quantifiedAction });
+      const quantities = quantityArguments(text);
+      const quantifiedAction = /^(?:got|placed|built|made|put up)\b/.test(local)
+        && ((quantities.ratios?.length || quantities.counts?.length) > 0);
+      claims.push({ span, ...quantities, invalid: quantities.invalid || !coveredSubject(text.slice(0, predicate.index)), completion: !quantifiedAction });
     }
   }
+  if (claims.length && uncovered.length) claims.push({ invalid: true });
   return claims;
 }
 
@@ -161,6 +225,7 @@ export function checkBuildClaim(message, speaker, records) {
   const claims = propositions(message);
   if (!claims.length) return { allow: true, claim: false, reason: 'no-result-claim' };
   for (const claim of claims) {
+    if (claim.invalid) return { allow: false, claim: true, reason: 'unparsed-claim-arguments' };
     const obligations = proofObligations(claim.span, speaker);
     const evidence = obligations.map(item => records[item.actor]);
     if (evidence.some(r => !r || r.unverified || !r.total)) {
@@ -171,9 +236,12 @@ export function checkBuildClaim(message, speaker, records) {
     }
     if (claim.ratios.length) {
       const actors = new Set(obligations.map(item => item.actor));
-      if (actors.size !== 1 || claim.ratios.some(ratio => evidence.some(r => r.placed !== Number(ratio[1]) || r.total !== Number(ratio[2])))) {
+      if (actors.size !== 1 || claim.ratios.some(ratio => evidence.some(r => r.placed !== ratio[0] || r.total !== ratio[1]))) {
         return { allow: false, claim: true, reason: 'count-mismatch' };
       }
+    }
+    if (claim.counts.some(count => evidence.some(r => r.placed !== count)) || claim.sizes.some(size => evidence.some(r => r.total !== size))) {
+      return { allow: false, claim: true, reason: 'count-mismatch' };
     }
     if (claim.completion && evidence.some(r => r.placed !== r.total)) {
       return { allow: false, claim: true, reason: 'incomplete-build' };

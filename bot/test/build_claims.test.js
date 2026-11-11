@@ -101,16 +101,18 @@ test('a miswired peer endpoint cannot vouch for another character', async () => 
 
 test('schematic actions retain their canonical result contracts under the experiment', async () => {
   const said = [];
+  const calls = [];
   const result = { result: 'Built schematic "small_house" at 1,64,2 — 10/10 blocks placed.' };
-  const actions = { build_schematic: async () => result,
-    build_schematic_advanced: async () => result, chat: async () => ({}) };
-  const original = { ...actions };
+  const actions = { build_schematic: async body => { calls.push(body); return result; },
+    build_schematic_advanced: async body => { calls.push(body); return result; }, chat: async () => ({}) };
   claims.installBuildClaimExperiment(actions, () => ({ chat: s => said.push(s) }),
     { actor: 'Rosie', getRequest: () => null });
   for (const action of ['build_schematic', 'build_schematic_advanced']) {
-    assert.equal(actions[action], original[action]);
-    assert.equal(await actions[action]({ name: 'small_house' }), result);
+    const body = Object.freeze({ name: 'small_house' });
+    assert.equal(await actions[action](body), result);
+    assert.equal(calls.at(-1), body);
   }
+  assert.equal(calls.length, 2);
   assert.deepEqual(said, []);
 });
 
@@ -201,9 +203,10 @@ test('invalid build coordinates preserve the original validation result without 
 
 test('partial progress retains interruption cause beside truthful readback counts', async () => {
   const said = [];
-  const actions = { build_tower: async () => ({ result: 'build_tower interrupted' }), chat: async () => ({}) };
+  let placed = false;
+  const actions = { build_tower: async () => { placed = true; return { result: 'build_tower interrupted' }; }, chat: async () => ({}) };
   claims.installBuildClaimExperiment(actions,
-    () => ({ blockAt: p => ({ name: p.y === 64 ? 'stone' : 'air' }), chat: s => said.push(s) }),
+    () => ({ blockAt: p => ({ name: placed && p.y === 64 ? 'stone' : 'air' }), chat: s => said.push(s) }),
     { actor: 'Steve', getRequest: () => null });
   const r = await actions.build_tower({ x: 1, y: 64, z: 2, height: 4, material: 'stone' });
   assert.equal(r.result, 'I got 1 of 4 tower blocks down. (1/4)');
@@ -362,9 +365,11 @@ test('fractional and numeric-string aliases cannot count one world cell twice', 
       && Math.floor(p.z) === 2 ? 'stone' : 'air' }), chat: () => {} };
     const read = claims.installBuildClaimExperiment(actions, () => bot,
       { actor: 'Rosie', getRequest: () => ({ id: 1, command: '2-block wall' }) });
+    let result;
     for (let i = 0; i < pair.length; i++) {
-      await actions.place({ x: pair[i], y: 64.1 + i * 0.8, z: 2.1 + i * 0.8, block: 'stone' });
+      result = await actions.place({ x: pair[i], y: 64.1 + i * 0.8, z: 2.1 + i * 0.8, block: 'stone' });
     }
+    assert.equal(result.build_readback.cells.length, 1, 'the HTTP readback also retains canonical deduplication');
     assert.equal(read().cells.length, 1);
     assert.equal(read().placed, 1);
     assert.equal(read().total, 2, 'the requested distinct-block total must not shrink to match duplicate attempts');

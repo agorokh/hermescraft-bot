@@ -5,10 +5,14 @@ import { Vec3 } from 'vec3';
 import { blockReadbackMatches } from './advanced_build_pipeline.js';
 import { actionOutcomeFailed } from './action_outcome.js';
 
+function canonicalCells(expected) {
+  const cells = expected.cells.map(c => ({ ...c, x: Math.floor(c.x), y: Math.floor(c.y), z: Math.floor(c.z) }));
+  return [...new Map(cells.map(c => [`${c.x},${c.y},${c.z}`, c])).values()];
+}
+
 export function readBuildResult(bot, expected) {
   let placed = 0, unverified = 0;
-  const canonical = expected.cells.map(c => ({ ...c, x: Math.floor(c.x), y: Math.floor(c.y), z: Math.floor(c.z) }));
-  const cells = [...new Map(canonical.map(c => [`${c.x},${c.y},${c.z}`, c])).values()];
+  const cells = canonicalCells(expected);
   for (const c of cells) {
     const actual = bot.blockAt(new Vec3(c.x, c.y, c.z));
     const match = blockReadbackMatches(c.block, actual);
@@ -260,6 +264,10 @@ export function checkBuildClaim(message, speaker, records) {
     if (evidence.some(r => !r || r.unverified || !r.total)) {
       return { allow: false, claim: true, reason: 'missing-or-unverified-result' };
     }
+    if (evidence.some(r => r.action_status === 'pending'
+      || (r.action_status === 'failed' && !(r.verified_delta > 0)))) {
+      return { allow: false, claim: true, reason: 'unverified-action-outcome' };
+    }
     if (obligations.some((item, i) => item.shape && evidence[i].shape !== item.shape)) {
       return { allow: false, claim: true, reason: 'different-build' };
     }
@@ -277,6 +285,10 @@ export function checkBuildClaim(message, speaker, records) {
     }
     if (claim.counts.some(count => evidence.some(r => r.placed !== count)) || claim.sizes.some(size => evidence.some(r => r.total !== size))) {
       return { allow: false, claim: true, reason: 'count-mismatch' };
+    }
+    if (evidence.some(r => r.action_status === 'failed')
+      && (claim.completion || evidence.some(r => r.placed === r.total))) {
+      return { allow: false, claim: true, reason: 'failed-build-not-complete' };
     }
     if (claim.completion && evidence.some(r => r.placed !== r.total)) {
       return { allow: false, claim: true, reason: 'incomplete-build' };
@@ -347,14 +359,48 @@ export function parseBuildClaimPeers(value, warn = () => {}) {
   }
 }
 
-export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequest, peers = {} }) {
-  let last = null;
-  const read = () => last ? readBuildResult(ensureBot(), last) : null;
-  for (const action of ['place', 'build_tower']) {
+export function createBuildClaimState(actor) {
+  return { actor, last: null, generation: 0, installation: 0, runtime: null };
+}
+
+export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequest, peers = {}, state: suppliedState }) {
+  const installedState = actions.chat?._buildClaimState;
+  const state = suppliedState || installedState || createBuildClaimState(actor);
+  if (state.actor !== actor) throw new Error('Build claim state belongs to another actor');
+  if (installedState && installedState !== state) throw new Error('Build claim state differs from installed actions');
+  state.runtime = { ensureBot, getRequest, peers };
+  state.installation++;
+  const snapshot = expected => {
+    try { return readBuildResult(state.runtime.ensureBot(), expected); }
+    catch {
+      const cells = canonicalCells(expected);
+      return { ...expected, cells, placed: 0, unverified: cells.length, checked_at: Date.now() };
+    }
+  };
+  const read = () => state.last ? snapshot(state.last) : null;
+  const wrap = (action, makeWrapper) => {
     const current = actions[action];
-    if (!current) continue;
+    if (typeof current !== 'function' || current._buildClaimState === state) return;
+    if (current._buildClaimState) throw new Error('Build claim action belongs to another actor state');
     const original = current._buildClaimOriginal || current;
-    const wrapped = async body => {
+    const wrapped = makeWrapper(original);
+    wrapped._buildClaimOriginal = original;
+    wrapped._buildClaimState = state;
+    actions[action] = wrapped;
+  };
+
+  // Clear-only boundaries: no schematic observer, taxonomy, result rewriting,
+  // placement or narration changes. Old awaits cannot revive invalidated proof.
+  for (const action of ['build_schematic', 'build_schematic_advanced', 'place_fill']) {
+    wrap(action, original => body => {
+      state.generation++;
+      state.last = null;
+      return original(body);
+    });
+  }
+
+  for (const action of ['place', 'build_tower']) {
+    wrap(action, original => async body => {
       const normalized = normalizeBuildInput(action, body);
       if (!normalized) {
         // The native tower validates missing coordinates before any mutation.
@@ -364,53 +410,58 @@ export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequ
       // Vec3 preserves strings and its offsets concatenate them. Execute the
       // same numeric coordinates used by the evidence plan for both actions.
       body = normalized;
-      const request = getRequest(body);
+      const request = state.runtime.getRequest?.(body);
       // Clear evidence for a new build before awaiting its outcome: a concurrent
       // chat must not vouch for the preceding successful request.
-      const previous = last;
+      const previous = state.last;
       const known = expectedBuild(action, body, request, previous);
       // An invalid body is validation work, not a new build. Preserve the
       // existing evidence and let the original action report its validation.
       if (!known) return original(body);
       const kidName = cleanKidBuildName(body.kid_name);
-      const expected = { ...known, actor, ...(kidName ? { kid_name: kidName } : {}) };
-      last = expected;
+      const expected = { ...known, actor, action_status: 'pending', ...(kidName ? { kid_name: kidName } : {}) };
+      const generation = ++state.generation;
+      const installation = state.installation;
+      state.last = expected;
+      const baseline = snapshot(expected);
       let result;
       try { result = await original(body); }
       catch (error) {
         result = { error: error.message };
       }
-      // Record identity is the generation token. An older completion reads
-      // only its own cells and cannot restore or announce superseded work.
-      const superseded = last !== expected;
-      const verified = readBuildResult(ensureBot(), expected);
+      // The token survives reconnects and unsupported build boundaries. Each
+      // completion reads its own cells; only the current installation settles.
+      const superseded = state.generation !== generation || state.installation !== installation;
+      const after = snapshot(expected);
       const failed = actionOutcomeFailed(result, { allowPartialPlacement: true });
+      const delta = !superseded && !baseline.unverified && !after.unverified
+        ? after.placed - baseline.placed : null;
+      const settled = { ...after, action_status: failed ? 'failed' : 'succeeded', verified_delta: delta };
+      if (!superseded) state.last = settled;
+      const verified = settled;
       // Validation/skill failures still need their original presentation. A
       // readback record alone does not mean this wrapper announced anything.
-      if (failed && verified.placed === 0) return { ...result, build_readback: verified,
+      if (failed && (!(delta > 0) || verified.placed === verified.total)) return { ...result, build_readback: verified,
         ...(superseded ? { build_claim_superseded: true } : {}) };
       const line = buildStatus(verified);
-      if (!superseded) ensureBot().chat(line);
+      if (!superseded) state.runtime.ensureBot().chat(line);
       return { ...result, result: `${line} (${verified.placed}/${verified.total ?? '?'})`,
         ...(failed ? { error: result.error || result.result,
           build_failure_cause: result.error || result.result } : {}),
         build_readback: verified,
         ...(superseded ? { build_claim_superseded: true } : { build_claim_announced: true }) };
-    };
-    wrapped._buildClaimOriginal = original;
-    actions[action] = wrapped;
+    });
   }
-  const currentChat = actions.chat;
-  const originalChat = currentChat._buildClaimOriginal || currentChat;
-  const wrappedChat = async body => {
+  const authorizeSpeech = async body => {
     if (isBuildClaim(body.message)) {
-      const records = { [actor]: read() };
+      const generation = state.generation, installation = state.installation;
+      const records = {};
       for (const name of ['Rosie', 'Steve']) {
         if (name === actor || !new RegExp(`\\b${name}\\b`, 'i').test(body.message)) continue;
         // Experiment configuration permits only loopback body endpoints. There
         // is no arbitrary URL or credential-bearing fetch from model input.
         try {
-          const url = new URL('/build-result', peers[name]);
+          const url = new URL('/build-result', state.runtime.peers[name]);
           if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || url.protocol !== 'http:') continue;
           const response = await fetch(url, { signal: AbortSignal.timeout(2000), redirect: 'error' });
           if (response.ok) {
@@ -419,16 +470,28 @@ export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequ
           }
         } catch { /* missing peer evidence fails closed below */ }
       }
-      const decision = checkBuildClaim(body.message, actor, records);
+      return { generation, installation, records, message: body.message };
+    }
+    return null;
+  };
+  for (const action of ['chat', 'chat_to', 'whisper', 'team_chat', 'report']) {
+    wrap(action, original => async body => {
+      const proof = await authorizeSpeech(body);
+      // This is deliberately AFTER the await: resolving an async validator is
+      // itself a yield. Check the current generation and local world at send
+      // entry, without transferring the barrier to greetings or future plans.
+      const changed = proof && (proof.generation !== state.generation
+        || proof.installation !== state.installation || proof.message !== body.message);
+      const decision = proof && !changed
+        ? checkBuildClaim(body.message, actor, { ...proof.records, [actor]: read() })
+        : { allow: !changed && !isBuildClaim(body.message), reason: 'build-evidence-changed' };
       if (!decision.allow) {
         const error = new Error(`Build claim suppressed: ${decision.reason}`);
         error.statusCode = 409;
         throw error;
       }
-    }
-    return originalChat(body);
-  };
-  wrappedChat._buildClaimOriginal = originalChat;
-  actions.chat = wrappedChat;
+      return original(body);
+    });
+  }
   return read;
 }

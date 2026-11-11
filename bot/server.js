@@ -58,7 +58,7 @@ import {
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
 import { registerHighLevelSkills } from './lib/skills.js';
-import { installBuildClaimExperiment, resolveBuildRequest, parseBuildClaimPeers, cleanKidBuildName } from './lib/build_claims.js';
+import { installBuildClaimExperiment, createBuildClaimState, resolveBuildRequest, parseBuildClaimPeers, cleanKidBuildName } from './lib/build_claims.js';
 import { actionOutcomeFailed, isSurvivalBlock, publicActionResult } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
 import { tryRoute as tryRouteRegex, tryStopRoute, ackFor } from './lib/intent_router.js';
@@ -257,6 +257,7 @@ const BUILD_CLAIMS_EXPERIMENT = process.env.HERMESCRAFT_BUILD_CLAIMS_EXPERIMENT 
 const BUILD_CLAIM_PEERS = BUILD_CLAIMS_EXPERIMENT
   ? parseBuildClaimPeers(process.env.HERMESCRAFT_BUILD_CLAIM_PEERS, log) : {};
 let readBuildClaimResult = () => null;
+const BUILD_CLAIM_STATE = BUILD_CLAIMS_EXPERIMENT ? createBuildClaimState(config.mc.username) : null;
 let mcData = null;
 let botReady = false;
 let chatLog = [];
@@ -1226,6 +1227,7 @@ async function createBot() {
         if (BUILD_CLAIMS_EXPERIMENT) {
           readBuildClaimResult = installBuildClaimExperiment(ACTIONS, ensureBot, {
             actor: config.mc.username,
+            state: BUILD_CLAIM_STATE,
             getRequest: body => resolveBuildRequest(commandQueue, body),
             peers: BUILD_CLAIM_PEERS,
           });
@@ -1262,6 +1264,7 @@ async function createBot() {
             return result;
           };
           _wrapBuildSchematic._hc_automem_wrapped = true;
+          _wrapBuildSchematic._buildClaimState = _origBuildSchematic._buildClaimState;
           ACTIONS.build_schematic = _wrapBuildSchematic;
         }
         const _origBuildSchematicAdvanced = ACTIONS.build_schematic_advanced;
@@ -1289,6 +1292,7 @@ async function createBot() {
             return result;
           };
           _wrapBuildSchematicAdvanced._hc_automem_wrapped = true;
+          _wrapBuildSchematicAdvanced._buildClaimState = _origBuildSchematicAdvanced._buildClaimState;
           ACTIONS.build_schematic_advanced = _wrapBuildSchematicAdvanced;
         }
         const _origBuildTower = ACTIONS.build_tower;
@@ -1299,7 +1303,7 @@ async function createBot() {
               const r = result?.result || '';
               const full = r.match(/\bBuilt\s+(\d+)-tall\s+([\w:-]+)\s+tower\s+at\s+(-?\d+),\s*(-?\d+),\s*(-?\d+)/i);
               const ratio = r.match(/\b(\d+)\s*\/\s*(\d+)\b/);
-              if (full || (ratio && Number(ratio[1]) === Number(ratio[2]))) {
+              if (!actionOutcomeFailed(result) && (full || (ratio && Number(ratio[1]) === Number(ratio[2])))) {
                 const x = full ? full[3] : body.x;
                 const y = full ? full[4] : body.y;
                 const z = full ? full[5] : body.z;
@@ -1316,6 +1320,7 @@ async function createBot() {
             return result;
           };
           _wrapBuildTower._hc_automem_wrapped = true;
+          _wrapBuildTower._buildClaimState = _origBuildTower._buildClaimState;
           ACTIONS.build_tower = _wrapBuildTower;
         }
         const _origGiveToPlayer = ACTIONS.give_to_player;

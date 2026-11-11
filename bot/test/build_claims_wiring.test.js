@@ -32,6 +32,8 @@ test('router does not repeat the terminal count already emitted by the body', ()
   assert.equal(publicResult({ action: 'build_tower', body: { kid_name: 'Aurora' } },
     { build_claim_announced: true, build_readback: { placed: 2, total: 2 } }), null);
   assert.equal(publicResult({ action: 'place' }, { build_readback: { placed: 0, total: 2 } }), 'ordinary result');
+  assert.equal(publicResult({ action: 'place' }, { build_claim_superseded: true,
+    build_readback: { placed: 1, total: 2 } }), null);
   assert.equal(publicResult({ action: 'place' }, { result: 'Placed stone' }), 'ordinary result');
 });
 
@@ -55,6 +57,12 @@ test('failed readback keeps failure bookkeeping without duplicate chat or schema
   assert.equal(failed, 2);
   assert.equal(fallback, 1);
   assert.deepEqual(said, ['duplicate failure'], 'unannounced failure retains normal presentation');
+  await handle({ username: 'Adalynn', route: { action: 'build_tower', skill_id: 3 },
+    result: { result: 'I got 1 of 4 tower blocks down. (1/4)', build_claim_superseded: true,
+      build_readback: { placed: 1, total: 4 } } });
+  assert.equal(failed, 3);
+  assert.equal(fallback, 1, 'superseded work cannot launch an obsolete fallback');
+  assert.deepEqual(said, ['duplicate failure']);
 });
 
 test('build-result route denies nonlocal sockets before evaluating evidence', () => {

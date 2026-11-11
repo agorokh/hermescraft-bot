@@ -241,3 +241,65 @@ test('peer redirects are rejected without following the redirected target', asyn
 test('native WHATWG URLs keep IPv6 loopback brackets used by the peer allowlist', () => {
   assert.equal(new URL('http://[::1]:3301').hostname, '[::1]');
 });
+
+test('an older action completing last cannot replace or announce newer build evidence', async () => {
+  let finishPlace;
+  const said = [];
+  const actions = { place: () => new Promise(resolve => { finishPlace = resolve; }),
+    build_tower: async () => ({ result: 'Built tower' }), chat: async () => ({}) };
+  const queue = [{ id: 1, command: '4-block wall' }];
+  const read = claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: () => ({ name: 'stone' }), chat: text => said.push(text) }),
+    { actor: 'Rosie', getRequest: body => claims.resolveBuildRequest(queue, body) });
+  const older = actions.place({ x: 1, y: 64, z: 1, block: 'stone', request_id: 1 });
+  const newer = await actions.build_tower({ x: 10, y: 64, z: 1, height: 2, material: 'stone' });
+  assert.equal(newer.build_readback.shape, 'tower');
+  finishPlace({ result: 'Placed stone' });
+  const old = await older;
+  assert.equal(read().shape, 'tower');
+  assert.equal(read().placed, 2);
+  assert.equal(old.build_readback.shape, 'wall', 'an action reads its own cells');
+  assert.equal(old.result, 'I got 1 of 4 wall blocks down. (1/4)');
+  assert.equal(old.build_claim_superseded, true);
+  assert.notEqual(old.build_claim_announced, true);
+  assert.deepEqual(said, ['I got 2 of 2 tower blocks down.']);
+});
+
+test('overlapping placements retain all same-request cells despite reverse completion', async () => {
+  const finish = new Map(), world = new Set(), said = [];
+  const actions = { place: body => new Promise(resolve => finish.set(body.x,
+    () => { world.add(body.x); resolve({ result: 'Placed stone' }); })), chat: async () => ({}) };
+  const read = claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: p => ({ name: world.has(p.x) ? 'stone' : 'air' }), chat: text => said.push(text) }),
+    { actor: 'Rosie', getRequest: () => ({ id: 1, command: '4-block wall' }) });
+  const first = actions.place({ x: 1, y: 64, z: 1, block: 'stone' });
+  const second = actions.place({ x: 2, y: 64, z: 1, block: 'stone' });
+  finish.get(2)(); await second;
+  finish.get(1)(); await first;
+  assert.equal(read().cells.length, 2);
+  assert.equal(read().placed, 2);
+  assert.deepEqual(said, ['I got 1 of 4 wall blocks down.']);
+});
+
+test('invalid bodies preserve completed evidence and cannot invalidate an active action', async () => {
+  let finishValid, finishInvalid;
+  const actions = { build_tower: body => body.x == null
+    ? new Promise(resolve => { finishInvalid = resolve; })
+    : new Promise(resolve => { finishValid = resolve; }), chat: async () => ({}) };
+  const said = [];
+  const read = claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: () => ({ name: 'stone' }), chat: text => said.push(text) }),
+    { actor: 'Steve', getRequest: () => null });
+  const valid = actions.build_tower({ x: 1, y: 64, z: 2, height: 2, material: 'stone' });
+  const invalid = actions.build_tower({});
+  assert.equal(read()?.shape, 'tower');
+  finishValid({ result: 'Built tower' }); await valid;
+  finishInvalid({ result: 'build_tower needs x, y, z' });
+  assert.deepEqual(await invalid, { result: 'build_tower needs x, y, z' });
+  assert.equal(read().placed, 2);
+  assert.deepEqual(said, ['I got 2 of 2 tower blocks down.']);
+  const anotherInvalid = actions.build_tower({});
+  assert.equal(read().placed, 2);
+  finishInvalid({ result: 'build_tower needs x, y, z' }); await anotherInvalid;
+  assert.equal(read().placed, 2);
+});

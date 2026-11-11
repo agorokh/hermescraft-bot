@@ -123,28 +123,33 @@ export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequ
       // chat must not vouch for the preceding successful request.
       const previous = last;
       const known = expectedBuild(action, body, request, previous);
-      last = known ? { ...known, actor } : null;
+      // An invalid body is validation work, not a new build. Preserve the
+      // existing evidence and let the original action report its validation.
+      if (!known) return original(body);
+      const kidName = cleanKidBuildName(body.kid_name);
+      const expected = { ...known, actor, ...(kidName ? { kid_name: kidName } : {}) };
+      last = expected;
       let result;
       try { result = await original(body); }
       catch (error) {
-        if (!last) throw error;
         result = { error: error.message };
       }
-      const expected = expectedBuild(action, body, request, previous);
-      if (!expected) return result;
-      const kidName = cleanKidBuildName(body.kid_name);
-      last = { ...expected, actor, ...(kidName ? { kid_name: kidName } : {}) };
-      const verified = read();
+      // Record identity is the generation token. An older completion reads
+      // only its own cells and cannot restore or announce superseded work.
+      const superseded = last !== expected;
+      const verified = readBuildResult(ensureBot(), expected);
       const failed = actionOutcomeFailed(result, { allowPartialPlacement: true });
       // Validation/skill failures still need their original presentation. A
       // readback record alone does not mean this wrapper announced anything.
-      if (failed && verified.placed === 0) return { ...result, build_readback: verified };
+      if (failed && verified.placed === 0) return { ...result, build_readback: verified,
+        ...(superseded ? { build_claim_superseded: true } : {}) };
       const line = buildStatus(verified);
-      ensureBot().chat(line);
+      if (!superseded) ensureBot().chat(line);
       return { ...result, result: `${line} (${verified.placed}/${verified.total ?? '?'})`,
         ...(failed ? { error: result.error || result.result,
           build_failure_cause: result.error || result.result } : {}),
-        build_readback: verified, build_claim_announced: true };
+        build_readback: verified,
+        ...(superseded ? { build_claim_superseded: true } : { build_claim_announced: true }) };
     };
     wrapped._buildClaimOriginal = original;
     actions[action] = wrapped;

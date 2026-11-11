@@ -195,10 +195,8 @@ test('invalid build coordinates preserve the original validation result without 
   const read = claims.installBuildClaimExperiment(actions,
     () => ({ blockAt: () => assert.fail('invalid cell read'), chat: () => assert.fail('invalid build announced') }),
     { actor: 'Steve', getRequest: () => null });
-  for (const body of [{}, { x: NaN, y: 64, z: 2 }, { x: 1, y: Infinity, z: 2 }]) {
-    assert.deepEqual(await actions.build_tower(body), { result: 'build_tower needs x, y, z' });
-    assert.equal(read(), null);
-  }
+  assert.deepEqual(await actions.build_tower({}), { result: 'build_tower needs x, y, z' });
+  assert.equal(read(), null);
 });
 
 test('partial progress retains interruption cause beside truthful readback counts', async () => {
@@ -302,4 +300,54 @@ test('invalid bodies preserve completed evidence and cannot invalidate an active
   assert.equal(read().placed, 2);
   finishInvalid({ result: 'build_tower needs x, y, z' }); await anotherInvalid;
   assert.equal(read().placed, 2);
+});
+
+test('native-compatible numeric strings replace prior completed evidence before building', async () => {
+  const world = new Set(['1,64,1']);
+  const seen = [];
+  const actions = { build_tower: async body => {
+    seen.push(body);
+    // Match the native skill's Math.floor coercion and default/clamp semantics.
+    const height = Math.max(1, Math.min(20, Math.floor(body.height === undefined ? 5 : body.height)));
+    return { result: `Built ${height}-tall stone tower at ${Math.floor(body.x)},${Math.floor(body.y)},${Math.floor(body.z)}.` };
+  }, place: async body => { seen.push(body); return { result: 'Placed stone' }; }, chat: async () => ({}) };
+  const read = claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: p => ({ name: world.has(`${p.x},${p.y},${p.z}`) ? 'stone' : 'air' }), chat: () => {} }),
+    { actor: 'Steve', getRequest: () => ({ id: 1, command: '4-block wall' }) });
+  await actions.build_tower({ x: 1, y: 64, z: 1, height: 1, material: 'stone' });
+  await actions.chat({ message: 'The tower is done.' });
+  const result = await actions.build_tower({ x: '20', y: '64', z: '1', height: '4', material: 'stone' });
+  assert.equal(result.build_readback?.total, 4);
+  assert.equal(read().placed, 0);
+  assert.equal(read().cells[0].x, 20);
+  await assert.rejects(actions.chat({ message: 'The tower is done.' }), /suppressed/);
+  assert.equal(typeof seen[1].x, 'number');
+  assert.equal(typeof seen[1].height, 'number');
+  const placed = await actions.place({ x: '30', y: '64', z: '1', block: 'stone' });
+  assert.equal(placed.build_readback.cells[0].x, 30);
+  assert.equal(typeof seen[2].x, 'number', 'Vec3 offsets must not concatenate raw coordinate strings');
+  const nullHeight = await actions.build_tower({ x: '40', y: 64, z: 1, height: null, material: 'stone' });
+  assert.equal(nullHeight.build_readback.total, 1, 'native null height coerces to zero and clamps to one');
+});
+
+test('unsupported numeric inputs cannot execute an uninstrumented native action', async () => {
+  let calls = 0;
+  const actions = { build_tower: async () => { calls++; return { result: 'Built tower' }; },
+    place: async () => { calls++; return { result: 'Placed stone' }; }, chat: async () => ({}) };
+  const read = claims.installBuildClaimExperiment(actions,
+    () => ({ blockAt: () => ({ name: 'stone' }), chat: () => {} }),
+    { actor: 'Steve', getRequest: () => null });
+  await actions.build_tower({ x: 1, y: 64, z: 1, height: 1, material: 'stone' });
+  const previous = read();
+  for (const action of ['place', 'build_tower']) {
+    for (const body of [{ x: NaN, y: 64, z: 1 }, { x: 1, y: Infinity, z: 1 },
+      { x: 'bad', y: 64, z: 1 }, { x: 1, y: 64, z: 1, height: 'bad' }]) {
+      if (action === 'place' && body.height) continue;
+      const result = await actions[action](body);
+      assert.match(result.error || '', /finite numeric/i);
+      assert.equal(read().cells[0].x, previous.cells[0].x);
+      assert.equal(read().total, previous.total);
+    }
+  }
+  assert.equal(calls, 1, 'only the valid seed build may execute');
 });

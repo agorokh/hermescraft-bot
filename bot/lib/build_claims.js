@@ -64,8 +64,21 @@ export function checkBuildClaim(message, speaker, records) {
 // Keep one in-memory result per body. Free placements in one queue request are
 // grouped by request id, not by time proximity. Unknown request size remains
 // unknown rather than turning a successful one-block action into a whole wall.
+function normalizeBuildInput(action, body) {
+  if ([body.x, body.y, body.z].some(value => value == null)) return null;
+  const normalized = { ...body, x: Number(body.x), y: Number(body.y), z: Number(body.z) };
+  if (![normalized.x, normalized.y, normalized.z].every(Number.isFinite)) return null;
+  if (action === 'build_tower') {
+    // Match the native skill's undefined-only default and Math.floor coercion.
+    normalized.height = Number(body.height === undefined ? 5 : body.height);
+    if (!Number.isFinite(normalized.height)) return null;
+  }
+  return normalized;
+}
+
 export function expectedBuild(action, body, request, previous) {
-  if (![body.x, body.y, body.z].every(Number.isFinite)) return null;
+  body = normalizeBuildInput(action, body);
+  if (!body) return null;
   if (action === 'place') {
     const count = String(request?.command || '').match(/\b(\d+)[ -]?(?:blocks?|tall)\b/i);
     const same = request?.id != null && previous?.request_id === request.id;
@@ -75,8 +88,7 @@ export function expectedBuild(action, body, request, previous) {
       cells: [...(same ? previous.cells : []), { x: body.x, y: body.y, z: body.z, block: body.block }] };
   }
   if (action === 'build_tower') {
-    if (body.height != null && !Number.isFinite(body.height)) return null;
-    const total = Math.max(1, Math.min(20, Math.floor(body.height ?? 5)));
+    const total = Math.max(1, Math.min(20, Math.floor(body.height)));
     return { shape: 'tower', total, cells: Array.from({ length: total }, (_, i) =>
       ({ x: Math.floor(body.x), y: Math.floor(body.y) + i, z: Math.floor(body.z), block: body.material || 'oak_planks' })) };
   }
@@ -118,6 +130,15 @@ export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequ
     if (!current) continue;
     const original = current._buildClaimOriginal || current;
     const wrapped = async body => {
+      const normalized = normalizeBuildInput(action, body);
+      if (!normalized) {
+        // The native tower validates missing coordinates before any mutation.
+        if (action === 'build_tower' && [body.x, body.y, body.z].some(value => value == null)) return original(body);
+        return { error: 'Build readback needs finite numeric coordinates and height.' };
+      }
+      // Vec3 preserves strings and its offsets concatenate them. Execute the
+      // same numeric coordinates used by the evidence plan for both actions.
+      body = normalized;
       const request = getRequest(body);
       // Clear evidence for a new build before awaiting its outcome: a concurrent
       // chat must not vouch for the preceding successful request.

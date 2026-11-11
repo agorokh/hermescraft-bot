@@ -119,6 +119,27 @@ test('unresolved participants and result ellipses cannot disappear during segmen
   }
 });
 
+test('every quantified proposition requires one resolved singular actor proof', () => {
+  for (const n of [1, 5, 10]) {
+    const partial = { Rosie: record('Rosie', 'wall', n, n + 5), Steve: record('Steve', 'wall', n, n + 5) };
+    const complete = { Rosie: record('Rosie', 'wall', n, n), Steve: record('Steve', 'wall', n, n) };
+    for (const subject of ['Rosie and Steve', 'We', 'Rosie and I', 'I and Rosie']) {
+      for (const message of [`${subject} placed ${n} blocks.`, `${subject} placed ${n} of ${n + 5} blocks.`,
+        `${subject} built a ${n}-block wall.`]) {
+        for (const records of [partial, complete]) {
+          assert.equal(checkBuildClaim(message, 'Rosie', records).allow, false, message);
+        }
+      }
+    }
+    assert.equal(checkBuildClaim(`Our ${n}-block wall is finished.`, 'Rosie', complete).allow, false);
+    assert.equal(checkBuildClaim(`We finished the wall and placed ${n} blocks.`, 'Rosie', complete).allow, false);
+    assert.equal(checkBuildClaim(`I placed ${n} blocks.`, 'Rosie', partial).allow, true);
+    assert.equal(checkBuildClaim(`We will decorate and I placed ${n} blocks.`, 'Rosie', partial).allow, true,
+      'an independent singular proposition does not inherit plural number');
+    assert.equal(checkBuildClaim('Rosie and Steve finished the wall.', 'Rosie', complete).allow, true);
+  }
+});
+
 test('all frozen forty body decisions retain their labeled truth without editing the corpus', () => {
   const { cases } = JSON.parse(readFileSync(new URL('./fixtures/build_claims_cases.json', import.meta.url), 'utf8'));
   const byId = new Map(cases.map(c => [c.id, c]));

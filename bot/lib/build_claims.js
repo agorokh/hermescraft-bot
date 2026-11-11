@@ -204,19 +204,25 @@ function proofObligations(span, speaker) {
   const chain = [];
   for (let cursor = span; cursor; cursor = cursor.context) chain.push(cursor);
   let inherited = null;
+  let collective = false;
   for (const clause of chain.reverse()) {
     let own = directProofObligations(clause.text, speaker);
     // Predicate-only coordination inherits arguments, never auxiliary scope,
     // result status or ratios. Explicit subjects start a separate obligation.
-    if (inherited && !actorNames(clause.text, speaker).length) {
+    const explicit = actorNames(clause.text, speaker);
+    if (inherited && !explicit.length) {
       const shapes = [...clause.text.matchAll(SHAPES)].map(match => match[1]);
       own = shapes.length
         ? [...new Set(inherited.map(item => item.actor))].flatMap(actor => shapes.map(shape => ({ actor, shape })))
         : inherited;
+    } else {
+      // Independent verb clauses were split earlier; retained coordination is
+      // nominal number, even when participant aliases collapse to one body.
+      collective = /\b(we|our|and)\b/.test(clause.text);
     }
     inherited = own;
   }
-  return inherited;
+  return { obligations: inherited, collective };
 }
 
 export function isBuildClaim(message) { return propositions(message).length > 0; }
@@ -226,7 +232,7 @@ export function checkBuildClaim(message, speaker, records) {
   if (!claims.length) return { allow: true, claim: false, reason: 'no-result-claim' };
   for (const claim of claims) {
     if (claim.invalid) return { allow: false, claim: true, reason: 'unparsed-claim-arguments' };
-    const obligations = proofObligations(claim.span, speaker);
+    const { obligations, collective } = proofObligations(claim.span, speaker);
     const evidence = obligations.map(item => records[item.actor]);
     if (evidence.some(r => !r || r.unverified || !r.total)) {
       return { allow: false, claim: true, reason: 'missing-or-unverified-result' };
@@ -234,9 +240,15 @@ export function checkBuildClaim(message, speaker, records) {
     if (obligations.some((item, i) => item.shape && evidence[i].shape !== item.shape)) {
       return { allow: false, claim: true, reason: 'different-build' };
     }
+    // Readback counts belong to individual bodies. No aggregate/distributive
+    // ledger exists, so every kind of quantity needs one singular actor.
+    const quantified = claim.ratios.length || claim.counts.length || claim.sizes.length;
+    const actors = new Set(obligations.map(item => item.actor));
+    if (quantified && (actors.size !== 1 || collective)) {
+      return { allow: false, claim: true, reason: 'ambiguous-collective-quantity' };
+    }
     if (claim.ratios.length) {
-      const actors = new Set(obligations.map(item => item.actor));
-      if (actors.size !== 1 || claim.ratios.some(ratio => evidence.some(r => r.placed !== ratio[0] || r.total !== ratio[1]))) {
+      if (claim.ratios.some(ratio => evidence.some(r => r.placed !== ratio[0] || r.total !== ratio[1]))) {
         return { allow: false, claim: true, reason: 'count-mismatch' };
       }
     }

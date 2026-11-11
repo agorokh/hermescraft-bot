@@ -7,7 +7,8 @@ import { actionOutcomeFailed } from './action_outcome.js';
 
 export function readBuildResult(bot, expected) {
   let placed = 0, unverified = 0;
-  const cells = [...new Map(expected.cells.map(c => [`${c.x},${c.y},${c.z}`, c])).values()];
+  const canonical = expected.cells.map(c => ({ ...c, x: Math.floor(c.x), y: Math.floor(c.y), z: Math.floor(c.z) }));
+  const cells = [...new Map(canonical.map(c => [`${c.x},${c.y},${c.z}`, c])).values()];
   for (const c of cells) {
     const actual = bot.blockAt(new Vec3(c.x, c.y, c.z));
     const match = blockReadbackMatches(c.block, actual);
@@ -269,6 +270,7 @@ function normalizeBuildInput(action, body) {
   if ([body.x, body.y, body.z].some(value => value == null)) return null;
   const normalized = { ...body, x: Number(body.x), y: Number(body.y), z: Number(body.z) };
   if (![normalized.x, normalized.y, normalized.z].every(Number.isFinite)) return null;
+  for (const axis of ['x', 'y', 'z']) normalized[axis] = Math.floor(normalized[axis]);
   if (action === 'build_tower') {
     // Match the native skill's undefined-only default and Math.floor coercion.
     normalized.height = Number(body.height === undefined ? 5 : body.height);

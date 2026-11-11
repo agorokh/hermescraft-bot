@@ -351,3 +351,35 @@ test('unsupported numeric inputs cannot execute an uninstrumented native action'
   }
   assert.equal(calls, 1, 'only the valid seed build may execute');
 });
+
+test('fractional and numeric-string aliases cannot count one world cell twice', async () => {
+  for (const pair of [[1.1, 1.9], [-1.1, -1.9], ['1.1', '1.9'], ['-1.1', '-1.9']]) {
+    const cellX = Math.floor(Number(pair[0]));
+    const executed = [];
+    const actions = { place: async body => { executed.push(body); return { result: 'Placed stone' }; },
+      chat: async () => ({}) };
+    const bot = { blockAt: p => ({ name: Math.floor(p.x) === cellX && Math.floor(p.y) === 64
+      && Math.floor(p.z) === 2 ? 'stone' : 'air' }), chat: () => {} };
+    const read = claims.installBuildClaimExperiment(actions, () => bot,
+      { actor: 'Rosie', getRequest: () => ({ id: 1, command: '2-block wall' }) });
+    for (let i = 0; i < pair.length; i++) {
+      await actions.place({ x: pair[i], y: 64.1 + i * 0.8, z: 2.1 + i * 0.8, block: 'stone' });
+    }
+    assert.equal(read().cells.length, 1);
+    assert.equal(read().placed, 1);
+    assert.equal(read().total, 2, 'the requested distinct-block total must not shrink to match duplicate attempts');
+    assert.deepEqual(executed.map(body => [body.x, body.y, body.z]), [[cellX, 64, 2], [cellX, 64, 2]]);
+    await assert.rejects(actions.chat({ message: 'The wall is done.' }), /suppressed/);
+    await assert.rejects(actions.chat({ message: 'I got 2 of 2 wall blocks down.' }), /suppressed/);
+    await actions.chat({ message: 'I got 1 of 2 wall blocks down.' });
+  }
+});
+
+test('raw readback deduplicates canonical block cells even without action normalization', () => {
+  const bot = { blockAt: () => ({ name: 'stone' }) };
+  const result = claims.readBuildResult(bot, { actor: 'Rosie', shape: 'wall', total: 2,
+    cells: [{ x: -1.1, y: 64.1, z: 2.1, block: 'stone' },
+      { x: -1.9, y: 64.9, z: 2.9, block: 'stone' }] });
+  assert.equal(result.placed, 1);
+  assert.deepEqual(result.cells, [{ x: -2, y: 64, z: 2, block: 'stone' }]);
+});

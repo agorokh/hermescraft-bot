@@ -167,6 +167,22 @@ test('object ownership and recipients do not become unresolved builder subjects'
   assert.equal(checkBuildClaim('I built your wall for you.', 'Steve', records).allow, true);
 });
 
+test('recognized nominal actor slots retain unresolved identity through result ellipsis', () => {
+  const records = { Steve: record('Steve', 'wall', 4) };
+  for (const subject of ['he', 'she', 'you', 'they', 'we', 'it']) {
+    for (const join of [' and ', ', ']) {
+      const message = `I built the wall${join}${subject}.`;
+      assert.equal(checkBuildClaim(message, 'Steve', records).allow, false, message);
+    }
+    for (const first of [`${subject} has not built the wall`, `${subject} will have built the wall`, `${subject} is ready`]) {
+      const message = `${first} and placed 4 blocks.`;
+      assert.equal(checkBuildClaim(message, 'Steve', records).allow, false, message);
+    }
+    assert.equal(checkBuildClaim(`${subject} has not built the wall and I placed 4 blocks.`, 'Steve', records).allow, true,
+      'an explicit resolved actor resets inherited argument coverage');
+  }
+});
+
 test('all frozen forty body decisions retain their labeled truth without editing the corpus', () => {
   const { cases } = JSON.parse(readFileSync(new URL('./fixtures/build_claims_cases.json', import.meta.url), 'utf8'));
   const byId = new Map(cases.map(c => [c.id, c]));

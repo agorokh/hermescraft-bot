@@ -78,19 +78,21 @@ function independentNonResult(text) {
   return auxiliaries > 0 && tokens.length > 0 && !PRONOUN_SUBJECTS.has(tokens[0]) && !DETERMINERS.has(tokens[0]);
 }
 
+function resolvedActorArguments(text) {
+  return text.split(/\band\b/).every(part => {
+    const subject = words(part);
+    // A determiner+noun is an object subject, not a claim about who built
+    // it. Only bare actor slots need a resolved personal identity here.
+    return subject.length !== 1 || !PRONOUN_SUBJECTS.has(subject[0])
+      || RESOLVED_ACTOR_SUBJECTS.has(subject[0]);
+  });
+}
+
 function coveredSubject(prefix) {
   const tokens = words(prefix);
   while (AUXILIARIES.has(tokens.at(-1)) || ['just', 'already', 'now'].includes(tokens.at(-1))) tokens.pop();
   if (!tokens.length || (tokens.length === 1 && tokens[0] === 'all')) return true;
-  if (subjectPhrase(tokens.join(' '), true)) {
-    return tokens.join(' ').split(/\band\b/).every(part => {
-      const subject = words(part);
-      // A determiner+noun is an object subject, not a claim about who built
-      // it. Only bare actor subjects need a resolved personal identity here.
-      return subject.length !== 1 || !PRONOUN_SUBJECTS.has(subject[0])
-        || RESOLVED_ACTOR_SUBJECTS.has(subject[0]);
-    });
-  }
+  if (subjectPhrase(tokens.join(' '), true)) return resolvedActorArguments(tokens.join(' '));
   // A fronted imperative object may have a relative actor subject. Its object
   // and subject are explicit; an arbitrary unknown actor cannot use this form.
   if (tokens[0] === 'go' && RESOLVED_ACTOR_SUBJECTS.has(tokens.at(-1))) {
@@ -155,21 +157,30 @@ function propositions(message) {
         const startsPredicate = new RegExp(RESULT.source, 'i').exec(fragment)?.index === 0;
         const context = !pending.length && (startsPredicate || AUXILIARIES.has(words(fragment)[0]))
           ? coordinated.at(-1) || prior : null;
-        coordinated.push({ text: [...pending, fragment].join(' and '), context });
+        coordinated.push({ text: [...pending, fragment].join(' and '), context,
+          argumentCoverage: pending.every(resolvedActorArguments) });
         pending = [];
       } else if (subjectPhrase(fragment, true)) pending.push(fragment);
       else if (!independentNonResult(fragment)) uncovered.push(fragment);
     }
     // A trailing nominal conjunct shares the preceding result predicate.
-    if (pending.length && coordinated.length) coordinated.at(-1).text += ` and ${pending.join(' and ')}`;
+    if (pending.length && coordinated.length) {
+      coordinated.at(-1).text += ` and ${pending.join(' and ')}`;
+      coordinated.at(-1).argumentCoverage &&= pending.every(resolvedActorArguments);
+    }
     spans.push(...coordinated);
     prior = coordinated.at(-1) || prior;
   }
   const claims = [];
   for (const span of spans) {
     const { text } = span;
-    if (!OBJECT.test(text) && !/\b(all done|finished|completed)\b/.test(text) && !span.context) continue;
     const predicates = [...text.matchAll(new RegExp(RESULT.source, 'gi'))];
+    // Resolve every recognized actor slot, even on a negative/future span:
+    // argument identity can be inherited by a later affirmative predicate.
+    span.argumentCoverage &&= predicates.every(predicate => coveredSubject(text.slice(0, predicate.index)));
+    let argumentCoverage = true;
+    for (let context = span; context; context = context.context) argumentCoverage &&= context.argumentCoverage !== false;
+    if (!OBJECT.test(text) && !/\b(all done|finished|completed)\b/.test(text) && !span.context) continue;
     for (let i = 0; i < predicates.length; i++) {
       const predicate = predicates[i];
       if (directNonResult(text.slice(0, predicate.index))) continue;
@@ -178,7 +189,7 @@ function propositions(message) {
       const quantities = quantityArguments(text);
       const quantifiedAction = /^(?:got|placed|built|made|put up)\b/.test(local)
         && ((quantities.ratios?.length || quantities.counts?.length) > 0);
-      claims.push({ span, ...quantities, invalid: quantities.invalid || !coveredSubject(text.slice(0, predicate.index)), completion: !quantifiedAction });
+      claims.push({ span, ...quantities, invalid: quantities.invalid || !argumentCoverage, completion: !quantifiedAction });
     }
   }
   if (claims.length && uncovered.length) claims.push({ invalid: true });

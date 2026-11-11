@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Vec3 } from 'vec3';
+import http from 'node:http';
 
 const claims = await import('../lib/build_claims.js').catch(() => null);
 
@@ -78,4 +79,22 @@ test('unknown size does not promote one placement to a complete wall', async () 
   const r = await actions.place({ x: 0, y: 64, z: 0, block: 'stone' });
   assert.equal(r.build_readback.total, null);
   await assert.rejects(actions.chat({ message: 'The wall is done.' }), /suppressed/);
+});
+
+test('a miswired peer endpoint cannot vouch for another character', async () => {
+  const server = http.createServer((_req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ data: { actor: 'Steve', shape: 'wall', placed: 4, total: 4, unverified: 0 } }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const actions = { chat: async () => ({ result: 'sent' }) };
+    claims.installBuildClaimExperiment(actions, () => ({}), {
+      actor: 'Steve', getRequest: () => null,
+      peers: { Rosie: `http://127.0.0.1:${server.address().port}` },
+    });
+    await assert.rejects(actions.chat({ message: 'Rosie finished the wall.' }), /suppressed/);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });

@@ -124,7 +124,10 @@ export function installBuildClaimExperiment(actions, ensureBot, { actor, getRequ
           const url = new URL('/build-result', peers[name]);
           if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) || url.protocol !== 'http:') continue;
           const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
-          if (response.ok) records[name] = (await response.json()).data;
+          if (response.ok) {
+            const record = (await response.json()).data;
+            if (record?.actor === name) records[name] = record;
+          }
         } catch { /* missing peer evidence fails closed below */ }
       }
       const decision = checkBuildClaim(body.message, actor, records);

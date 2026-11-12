@@ -16,6 +16,20 @@ function bot() {
 }
 
 for (const router of ['regex', 'nlp']) {
+  test(`${router}: a named ore block retains its existing mining route`, async () => {
+    const b = bot();
+    b.registry.itemsByName.iron_ore = {};
+    const route = router === 'nlp' ? nlpRoute : regexRoute;
+    const result = await route(b, 'get me 8 iron ore', 'Kid', { dryRun: true });
+    assert.equal(result.action, 'collect');
+    assert.deepEqual(result.body, { block: 'iron_ore', count: 3 });
+    const gift = await route(b, 'give me 8 iron ore', 'Kid', { dryRun: true });
+    assert.deepEqual(gift.body, { player: 'Kid', item: 'iron_ore', count: 8 });
+    for (const text of ['get me ores', 'get me 8 iron moon ore']) {
+      assert.equal((await route(b, text, 'Kid', { dryRun: true })).matched, false, text);
+    }
+  });
+
   test(`${router}: preserve affected corpus descriptors from a983`, async () => {
     for (const { text, base } of baseline.filter(row => row.router === router)) {
       const b = bot();

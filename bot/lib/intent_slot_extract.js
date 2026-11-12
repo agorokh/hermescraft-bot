@@ -19,6 +19,7 @@ function isRawResourceObject(text, resourceWord = wordLooksLikeGather) {
   const words = text.match(/[a-z]+|\d+/gi) || [];
   return words.some(word => resourceWord(word)) && words.every(word =>
     resourceWord(word)
+      || (resourceWord === wordLooksLikeOre && /^ores?$/i.test(word))
       || /^(?:\d+|some|a|few|of|like|bunch|stack|million|lot+s|please|pls|rn|lol)$/.test(collapseKidStretch(word.toLowerCase())));
 }
 

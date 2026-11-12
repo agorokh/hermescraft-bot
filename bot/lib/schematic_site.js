@@ -83,7 +83,9 @@ export function validateSchematicSite({ blockAt, footprint, height, origin, occu
   return { ok: true, origin: { x, y: baseY, z } };
 }
 
-export function findNearbySchematicSite({ blockAt, footprint, height, anchor, occupied = [], radius = 8 }) {
+// A crowded starter island can have its first clear footprint just beyond eight
+// blocks. Search up to one chunk away, retaining every support/clearance check.
+export function findNearbySchematicSite({ blockAt, footprint, height, anchor, occupied = [], radius = 16 }) {
   if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isFinite)) {
     return denied('anchor', 'the player position is unavailable');
   }

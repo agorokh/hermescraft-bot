@@ -470,6 +470,9 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   function consider(child, guest = false) {
     if (!running || !isFollowCandidate(child, me, candidateOpts)) return;
     if (!isOnline(child)) return;
+    // Existing ownership can stay alive during requested work, but do not
+    // reserve another player (or start a guest visit) that we cannot serve.
+    if (isBusy()) return;
     // One player per character. Busy means "has a player", online or not: during
     // the leave grace the player is briefly absent, and taking a second one then
     // would orphan the first claim.

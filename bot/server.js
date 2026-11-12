@@ -734,6 +734,31 @@ function getMemoryHints(limit = 4) {
 }
 
 // Handle incoming chat message with routing
+function installActionOwnership(actions, getBot) {
+  for (const [name, action] of Object.entries(actions)) {
+    if (typeof action !== 'function' || action._hc_action_ownership_wrapped) continue;
+    const wrapped = async function (...args) {
+      // Capture on invocation: registration survives reconnect, while an
+      // in-flight action must release only its original connection.
+      const owner = getBot();
+      if (owner) owner._hc_intent_action_depth = (owner._hc_intent_action_depth || 0) + 1;
+      try {
+        return await action.apply(this, args);
+      } finally {
+        if (owner) owner._hc_intent_action_depth = Math.max(0, (owner._hc_intent_action_depth || 1) - 1);
+      }
+    };
+    // Preserve custom markers/state, including non-enumerable and symbol
+    // properties. Auto-memory registration must still recognize its wrappers.
+    const metadata = Object.getOwnPropertyDescriptors(action);
+    for (const key of ['length', 'name', 'prototype', 'arguments', 'caller', '_hc_action_ownership_wrapped']) delete metadata[key];
+    Object.defineProperties(wrapped, metadata);
+    Object.defineProperty(wrapped, '_hc_action_ownership_wrapped', { value: true });
+    actions[name] = wrapped;
+  }
+  return actions;
+}
+
 function armIntentRoutedAction(actionName) {
   if (!bot) return;
   bot._actionEpoch = (bot._actionEpoch || 0) + 1;
@@ -792,13 +817,9 @@ function runTaskVisibleIntentAction(actionName, actionBody) {
 
 function runIntentRoutedAction(actionName, actionBody) {
   armIntentRoutedAction(actionName);
-  bot._hc_intent_action_depth = (bot._hc_intent_action_depth || 0) + 1;
-  const runner = TASK_VISIBLE_INTENT_ACTIONS.has(actionName)
+  return TASK_VISIBLE_INTENT_ACTIONS.has(actionName)
     ? runTaskVisibleIntentAction(actionName, actionBody)
     : ACTIONS[actionName](actionBody);
-  return runner.finally(() => {
-    bot._hc_intent_action_depth = Math.max(0, (bot._hc_intent_action_depth || 1) - 1);
-  });
 }
 
 function intentRouterOutcomeFailed(actionName, result) {
@@ -1422,6 +1443,10 @@ async function createBot() {
         log('high-level skills registered: place_near_player, give_to_player, build_tower, light_area, follow_player_v2 + auto-memory wrappers on 8 marquee verbs (#68)');
       } catch (e) {
         log(`skill registration failed: ${e.message}`);
+      } finally {
+        // Skill registration replaces some functions on each spawn. Wrap
+        // those fresh functions; unchanged core/auto-memory wrappers stay put.
+        installActionOwnership(ACTIONS, () => bot);
       }
       try {
         if (_bark_tear_down) _bark_tear_down();
@@ -1455,11 +1480,7 @@ async function createBot() {
       try {
         if (_follow_tear_down) _follow_tear_down();
         _follow_tear_down = installFollowOnJoin(thisBot, log, {
-          isKidTaskActive: () => !!(
-            thisBot.interrupt_code
-            || currentTask?.status === 'running'
-            || (thisBot._hc_intent_action_depth || 0) > 0
-          ),
+          isKidTaskActive: () => currentTask?.status === 'running',
         });
         _follow_owner = thisBot;
       } catch (e) {
@@ -4612,17 +4633,7 @@ const httpServer = http.createServer(async (req, res) => {
       } else if (bot) {
         armIntentRoutedAction(actionName);
       }
-      // Synchronous /action routes can await navigation or item handoffs too.
-      // Hold idle-loop ownership until the await settles, including errors.
-      // Reconnect may replace `bot` in the meantime; release this connection.
-      const actionBot = bot;
-      if (actionBot) actionBot._hc_intent_action_depth = (actionBot._hc_intent_action_depth || 0) + 1;
-      let result;
-      try {
-        result = await actionFn(body);
-      } finally {
-        if (actionBot) actionBot._hc_intent_action_depth = Math.max(0, (actionBot._hc_intent_action_depth || 1) - 1);
-      }
+      const result = await actionFn(body);
       actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
       if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();
       return respond(res, 200, { ok: true, ...result, state: briefState() });

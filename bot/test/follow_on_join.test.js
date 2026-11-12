@@ -656,9 +656,12 @@ test('requested tasks and stop suppress arrival and camera correction without lo
   for (const visible of [true, false]) {
     const bot = clearanceBot();
     if (!visible) { delete bot.players.KidOne.entity; delete bot.entities[3]; }
-    let busy = true;
+    let busy = false;
     await installedClearance(bot, async (dir) => {
       assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+      busy = true;
+      bot.sent.length = 0;
+      await wait(100);
       assert.deepEqual(bot.sent, [], 'active requested task owns movement');
       busy = false;
       bot.interrupt_code = true;
@@ -755,27 +758,204 @@ test('an off-centre visible companion remains still while the player looks past 
 // Execute the production synchronous action route, following the extraction
 // pattern in build_claims_wiring.test.js. No listener or Minecraft is started.
 const serverSource = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+function actionOwnershipSource() {
+  const start = serverSource.indexOf('function installActionOwnership(');
+  // On the red baseline there is no shared installer; direct dispatch remains
+  // exactly as production runs it, so behavioral assertions expose the gap.
+  return start < 0 ? 'function installActionOwnership() {}'
+    : serverSource.slice(start, serverSource.indexOf('\nfunction armIntentRoutedAction', start));
+}
+
 function synchronousActionHarness(initialBot, ACTIONS) {
   const armStart = serverSource.indexOf('function armIntentRoutedAction(');
   const armSource = serverSource.slice(armStart, serverSource.indexOf('\nfunction isActionEpochCurrent', armStart));
   const routeStart = serverSource.indexOf('const actionName = actionMatch[1];', serverSource.indexOf('// Synchronous action:'));
   const routeSource = serverSource.slice(routeStart, serverSource.indexOf('\n    }\n\n    respond(res, 404', routeStart));
+  const intentStart = serverSource.indexOf('function runIntentRoutedAction(');
+  const intentSource = serverSource.slice(intentStart, serverSource.indexOf('\nfunction intentRouterOutcomeFailed', intentStart));
+  const taskStart = serverSource.indexOf('const actionName = taskMatch[1];');
+  const taskSource = serverSource.slice(taskStart, serverSource.indexOf('\n      }\n\n      // Synchronous action:', taskStart));
   return new Function('initialBot', 'ACTIONS', `
     let bot = initialBot;
+    let currentTask = null;
+    const TASK_VISIBLE_INTENT_ACTIONS = new Set();
     const actionHistory = [], MAX_ACTION_HISTORY = 40;
     const briefState = () => ({});
     const respond = (_res, status, payload) => ({ status, payload });
+    ${actionOwnershipSource()}
     ${armSource}
+    ${intentSource}
+    installActionOwnership(ACTIONS, () => bot);
     return {
       handle: async (name, body = {}) => {
         const actionMatch = ['', name], res = {};
         ${routeSource}
       },
+      intent: runIntentRoutedAction,
+      task: async (name, body = {}) => {
+        const taskMatch = ['', name], res = {};
+        ${taskSource}
+      },
+      dispatch: (name, body) => ACTIONS[name](body),
+      actions: ACTIONS,
+      reinstallOwnership: () => installActionOwnership(ACTIONS, () => bot),
       replaceBot: (next) => { bot = next; },
       history: actionHistory,
     };
   `)(initialBot, ACTIONS);
 }
+
+test('an idle tick retries a busy-deferred home return after the player leaves', async () => {
+  const bot = clearanceBot();
+  let busy = false;
+  await installedClearance(bot, async (dir) => {
+    assert.equal(bot._hc_follow.child(), 'KidOne');
+    bot._hc_world = 'bskyblock_world';
+    bot.entity.position = new Vec3(30.5, 64, 10.5);
+    busy = true;
+    bot.sent.length = 0;
+    delete bot.players.KidOne;
+    await wait(300);
+    assert.equal(bot._hc_follow.child(), null);
+    assert.equal(readClaim(dir, 'KidOne'), null, 'release still clears the departed primary');
+    assert.ok(readHome(dir, 'Rosie'), 'saved return remains on disk while busy');
+    assert.deepEqual(bot.sent, [], 'busy ownership defers the return');
+    busy = false;
+    await wait(120);
+    assert.ok(bot.sent.includes('/execute in minecraft:overworld run minecraft:tp @s 10.50 64.00 10.50'), 'the existing idle branch retries the return');
+    bot._hc_world = 'overworld';
+    bot.entity.position = new Vec3(10.5, 64, 10.5);
+    await wait(100);
+    assert.equal(readHome(dir, 'Rosie'), null, 'only observed home arrival clears the return');
+  }, { isKidTaskActive: () => busy });
+});
+
+test('a stopped companion leaves a new primary claim available to an idle sibling', async () => {
+  const dir = tmpDir(), rosie = clearanceBot(), steve = clearanceBot('Steve');
+  rosie.interrupt_code = true;
+  await installedClearance(rosie, async () => {
+    await installedClearance(steve, async () => {
+      assert.equal(readClaim(dir, 'KidOne')?.character, 'Steve', 'the stopped companion cannot hold a primary it will not serve');
+      assert.equal(rosie._hc_follow.child(), null);
+      assert.deepEqual(rosie.sent, []);
+    }, { claimDir: dir });
+  }, { claimDir: dir });
+});
+
+test('a busy companion starts no new guest visit until it becomes idle', async () => {
+  const dir = tmpDir(), steve = clearanceBot('Steve');
+  tryClaim(dir, 'KidOne', 'Rosie');
+  let busy = true;
+  await installedClearance(steve, async () => {
+    assert.equal(steve._hc_follow.child(), null, 'requested work wins over a new guest visit');
+    assert.equal(readHome(dir, 'Steve'), null, 'no guest breadcrumb or claim is acquired while busy');
+    busy = false;
+    await wait(160);
+    assert.equal(steve._hc_follow.child(), 'KidOne', 'the existing idle rescan starts the deferred visit');
+    assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+  }, { claimDir: dir, isKidTaskActive: () => busy });
+});
+
+const questSource = fs.readFileSync(new URL('../lib/quests.js', import.meta.url), 'utf8');
+const questStart = questSource.indexOf('async function executeAction(');
+const dispatchQuestAction = new Function(`return ${questSource.slice(questStart, questSource.indexOf('\nfunction questOwnerMatches', questStart))}`)();
+
+test('production quest dispatch owns the real give skill throughout its goal-free pickup wait', async () => {
+  const bot = clearanceBot();
+  bot.inventory = { items: () => [{ name: 'oak_planks', type: 17, count: 8 }] };
+  bot.pathfinder = { goal: null, goto: async () => {} };
+  bot.lookAt = async () => {};
+  bot.toss = async () => {};
+  const route = synchronousActionHarness(bot, registerHighLevelSkills({}, () => bot));
+  await installedClearance(bot, async () => {
+    bot.sent.length = 0;
+    const pending = dispatchQuestAction(route.actions, bot, { kind: 'give_to_player', player: 'KidOne', item: 'oak_planks', count: 8 }, {});
+    try {
+      await wait(440);
+      assert.equal(bot.pathfinder.goal, null, 'the pickup wait has no pathfinder goal');
+      assert.deepEqual(bot.sent, [], 'quest gift must not be interrupted by idle camera teleports');
+      assert.equal(bot._hc_intent_action_depth, 1);
+      const result = await pending;
+      assert.equal(result.item_transfer.tossed, 8);
+      assert.equal(result.item_transfer.pickup_confirmed, false);
+      assert.equal(bot._hc_intent_action_depth, 0);
+    } finally { await pending; }
+  });
+});
+
+test('shared action ownership covers direct, quest, intent, task and HTTP entrypoints exactly once', async () => {
+  for (const entry of ['direct', 'quest', 'intent', 'task', 'http']) {
+    const bot = clearanceBot(), done = deferred();
+    const route = synchronousActionHarness(bot, { goto: async () => { await done.promise; return { result: 'arrived' }; } });
+    const invoke = {
+      direct: () => route.dispatch('goto', {}),
+      quest: () => dispatchQuestAction(route.actions, bot, { kind: 'goto', x: 1, y: 64, z: 1 }, {}),
+      intent: () => route.intent('goto', {}),
+      task: () => route.task('goto', {}),
+      http: () => route.handle('goto', {}),
+    }[entry];
+    const pending = invoke();
+    try {
+      assert.equal(bot._hc_intent_action_depth, 1, `${entry} holds one shared action owner`);
+    } finally { done.resolve(); await pending; await wait(0); }
+    assert.equal(bot._hc_intent_action_depth, 0, `${entry} releases shared ownership`);
+  }
+});
+
+test('the shared installer preserves function metadata, this binding and current-connection ownership', async () => {
+  const oldBot = clearanceBot(), newBot = clearanceBot();
+  const key = Symbol('metadata'), state = {};
+  const action = async function () { return { depth: this.bot._hc_intent_action_depth, state: this.state }; };
+  action._hc_automem_wrapped = true;
+  Object.defineProperty(action, '_buildClaimState', { value: state, enumerable: false });
+  action[key] = 'symbol metadata';
+  const route = synchronousActionHarness(oldBot, { inspect: action });
+  const wrapped = route.actions.inspect;
+  route.reinstallOwnership();
+  assert.equal(route.actions.inspect, wrapped, 'reinstall does not nest existing ownership wrappers');
+  assert.equal(wrapped._hc_automem_wrapped, true);
+  assert.equal(wrapped._buildClaimState, state);
+  assert.equal(wrapped[key], 'symbol metadata');
+  route.replaceBot(newBot);
+  assert.deepEqual(await wrapped.call({ bot: newBot, state }), { depth: 1, state });
+  assert.equal(newBot._hc_intent_action_depth, 0);
+  assert.equal(oldBot._hc_intent_action_depth, undefined, 'the installer does not capture an old connection');
+});
+
+test('skill re-registration preserves unchanged automemory wrappers and records each fact once', async () => {
+  const bot = clearanceBot(), facts = [];
+  const sourceStart = serverSource.indexOf('        registerHighLevelSkills(ACTIONS, ensureBot);');
+  const sourceEnd = serverSource.indexOf("        log('high-level skills registered:", sourceStart);
+  const register = new Function('ACTIONS', 'ensureBot', 'registerHighLevelSkills', 'autoRememberFact', `
+    const BUILD_CLAIMS_EXPERIMENT = false;
+    ${serverSource.slice(sourceStart, sourceEnd)}
+  `);
+  const actions = { find_blocks: async () => ({ result: 'Found stone', observed_depth: bot._hc_intent_action_depth, locations: [{ x: 1, y: 64, z: 2 }] }) };
+  // Preserve production ordering if core actions were wrapped at module boot,
+  // before spawn adds auto-memory wrappers around unchanged core methods.
+  const bootStart = serverSource.indexOf('// Core actions are callable before');
+  if (bootStart >= 0) {
+    const bootSource = serverSource.slice(bootStart, serverSource.indexOf('\nfunction parseBody', bootStart));
+    new Function('ACTIONS', 'bot', `${actionOwnershipSource()}\n${bootSource}`)(actions, bot);
+  }
+  register(actions, () => bot, registerHighLevelSkills, (fact) => facts.push(fact));
+  const route = synchronousActionHarness(bot, actions);
+  const oldFind = actions.find_blocks, oldGive = actions.give_to_player;
+  await actions.find_blocks({ block: 'stone' });
+  register(actions, () => bot, registerHighLevelSkills, (fact) => facts.push(fact));
+  route.reinstallOwnership();
+  assert.equal(actions.find_blocks, oldFind, 'unchanged core methods must not gain new automemory or ownership layers');
+  assert.notEqual(actions.give_to_player, oldGive, 'fresh bound skills are wrapped after re-registration');
+  const found = await actions.find_blocks({ block: 'stone' });
+  assert.equal(found.locations.length, 1);
+  assert.equal(found.observed_depth, 1, 'first-spawn auto-memory registration must not nest ownership around owned core methods');
+  assert.equal(bot._hc_intent_action_depth, 0);
+  assert.deepEqual(facts, [
+    'Found stone vein at 1,64,2 (1 block visible).',
+    'Found stone vein at 1,64,2 (1 block visible).',
+  ]);
+  assert.equal(actions.give_to_player._hc_automem_wrapped, true);
+});
 
 function deferred() {
   let resolve, reject;

@@ -420,12 +420,20 @@ async function give_to_player(bot, { player, item, count = 1 }) {
 
   // Pathfind close.
   const p = entity.position;
+  const goal = new goals.GoalNear(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), 2);
+  let navigationTimer;
   try {
-    const goal = new goals.GoalNear(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z), 2);
-    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000));
+    const timeout = new Promise((_, rej) => { navigationTimer = setTimeout(() => rej(new Error('timeout')), 10000); });
     await Promise.race([bot.pathfinder.goto(goal), timeout]);
   } catch (e) {
     // Continue — toss anyway.
+  } finally {
+    clearTimeout(navigationTimer);
+    // An external timeout does not cancel Mineflayer's goal. End this gift's
+    // navigation before the pickup wait; a newer request owns any replacement.
+    if (bot.pathfinder.goal === goal) {
+      try { bot.pathfinder.setGoal(null); } catch { /* disconnected: best effort */ }
+    }
   }
   if (skillWasStopped(bot, stopGen)) return { result: `give_to_player interrupted` };
 

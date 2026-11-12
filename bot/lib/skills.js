@@ -127,7 +127,12 @@ function sendServerCommand(command) {
 const STATE_SUFFIX_PATTERN = '\\[]|\\[[a-z0-9_]+=[a-z0-9_]+(,[a-z0-9_]+=[a-z0-9_]+)*\\]';
 const BLOCK_NAME_RE = new RegExp(`^[a-z0-9_.-]+:[a-z0-9_./-]+(${STATE_SUFFIX_PATTERN})?$`);
 
-export function safeSetblockCommand(x, y, z, block) {
+function isDoorHalf(block) {
+  return normalizeBlockBaseName(block).endsWith('_door')
+    && /(?:\[|,)half=(?:upper|lower)(?:,|\])/.test(normalizeBlockName(block));
+}
+
+export function safeSetblockCommand(x, y, z, block, { strict = false } = {}) {
   const rawCoords = [x, y, z];
   if (rawCoords.some((value) => value == null || value === '' || typeof value === 'boolean')) {
     throw new Error('Unsafe setblock command arguments');
@@ -144,11 +149,13 @@ export function safeSetblockCommand(x, y, z, block) {
   if (!coords.every(Number.isInteger) || !BLOCK_NAME_RE.test(blockName)) {
     throw new Error('Unsafe setblock command arguments');
   }
-  return `setblock ${coords[0]} ${coords[1]} ${coords[2]} ${blockName}`;
+  return `setblock ${coords[0]} ${coords[1]} ${coords[2]} ${blockName}${strict === true ? ' strict' : ''}`;
 }
 
 function sendSetblockCommand(bot, x, y, z, block) {
-  const command = safeSetblockCommand(x, y, z, block);
+  // Java 1.21.5+ strict placement preserves an explicit door half while its
+  // matching half is assembled. Ordinary blocks still use normal updates.
+  const command = safeSetblockCommand(x, y, z, block, { strict: isDoorHalf(block) });
   const sent = sendServerCommand(command);
   if (sent === true) return 'console_fifo';
   if (process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1'
@@ -1099,6 +1106,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     if (a[0] !== b[0]) return a[0] - b[0];
     return a[2] - b[2];
   });
+  // Finish all normal wall/roof updates before assembling the two door halves.
+  // Stable partition retains lower-before-upper order within the final group.
+  if (useChatCommand) sorted.sort((a, b) => Number(isDoorHalf(a[3])) - Number(isDoorHalf(b[3])));
   for (const [dx, dy, dz, block] of sorted) {
     if (skillWasStopped(bot, stopGen)) break;
     // Skip explicit air cells — schematic authors sometimes encode them as

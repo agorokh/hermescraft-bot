@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { Vec3 } from 'vec3';
+import minecraftData from 'minecraft-data';
+import pathfinderPkg from 'mineflayer-pathfinder';
 import { registerHighLevelSkills } from '../lib/skills.js';
 import { actionOutcomeFailed, publicActionResult } from '../lib/action_outcome.js';
 
@@ -75,4 +78,89 @@ test('invalid requested quantities cannot toss items', async () => {
     assert.deepEqual(bot.tosses, []);
     assert.equal(actionOutcomeFailed(result), true);
   }
+});
+
+function pathfinderGiftBot(opts = {}) {
+  const bot = new GiftBot(opts);
+  bot.registry = minecraftData('1.21.4');
+  bot.entity.position = new Vec3(0, 64, 0);
+  bot.entity.velocity = new Vec3(0, 0, 0);
+  bot.players.Arsenyzzz.entity.position = new Vec3(4, 64, 0);
+  bot.entities = { 2: bot.players.Arsenyzzz.entity };
+  bot.clearControlStates = () => {};
+  pathfinderPkg.pathfinder(bot);
+  return bot;
+}
+
+test('a no-path gift releases its own installed navigation goal before tossing', async () => {
+  const bot = pathfinderGiftBot({ pickup: false });
+  const toss = bot.toss;
+  let goalWhenTossed;
+  bot.toss = async (...args) => { goalWhenTossed = bot.pathfinder.goal; return toss(...args); };
+  const pending = registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Arsenyzzz', item: 'oak_planks', count: 8 });
+  assert.ok(bot.pathfinder.goal instanceof pathfinderPkg.goals.GoalNear);
+  bot.emit('path_update', { path: [], status: 'noPath' });
+  try {
+    const result = await pending;
+    assert.equal(goalWhenTossed, null, 'navigation ownership ends before the pickup wait');
+    assert.equal(bot.pathfinder.goal, null, 'completed gift leaves no idle-blocking static goal');
+    assert.deepEqual(result.item_transfer, { item: 'oak_planks', requested: 8, tossed: 8, pickup_confirmed: false });
+  } finally { bot.pathfinder.setGoal(null); }
+});
+
+test('a real ten-second navigation timeout releases the gift goal and retains its transfer receipt', async () => {
+  const bot = pathfinderGiftBot();
+  const pending = registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Arsenyzzz', item: 'oak_planks', count: 8 });
+  assert.ok(bot.pathfinder.goal instanceof pathfinderPkg.goals.GoalNear);
+  // No physics/path result: the real skill's ten-second Promise.race expires.
+  try {
+    const result = await pending;
+    assert.equal(bot.pathfinder.goal, null, 'the external timeout must cancel its exact surviving goal');
+    assert.deepEqual(result.item_transfer, { item: 'oak_planks', requested: 8, tossed: 8, pickup_confirmed: true });
+  } finally { bot.pathfinder.setGoal(null); }
+});
+
+for (const kind of ['static', 'dynamic follow']) {
+  test(`gift navigation cleanup preserves a newer ${kind} goal`, async () => {
+    const bot = pathfinderGiftBot();
+    const pending = registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Arsenyzzz', item: 'oak_planks', count: 8 });
+    const replacement = kind === 'static'
+      ? new pathfinderPkg.goals.GoalNear(9, 64, 9, 2)
+      : new pathfinderPkg.goals.GoalFollow(bot.players.Arsenyzzz.entity, 3);
+    bot.pathfinder.setGoal(replacement, kind !== 'static');
+    try {
+      const result = await pending;
+      assert.equal(bot.pathfinder.goal, replacement, 'only the gift-owned object may be cleared');
+      assert.equal(result.item_transfer.tossed, 8);
+    } finally { bot.pathfinder.setGoal(null); }
+  });
+}
+
+test('stopping during navigation retains stop and performs no gift', async () => {
+  const bot = pathfinderGiftBot();
+  const pending = registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Arsenyzzz', item: 'oak_planks', count: 8 });
+  bot._stopGeneration = 1;
+  bot.interrupt_code = true;
+  bot.pathfinder.setGoal(null);
+  const result = await pending;
+  assert.match(result.result, /interrupted/);
+  assert.equal(bot.interrupt_code, true);
+  assert.equal(bot.pathfinder.goal, null);
+  assert.deepEqual(bot.tosses, []);
+});
+
+test('navigation cleanup stays with the original bot across a connection replacement', async () => {
+  const original = pathfinderGiftBot(), replacement = pathfinderGiftBot();
+  let current = original;
+  const actions = registerHighLevelSkills({}, () => current);
+  const pending = actions.give_to_player({ player: 'Arsenyzzz', item: 'oak_planks', count: 8 });
+  const newGoal = new pathfinderPkg.goals.GoalFollow(replacement.players.Arsenyzzz.entity, 3);
+  replacement.pathfinder.setGoal(newGoal, true);
+  current = replacement;
+  original.emit('path_update', { path: [], status: 'noPath' });
+  try {
+    await pending;
+    assert.equal(original.pathfinder.goal, null);
+    assert.equal(replacement.pathfinder.goal, newGoal);
+  } finally { original.pathfinder.setGoal(null); replacement.pathfinder.setGoal(null); }
 });

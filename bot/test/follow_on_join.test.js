@@ -6,6 +6,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
 import pathfinderPkg from 'mineflayer-pathfinder';
+import minecraftData from 'minecraft-data';
 import { registerHighLevelSkills } from '../lib/skills.js';
 import { findPlayerEntity, normalizePlayerName } from '../lib/player_utils.js';
 import {
@@ -862,14 +863,21 @@ const dispatchQuestAction = new Function(`return ${questSource.slice(questStart,
 
 test('production quest dispatch owns the real give skill throughout its goal-free pickup wait', async () => {
   const bot = clearanceBot();
+  bot.players.KidOne.entity.position = new Vec3(14.5, 64, 10.5);
+  bot.players.KidOne.entity.yaw = Math.PI / 2;
+  bot.registry = minecraftData('1.21.4');
+  bot.entity.velocity = new Vec3(0, 0, 0);
+  bot.clearControlStates = () => {};
   bot.inventory = { items: () => [{ name: 'oak_planks', type: 17, count: 8 }] };
-  bot.pathfinder = { goal: null, goto: async () => {} };
+  pathfinderPkg.pathfinder(bot);
   bot.lookAt = async () => {};
   bot.toss = async () => {};
   const route = synchronousActionHarness(bot, registerHighLevelSkills({}, () => bot));
   await installedClearance(bot, async () => {
     bot.sent.length = 0;
     const pending = dispatchQuestAction(route.actions, bot, { kind: 'give_to_player', player: 'KidOne', item: 'oak_planks', count: 8 }, {});
+    assert.ok(bot.pathfinder.goal instanceof pathfinderPkg.goals.GoalNear);
+    bot.emit('path_update', { path: [], status: 'noPath' });
     try {
       await wait(440);
       assert.equal(bot.pathfinder.goal, null, 'the pickup wait has no pathfinder goal');
@@ -879,7 +887,9 @@ test('production quest dispatch owns the real give skill throughout its goal-fre
       assert.equal(result.item_transfer.tossed, 8);
       assert.equal(result.item_transfer.pickup_confirmed, false);
       assert.equal(bot._hc_intent_action_depth, 0);
-    } finally { await pending; }
+      await wait(120);
+      assert.ok(localTeleports(bot).length > 0, 'idle clearance resumes after the unconfirmed gift completes');
+    } finally { await pending; bot.pathfinder.setGoal(null); }
   });
 });
 

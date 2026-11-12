@@ -4612,7 +4612,17 @@ const httpServer = http.createServer(async (req, res) => {
       } else if (bot) {
         armIntentRoutedAction(actionName);
       }
-      const result = await actionFn(body);
+      // Synchronous /action routes can await navigation or item handoffs too.
+      // Hold idle-loop ownership until the await settles, including errors.
+      // Reconnect may replace `bot` in the meantime; release this connection.
+      const actionBot = bot;
+      if (actionBot) actionBot._hc_intent_action_depth = (actionBot._hc_intent_action_depth || 0) + 1;
+      let result;
+      try {
+        result = await actionFn(body);
+      } finally {
+        if (actionBot) actionBot._hc_intent_action_depth = Math.max(0, (actionBot._hc_intent_action_depth || 1) - 1);
+      }
       actionHistory.push({ action: actionName, status: 'done', time: Date.now() });
       if (actionHistory.length > MAX_ACTION_HISTORY) actionHistory.shift();
       return respond(res, 200, { ok: true, ...result, state: briefState() });

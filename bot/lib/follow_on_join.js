@@ -408,7 +408,11 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   const me = bot.username;
   const stagger = rosterIndex(me, env) * cfg.claimStaggerMs;
   const side = rosterIndex(me, env) % 2 === 0 ? 1 : -1;
-  const isBusy = () => !!(bot.interrupt_code || (bot._hc_intent_action_depth || 0) > 0 || opts.isKidTaskActive?.());
+  // Dynamic requested follow goals outlive their HTTP action promise and can
+  // be stationary within the follow radius. A goal, not isMoving(), owns that
+  // movement until the pathfinder clears it or a stop cancels it.
+  const isBusy = () => !!(bot.interrupt_code || (bot._hc_intent_action_depth || 0) > 0
+    || bot.pathfinder?.goal || opts.isKidTaskActive?.());
   const logFollow = (msg) => log(`[follow] ${msg}`);
 
   let running = true;

@@ -5,6 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { Vec3 } from 'vec3';
+import pathfinderPkg from 'mineflayer-pathfinder';
+import { registerHighLevelSkills } from '../lib/skills.js';
+import { findPlayerEntity, normalizePlayerName } from '../lib/player_utils.js';
 import {
   FOLLOW_DEFAULTS,
   followEnabled,
@@ -748,3 +751,170 @@ test('an off-centre visible companion remains still while the player looks past 
     assert.deepEqual(bot.sent, [], 'a companion near the edge of view is welcome to stay visible');
   });
 });
+
+// Execute the production synchronous action route, following the extraction
+// pattern in build_claims_wiring.test.js. No listener or Minecraft is started.
+const serverSource = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+function synchronousActionHarness(initialBot, ACTIONS) {
+  const armStart = serverSource.indexOf('function armIntentRoutedAction(');
+  const armSource = serverSource.slice(armStart, serverSource.indexOf('\nfunction isActionEpochCurrent', armStart));
+  const routeStart = serverSource.indexOf('const actionName = actionMatch[1];', serverSource.indexOf('// Synchronous action:'));
+  const routeSource = serverSource.slice(routeStart, serverSource.indexOf('\n    }\n\n    respond(res, 404', routeStart));
+  return new Function('initialBot', 'ACTIONS', `
+    let bot = initialBot;
+    const actionHistory = [], MAX_ACTION_HISTORY = 40;
+    const briefState = () => ({});
+    const respond = (_res, status, payload) => ({ status, payload });
+    ${armSource}
+    return {
+      handle: async (name, body = {}) => {
+        const actionMatch = ['', name], res = {};
+        ${routeSource}
+      },
+      replaceBot: (next) => { bot = next; },
+      history: actionHistory,
+    };
+  `)(initialBot, ACTIONS);
+}
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+for (const action of ['goto', 'give_to_player']) {
+  test(`synchronous ${action} owns movement until the production route finishes awaiting it`, async () => {
+    const bot = clearanceBot();
+    const done = deferred();
+    const result = { result: `${action} complete`, detail: { preserved: true } };
+    const route = synchronousActionHarness(bot, { [action]: async () => { await done.promise; return result; } });
+    const pending = route.handle(action);
+    try {
+      await installedClearance(bot, async () => {
+        assert.deepEqual(bot.sent, [], 'idle correction cannot interrupt the requested synchronous action');
+        assert.equal(bot._hc_intent_action_depth, 1);
+        done.resolve();
+        assert.deepEqual(await pending, { status: 200, payload: { ok: true, ...result, state: {} } });
+        assert.equal(bot._hc_intent_action_depth, 0);
+        await wait(100);
+        assert.ok(localTeleports(bot).length > 0, 'idle clearance resumes after the action settles');
+      });
+    } finally { done.resolve(); await pending; }
+    assert.equal(bot._actionEpoch, 1, 'ownership must not re-arm or replace the action epoch');
+    assert.equal(route.history.length, 1);
+    assert.equal(route.history[0].status, 'done');
+  });
+}
+
+test('synchronous action ownership unwinds on rejection and synchronous throw without changing the error', async () => {
+  for (const syncThrow of [false, true]) {
+    const bot = clearanceBot();
+    const failure = new Error('requested action failed');
+    const done = deferred();
+    const action = syncThrow ? () => { throw failure; } : async () => { await done.promise; throw failure; };
+    const route = synchronousActionHarness(bot, { give_to_player: action });
+    const pending = route.handle('give_to_player');
+    const rejection = assert.rejects(pending, (error) => error === failure);
+    try {
+      if (!syncThrow) assert.equal(bot._hc_intent_action_depth, 1);
+    } finally { done.resolve(); await rejection; }
+    assert.equal(bot._hc_intent_action_depth, 0, 'no leaked busy depth after failure');
+    assert.deepEqual(route.history, [], 'the existing error path does not report success');
+    assert.equal(bot._actionEpoch, 1);
+  }
+});
+
+test('overlapping synchronous requests retain ownership until both finish', async () => {
+  const bot = clearanceBot(), first = deferred(), second = deferred();
+  const route = synchronousActionHarness(bot, {
+    goto: async () => { await first.promise; return { result: 'arrived' }; },
+    give_to_player: async () => { await second.promise; return { result: 'given' }; },
+  });
+  const one = route.handle('goto'), two = route.handle('give_to_player');
+  try {
+    assert.equal(bot._hc_intent_action_depth, 2);
+    first.resolve(); await one;
+    assert.equal(bot._hc_intent_action_depth, 1, 'one completion cannot release the other request');
+    second.resolve(); await two;
+    assert.equal(bot._hc_intent_action_depth, 0);
+    assert.equal(bot._actionEpoch, 2);
+  } finally { first.resolve(); second.resolve(); await Promise.all([one, two]); }
+});
+
+test('reconnecting during a synchronous request releases the original bot only', async () => {
+  const original = clearanceBot(), replacement = clearanceBot(), done = deferred();
+  replacement._hc_intent_action_depth = 7;
+  const route = synchronousActionHarness(original, { goto: async () => { await done.promise; return { result: 'arrived' }; } });
+  const pending = route.handle('goto');
+  try {
+    assert.equal(original._hc_intent_action_depth, 1);
+    route.replaceBot(replacement);
+    done.resolve(); await pending;
+    assert.equal(original._hc_intent_action_depth, 0);
+    assert.equal(replacement._hc_intent_action_depth, 7, 'a completed old request cannot decrement the new connection');
+  } finally { done.resolve(); await pending; }
+});
+
+function productionMovementAction(name, next, bot) {
+  const start = serverSource.indexOf(`  async ${name}(`);
+  const source = serverSource.slice(start, serverSource.indexOf(next, start));
+  return new Function('ensureBot', 'goals', 'findPlayerEntity', 'normalizePlayerName', 'currentTask',
+    `return ({${source}}).${name};`)(() => bot, pathfinderPkg.goals, findPlayerEntity, normalizePlayerName, null);
+}
+
+test('synchronous stop retains its stop generation, action epoch and response contracts', async () => {
+  const bot = clearanceBot();
+  bot.pathfinder = { goal: {}, setGoal(goal) { this.goal = goal; } };
+  bot.stopDigging = () => {};
+  const stop = productionMovementAction('stop', '\n  // ── Mining', bot);
+  const route = synchronousActionHarness(bot, { stop });
+  const response = await route.handle('stop');
+  assert.deepEqual(response, { status: 200, payload: { ok: true, result: 'Stopped all actions.', state: {} } });
+  assert.equal(bot._actionEpoch, 2, 'existing arm + stop epoch increments are preserved');
+  assert.equal(bot._stopGeneration, 1);
+  assert.equal(bot.interrupt_code, true);
+  assert.equal(bot.pathfinder.goal, null);
+  assert.equal(bot._hc_intent_action_depth, 0);
+});
+
+test('finishing a synchronous request after stop does not clear the stop or rewind its epoch', async () => {
+  const bot = clearanceBot(), done = deferred();
+  bot.pathfinder = { goal: {}, setGoal(goal) { this.goal = goal; } };
+  bot.stopDigging = () => {};
+  const route = synchronousActionHarness(bot, {
+    goto: async () => { await done.promise; return { result: 'interrupted' }; },
+    stop: productionMovementAction('stop', '\n  // ── Mining', bot),
+  });
+  const pending = route.handle('goto');
+  try {
+    await route.handle('stop');
+    assert.equal(bot._hc_intent_action_depth, 1, 'the pending request retains its own depth after stop returns');
+    assert.equal(bot._actionEpoch, 3);
+    done.resolve(); await pending;
+    assert.equal(bot._hc_intent_action_depth, 0);
+    assert.equal(bot.interrupt_code, true, 'completion must not resume stopped idle movement');
+    assert.equal(bot._actionEpoch, 3);
+    assert.equal(bot._stopGeneration, 1);
+  } finally { done.resolve(); await pending; }
+});
+
+for (const action of ['follow', 'follow_player_v2']) {
+  test(`requested ${action} keeps its sustained goal after returning and suppresses idle clearance`, async () => {
+    const bot = clearanceBot();
+    bot.pathfinder = { goal: null, isMoving: () => false, setGoal(goal) { this.goal = goal; } };
+    const actions = registerHighLevelSkills({}, () => bot);
+    actions.follow = productionMovementAction('follow', '\n\n  async look(', bot);
+    const route = synchronousActionHarness(bot, actions);
+    const response = await route.handle(action, { player: 'KidOne' });
+    assert.equal(response.status, 200);
+    assert.ok(bot.pathfinder.goal instanceof pathfinderPkg.goals.GoalFollow);
+    assert.match(response.payload.result, /Following KidOne/);
+    await installedClearance(bot, async () => {
+      assert.deepEqual(bot.sent, [], 'an active follow goal owns movement even while standing within its radius');
+      bot.pathfinder.setGoal(null);
+      await wait(100);
+      assert.ok(localTeleports(bot).length > 0, 'idle correction resumes once the requested goal is cleared');
+    });
+  });
+}

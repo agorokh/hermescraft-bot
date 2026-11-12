@@ -95,7 +95,9 @@ test('setblock verification ignores unrelated generic command failures', async (
     }
 
     blockAt(pos) {
-      return { name: blocks.get(`${pos.x},${pos.y},${pos.z}`) || 'air', boundingBox: 'empty' };
+      const placed = blocks.get(`${pos.x},${pos.y},${pos.z}`);
+      if (placed) return { name: placed, boundingBox: 'block' };
+      return pos.y <= 63 ? { name: 'grass_block', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' };
     }
   }
 
@@ -241,7 +243,9 @@ test('trusted setblock can use Paper console FIFO without bot chat spam', async 
     }
 
     blockAt(pos) {
-      return { name: blocks.get(`${pos.x},${pos.y},${pos.z}`) || 'air', boundingBox: 'empty' };
+      const placed = blocks.get(`${pos.x},${pos.y},${pos.z}`);
+      if (placed) return { name: placed, boundingBox: 'block' };
+      return pos.y <= 63 ? { name: 'grass_block', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' };
     }
   }
 
@@ -294,8 +298,8 @@ test('trusted setblock FIFO fails closed without bot chat fallback when no reade
       chatCommands.push(command);
     }
 
-    blockAt(_pos) {
-      return { name: 'air', boundingBox: 'empty' };
+    blockAt(pos) {
+      return pos.y <= 63 ? { name: 'grass_block', boundingBox: 'block' } : { name: 'air', boundingBox: 'empty' };
     }
   }
 

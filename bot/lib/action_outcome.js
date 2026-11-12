@@ -92,6 +92,7 @@ export function publicActionResult(action, result, opts = {}) {
     const partial = partialBuildText(text);
     if (partial) return partial;
     if (failed) {
+      if (result.site_refused) return "I need a bigger patch of clear natural ground nearby before I can build that.";
       if (/foreman rejected/i.test(text) && /missing materials/i.test(text)) {
         return "I can't build that yet - I'm missing materials.";
       }

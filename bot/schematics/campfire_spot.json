@@ -12,6 +12,6 @@
     [4, 0, 2, "oak_log"],
     [2, 0, 4, "oak_log"],
 
-    [2, 1, 2, "campfire"]
+    [2, 0, 2, "campfire"]
   ]
 }

@@ -243,6 +243,9 @@ function _playerRelativeOffset(bot, ctx, dist, side) {
 
 function _shiftAnchorBody(body, dx, dy, dz) {
   const out = { ...body };
+  if (body.auto_site) out.auto_site = {
+    x: body.auto_site.x + dx, y: body.auto_site.y + dy, z: body.auto_site.z + dz,
+  };
   if ('cx' in body || 'cy' in body || 'cz' in body) {
     out.cx = Math.floor((body.cx ?? 0) + dx);
     out.cy = Math.floor((body.cy ?? 0) + dy);
@@ -258,6 +261,7 @@ function _shiftAnchorBody(body, dx, dy, dz) {
 
 function _setAnchorBody(body, x, y, z) {
   const out = { ...body };
+  if (body.auto_site) out.auto_site = { x, y, z };
   if ('cx' in body || 'cy' in body || 'cz' in body) {
     out.cx = x;
     out.cy = y;
@@ -419,6 +423,7 @@ const DISPATCHERS = {
       y: buildY,
       z: buildZ,
     };
+    if (!isAdvancedSchematicName(name)) body.auto_site = { x: p.x, y: p.y, z: p.z };
     if (explicitY !== null && explicitY === buildY && action === 'build_schematic_advanced') {
       body.respect_explicit_base_y = true;
     }

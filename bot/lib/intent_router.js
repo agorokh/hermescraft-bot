@@ -246,6 +246,7 @@ const INTENTS = [
         y: buildY,
         z: buildZ,
       };
+      if (!isAdvancedSchematicName(name)) schemBody.auto_site = { x: p.x, y: p.y, z: p.z };
       if (explicitY !== null && explicitY === buildY && isAdvancedSchematicName(name)) {
         schemBody.respect_explicit_base_y = true;
       }

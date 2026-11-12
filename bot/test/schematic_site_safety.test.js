@@ -64,6 +64,30 @@ test('explicit ordinary build cannot enclose a player or character standing in t
   assert.deepEqual(bot.commands, []);
 });
 
+for (const actor of ['player', 'character']) {
+  test(`raised slope foundation refuses a ${actor} below the build base before any command`, async () => {
+    const bot = new WorldBot(p => p.y <= (p.x === 12 ? 67 : 63) ? ground() : air());
+    const position = { x: 10.5, y: 64, z: 10.5 };
+    if (actor === 'player') bot.players.Arsenyzzz.entity.position = position;
+    else bot.entity.position = position;
+    const result = await build(bot, { name: 'well', x: 10, y: 64, z: 10 });
+    assert.equal(result.site_refused, true);
+    assert.match(result.result, /standing in the build space/);
+    assert.deepEqual(bot.commands, []);
+  });
+}
+
+test('fixed-base recheck excludes the foundation slab, including an entity crossing its edge', () => {
+  const params = { blockAt: (x, y) => y <= (x === 12 ? 67 : 63) ? ground() : air(),
+    footprint: [3, 3], height: 4, origin: { x: 10, y: 68, z: 10 } };
+  for (const position of [{ x: 10.5, y: 64, z: 10.5 }, { x: 9.8, y: 64, z: 10.5 }]) {
+    const site = validateSchematicSite({ ...params, occupied: [position] });
+    assert.equal(site.code, 'occupied_player');
+  }
+  assert.equal(validateSchematicSite({ ...params, occupied: [{ x: 9.5, y: 64, z: 10.5 }] }).ok, true);
+  assert.equal(validateSchematicSite({ ...params, occupied: [{ x: 10.5, y: 62, z: 10.5 }] }).ok, true);
+});
+
 test('automatic well finds a fully supported nearby alternative instead of building over void', async () => {
   const bot = new WorldBot(p => p.y <= 63 && p.x >= -5 && p.x <= -1 && p.z >= -2 && p.z <= 2 ? ground() : air());
   const result = await build(bot, { name: 'well', x: 2, y: 64, z: 0,

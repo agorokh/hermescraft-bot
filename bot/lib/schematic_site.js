@@ -60,8 +60,12 @@ export function validateSchematicSite({ blockAt, footprint, height, origin, occu
   if (ground.reduce((total, gy) => total + baseY - 1 - gy, 0) > MAX_FOUNDATION_PLACEMENTS) {
     return denied('foundation_size', 'the foundation would be too large');
   }
-  if (occupied.some(p => p && p.x >= x && p.x < x + width
-    && p.z >= z && p.z < z + length && p.y + 2 > baseY && p.y < baseY + height)) {
+  // Foundation fill is part of the mutation volume, even below a raised base.
+  // Include the actors' width so a hitbox crossing the footprint edge is safe too.
+  const collisionBottom = Math.min(...ground) + 1;
+  if (occupied.some(p => p && p.x + 0.3 > x && p.x - 0.3 < x + width
+    && p.z + 0.3 > z && p.z - 0.3 < z + length
+    && p.y + 2 > collisionBottom && p.y < baseY + height)) {
     return denied('occupied_player', 'a player or character is standing in the build space');
   }
   for (let dx = 0; dx < width; dx++) {

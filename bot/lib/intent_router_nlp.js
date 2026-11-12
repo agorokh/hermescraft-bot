@@ -732,7 +732,11 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     const stop = await tryStopRoute(bot, body, sender);
     if (stop.matched) return { ...stop, skill_id: null, nlp_score: null, nlp_zone: 'deterministic_stop' };
     if (!Number.isSafeInteger(gift.count) || gift.count < 1) return { matched: false, nlp_zone: 'unresolved_give' };
-    const direct = await tryRegexRoute(bot, body, sender, opts);
+    // Unquantified retrieval retains NLP's existing dedicated defaults (for
+    // example bring_food gives up to four stocked food items). Exact numeric
+    // handoffs and explicit give requests keep deterministic item/count routing.
+    const direct = gift.retrieval && !gift.explicitCount
+      ? { matched: false } : await tryRegexRoute(bot, body, sender, opts);
     if (direct.matched) {
       return { ...direct,
         skill_id: opts.dryRun ? null : recordLastSkill(bot, direct.intent_name, direct.action, direct.body, body),
@@ -856,13 +860,20 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     // Unknown item wording may still be a known position/emote/light/flower
     // request. Keep the classifier's dedicated skill; never use its guess to
     // gather or build from a material word in an unresolved handoff.
-    const decision = intent && score >= ACT_THRESHOLD && DISPATCHERS[intent]
+    let decision = intent && score >= ACT_THRESHOLD && DISPATCHERS[intent]
       ? await Promise.resolve(DISPATCHERS[intent](bot, ctx)) : null;
-    if (!decision || !isDedicatedGiveAction(decision.action)) {
+    let effectiveIntent = intent;
+    if ((!decision || !isDedicatedGiveAction(decision.action, gift)) && gift.item) {
+      // A known crafted object remains a handoff even if the classifier only
+      // recognizes its material noun. Never execute that gathering guess.
+      decision = { action: 'give_to_player', body: { player: sender, item: gift.item, count: gift.count } };
+      effectiveIntent = 'give_items';
+    }
+    if (!decision || !isDedicatedGiveAction(decision.action, gift)) {
       return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'unresolved_give' };
     }
-    return { matched: true, intent_name: intent, action: decision.action, body: decision.body,
-      skill_id: opts.dryRun ? null : recordLastSkill(bot, intent, decision.action, decision.body, body),
+    return { matched: true, intent_name: effectiveIntent, action: decision.action, body: decision.body,
+      skill_id: opts.dryRun ? null : recordLastSkill(bot, effectiveIntent, decision.action, decision.body, body),
       nlp_score: score, nlp_zone: 'act' };
   }
   // Build-request contract (#501): the library decides, not the score. An

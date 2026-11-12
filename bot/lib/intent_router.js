@@ -495,8 +495,9 @@ export async function tryStopRoute(bot, body, sender) {
 // normal LLM-driven command queue.
 // Existing dedicated replies, emotes, light and handoff skills may own a
 // "give me ..." sentence. Generic mining/build guesses must not own it.
-export function isDedicatedGiveAction(action) {
-  return ['stop', 'chat', 'give_to_player', 'feed_player', 'place_near_player'].includes(action);
+export function isDedicatedGiveAction(action, { retrieval = false } = {}) {
+  return ['stop', 'chat', 'give_to_player', 'feed_player', 'place_near_player'].includes(action)
+    || (retrieval && action === 'fish_for_food');
 }
 
 export async function tryRoute(bot, body, sender, opts = {}) {
@@ -513,7 +514,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   for (const intent of INTENTS) {
     if (intent.patterns.some((p) => p.test(body))) {
       const decision = await intent.handler(bot, ctx);
-      if (decision && (!gift || isDedicatedGiveAction(decision.action))) {
+      if (decision && (!gift || isDedicatedGiveAction(decision.action, gift))) {
         // An explicit canonical quantity must not become the flower/food
         // helper's default quantity. Generic requests keep those helpers.
         if (gift?.item && decision.action === 'give_to_player' && gift.count !== 1) continue;

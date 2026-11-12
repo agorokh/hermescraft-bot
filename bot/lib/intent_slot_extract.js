@@ -15,10 +15,10 @@ function itemWords(name) {
   return String(name || '').toLowerCase().replace(/^minecraft:/, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function isRawGatherObject(text) {
-  if (!extractGatherBlockFromBody(text)) return false;
-  return (text.match(/[a-z]+|\d+/gi) || []).every(word =>
-    wordLooksLikeGather(word)
+function isRawResourceObject(text, resourceWord = wordLooksLikeGather) {
+  const words = text.match(/[a-z]+|\d+/gi) || [];
+  return words.some(word => resourceWord(word)) && words.every(word =>
+    resourceWord(word)
       || /^(?:\d+|some|a|few|of|like|bunch|stack|million|lot+s|please|pls|rn|lol)$/.test(collapseKidStretch(word.toLowerCase())));
 }
 
@@ -45,9 +45,11 @@ export function extractExplicitGiveRequest(bot, body) {
   // "Get me wood/logs" retains gathering semantics. A crafted item such as
   // planks is a handoff, even when absent from inventory; never mine its noun.
   const rawBlock = extractGatherBlockFromBody(words);
-  const rawAlias = isRawGatherObject(words);
-  if (retrieval && ((item && item === rawBlock) || (!item && rawAlias))) return null;
-  return { item: item || null, count };
+  const rawAlias = isRawResourceObject(words);
+  if (retrieval && ((item && item === rawBlock) || (!item && rawAlias)
+    || isRawResourceObject(words, wordLooksLikeOre))) return null;
+  return { item: item || null, count, retrieval,
+    explicitCount: Boolean(quantity && /^[+-]?\d/.test(quantity[1])) };
 }
 
 // A classifier score is not authority to mine. Require a positive action
@@ -57,7 +59,7 @@ export function hasGatherRequest(bot, body) {
   const request = directRequestBody(bot, body);
   if (!extractGatherBlockFromBody(request)) return false;
   const need = request.match(/^i\s+(?:need|want)\s+(.+)$/i);
-  if (need) return isRawGatherObject(need[1]);
+  if (need) return isRawResourceObject(need[1]);
   return /^(?:get|grab|chop|mine|fetch|bring)\b/i.test(request)
     || (request.match(/[a-z]+/gi) || []).every(word =>
       wordLooksLikeGather(word) || /^(?:please|pls)$/.test(collapseKidStretch(word.toLowerCase())));

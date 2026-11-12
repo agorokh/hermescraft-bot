@@ -98,6 +98,57 @@ test('automatic well finds a fully supported nearby alternative instead of build
   assert.ok(schematic.every(c => { const [, x,, z] = c.split(' '); return Number(x) >= -5 && Number(x) <= -1 && Number(z) >= -2 && Number(z) <= 2; }));
 });
 
+test('automatic placement raises above a supported natural slope and fills its low side', async () => {
+  const bot = new WorldBot(p => p.x >= 10 && p.x <= 12 && p.z >= 10 && p.z <= 12
+    && p.y <= 63 + (p.x - 10) * 2 ? ground() : air());
+  const result = await build(bot, { name: 'well', x: 10, y: 64, z: 10,
+    auto_site: { x: 8, y: 64, z: 11 } });
+  assert.match(result.result, /Built schematic "well" at 10,68,10/);
+  assert.ok(bot.commands.some(c => /^\/setblock 10 64 10 /.test(c)));
+});
+
+test('an elevated fixed-base build can support itself through water onto natural ground', async () => {
+  const bot = new WorldBot(p => p.y <= 63 ? ground()
+    : p.y <= 65 ? { name: 'water', boundingBox: 'empty' } : air());
+  const result = await build(bot, { name: 'well', x: 10, y: 66, z: 10, respect_explicit_base_y: true });
+  assert.match(result.result, /Built schematic "well" at 10,66,10/);
+  assert.ok(bot.commands.some(c => /^\/setblock 10 64 10 /.test(c)));
+});
+
+test('water in build space and lava beneath it remain unsafe', () => {
+  const watery = (_x, y) => y <= 63 ? ground() : y <= 65 ? { name: 'water', boundingBox: 'empty' } : air();
+  const params = { footprint: [3, 3], height: 4, origin: { x: 10, y: 64, z: 10 } };
+  assert.equal(validateSchematicSite({ ...params, blockAt: watery }).code, 'occupied');
+  const lava = (_x, y) => y <= 63 ? ground() : y <= 65 ? { name: 'lava', boundingBox: 'empty' } : air();
+  assert.equal(validateSchematicSite({ ...params, origin: { x: 10, y: 66, z: 10 }, blockAt: lava }).code, 'occupied_ground');
+});
+
+test('an unloaded automatic site reports waiting for chunks rather than demanding more ground', async () => {
+  const bot = new WorldBot(() => null);
+  const result = await build(bot, { name: 'well', x: 10, y: 64, z: 10,
+    auto_site: { x: 8, y: 64, z: 11 } });
+  assert.equal(result.site_code, 'unknown');
+  assert.match(publicActionResult('build_schematic', result, { failed: true }), /loaded.*closer/i);
+  assert.deepEqual(bot.commands, []);
+});
+
+test('occupied-player refusal exposes the actual step-aside recovery', async () => {
+  const bot = new WorldBot(p => p.y <= 63 ? ground() : air());
+  const result = await build(bot, { name: 'well', x: 0, y: 64, z: 0 });
+  assert.equal(result.site_code, 'occupied_player');
+  assert.match(publicActionResult('build_schematic', result, { failed: true }), /step aside/i);
+  assert.deepEqual(bot.commands, []);
+});
+
+test('structure refusal exposes a different-site recovery without suggesting missing ground', async () => {
+  const bot = new WorldBot(p => p.y <= 63 ? ground()
+    : p.x === 10 && p.z === 10 && p.y === 65 ? { name: 'oak_planks', boundingBox: 'block' } : air());
+  const result = await build(bot, { name: 'well', x: 10, y: 64, z: 10 });
+  assert.equal(result.site_code, 'occupied_ground');
+  assert.match(publicActionResult('build_schematic', result, { failed: true }), /structure.*another spot/i);
+  assert.deepEqual(bot.commands, []);
+});
+
 test('automatic build refuses when no supported footprint fits, rather than falling back', async () => {
   const bot = new WorldBot(() => air());
   const result = await build(bot, { name: 'campfire_spot', x: 2, y: 64, z: 0,
@@ -187,8 +238,8 @@ test('campfire template puts the fire on supported ground inside its ring', asyn
   assert.deepEqual(data.blocks.find(b => b[3] === 'campfire'), [2, 0, 2, 'campfire']);
 });
 
-test('site refusal is a failed action with actionable public feedback', () => {
-  const result = { result: 'Couldn\'t find a safe site: unknown ground. Nothing was built.', site_refused: true };
+test('no-room site refusal is a failed action with actionable public feedback', () => {
+  const result = { result: 'Couldn\'t find a safe site. Nothing was built.', site_refused: true, site_code: 'no_room' };
   const failed = actionOutcomeFailed(result);
   assert.equal(failed, true);
   assert.match(publicActionResult('build_schematic', result, { failed }), /clear natural ground/);

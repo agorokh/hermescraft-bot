@@ -7,6 +7,9 @@ const CLEAR = new Set([
   'red_tulip', 'orange_tulip', 'white_tulip', 'pink_tulip', 'oxeye_daisy',
   'cornflower', 'lily_of_the_valley', 'snow',
 ]);
+// Water can be replaced by a supporting foundation below the build, but it
+// remains an obstruction in the actual build volume. Lava is never skipped.
+const SUPPORT_WATER = new Set(['water', 'flowing_water']);
 const NATURAL_GROUND = new Set([
   'grass_block', 'dirt', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium',
   'mud', 'packed_mud', 'clay', 'stone', 'andesite', 'granite', 'diorite',
@@ -42,7 +45,7 @@ export function validateSchematicSite({ blockAt, footprint, height, origin, occu
       for (let sy = adjustTerrain ? y + height - 1 : y - 1; sy >= Math.max(-64, y - 17); sy--) {
         const block = blockAt(x + dx, sy, z + dz);
         if (!block) return denied('unknown', 'part of the ground has not loaded');
-        if (CLEAR.has(block.name)) continue;
+        if (CLEAR.has(block.name) || SUPPORT_WATER.has(block.name)) continue;
         if (block.boundingBox !== 'block' || !NATURAL_GROUND.has(block.name)) {
           return denied('occupied_ground', 'the ground contains a structure or an unsuitable block');
         }
@@ -94,12 +97,17 @@ export function findNearbySchematicSite({ blockAt, footprint, height, anchor, oc
     }
   }
   candidates.sort((a, b) => a.distance - b.distance || a.x - b.x || a.z - b.z);
+  let failure = null;
+  let mixedReasons = false;
   for (const candidate of candidates) {
     for (const dy of [0, 1, -1]) {
       const origin = { x: candidate.x, y: py + dy, z: candidate.z };
-      const site = validateSchematicSite({ blockAt, footprint, height, origin, occupied });
+      const site = validateSchematicSite({ blockAt, footprint, height, origin, occupied, adjustTerrain: true });
       if (site.ok) return site;
+      if (!failure) failure = site;
+      else if (failure.code !== site.code) mixedReasons = true;
     }
   }
-  return denied('no_room', 'we need a bigger patch of clear natural ground nearby');
+  return failure && !mixedReasons ? failure
+    : denied('no_room', 'we need a bigger patch of clear natural ground nearby');
 }

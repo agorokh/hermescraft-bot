@@ -83,6 +83,20 @@ function partialBuildText(text) {
     : null;
 }
 
+const SITE_RECOVERY = {
+  occupied_player: 'Someone is in the build space. Step aside and try again.',
+  unknown: "That area hasn't loaded yet. Move closer and try again.",
+  occupied: 'There are blocks in the way. Choose a clear spot away from existing builds.',
+  occupied_ground: 'That ground has a structure or unsuitable blocks. Choose another spot.',
+  unsupported: 'I need solid ground under the whole build. Choose another spot.',
+  uneven: 'That ground is too uneven for a safe foundation. Choose a flatter spot.',
+  foundation_size: 'That foundation would be too big. Choose a flatter spot.',
+  foundation_error: "I couldn't check the ground safely. Try again or choose another spot.",
+  bounds: "That build won't fit at this height. Try another spot.",
+  anchor: "I can't see where you are. Come closer and try again.",
+  no_room: 'I need a bigger patch of clear natural ground nearby before I can build that.',
+};
+
 export function publicActionResult(action, result, opts = {}) {
   if (!result?.result || action === 'chat') return null;
   const text = String(result.result);
@@ -92,7 +106,8 @@ export function publicActionResult(action, result, opts = {}) {
     const partial = partialBuildText(text);
     if (partial) return partial;
     if (failed) {
-      if (result.site_refused) return "I need a bigger patch of clear natural ground nearby before I can build that.";
+      if (result.site_refused) return Object.hasOwn(SITE_RECOVERY, result.site_code)
+        ? SITE_RECOVERY[result.site_code] : "I couldn't confirm a safe build site. Please try another spot.";
       if (/foreman rejected/i.test(text) && /missing materials/i.test(text)) {
         return "I can't build that yet - I'm missing materials.";
       }

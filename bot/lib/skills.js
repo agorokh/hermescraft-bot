@@ -860,7 +860,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         occupied: occupiedPositions() })
       : validateSchematicSite({ blockAt, ...dimensions, origin: { x: baseX, y: baseY, z: baseZ },
         occupied: occupiedPositions(), adjustTerrain: !respectExplicitBaseY });
-    if (!site.ok) return { result: `Couldn't find a safe site for "${name}": ${site.reason}. Nothing was built.`, site_refused: true };
+    if (!site.ok) return { result: `Couldn't find a safe site for "${name}": ${site.reason}. Nothing was built.`,
+      site_refused: true, site_code: site.code, site_reason: site.reason };
     siteValidated = true;
     baseX = site.origin.x;
     baseY = site.origin.y;
@@ -935,7 +936,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         },
       });
       if (siteValidated && sample.sampledCells !== floorCells.length) {
-        return { result: `Couldn't confirm solid ground for "${name}" after checking the site. Nothing was built.`, site_refused: true };
+        return { result: `Couldn't confirm solid ground for "${name}" after checking the site. Nothing was built.`,
+          site_refused: true, site_code: 'unsupported' };
       }
       // If we found ground under most cells, retarget baseY to the highest
       // ground +1. This prevents the schematic from being buried into a hill.
@@ -958,7 +960,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         maxFillDepth: 16,
       });
       if (foundationResult.placements.length > MAX_FOUNDATION_PLACEMENTS) {
-        if (siteValidated) return { result: `Couldn't safely support "${name}": its foundation would be too large. Nothing was built.`, site_refused: true };
+        if (siteValidated) return { result: `Couldn't safely support "${name}": its foundation would be too large. Nothing was built.`,
+          site_refused: true, site_code: 'foundation_size' };
         console.log(`[build_schematic] foundation for "${name}" skipped: ${foundationResult.placements.length} blocks exceeds cap ${MAX_FOUNDATION_PLACEMENTS}`);
       } else {
         if (adjustedBaseY !== baseY) {
@@ -972,7 +975,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         console.log(`[build_schematic] foundation for "${name}": ${foundationStats.blocksAdded} ${fillBlock} blocks across ${foundationStats.cellsFilled} cells (max depth ${foundationStats.maxDepth}, capped ${foundationStats.capped})`);
       }
     } catch (e) {
-      if (siteValidated) return { result: `Couldn't confirm the foundation for "${name}". Nothing was built.`, site_refused: true };
+      if (siteValidated) return { result: `Couldn't confirm the foundation for "${name}". Nothing was built.`,
+        site_refused: true, site_code: 'foundation_error' };
       console.log(`[build_schematic] foundation generation failed: ${e.message} — proceeding without foundation`);
       foundationPlacements = [];
       foundationStats = null;
@@ -983,7 +987,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     const dimensions = schematicSiteDimensions(entry, data);
     const site = validateSchematicSite({ ...dimensions, origin: { x: baseX, y: baseY, z: baseZ },
       occupied: occupiedPositions(), blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)) });
-    if (!site.ok) return { result: `Couldn't keep the site safe for "${name}": ${site.reason}. Nothing was built.`, site_refused: true };
+    if (!site.ok) return { result: `Couldn't keep the site safe for "${name}": ${site.reason}. Nothing was built.`,
+      site_refused: true, site_code: site.code, site_reason: site.reason };
   }
 
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });

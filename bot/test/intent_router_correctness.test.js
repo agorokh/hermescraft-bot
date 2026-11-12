@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { tryRoute as tryRegex } from '../lib/intent_router.js';
-import { tryRoute as tryNlp } from '../lib/intent_router_nlp.js';
+import { tryRoute as tryNlp, resetContextBuffer } from '../lib/intent_router_nlp.js';
 
 function stubBot() {
   return {
@@ -150,7 +150,11 @@ function scoreRouter(routerFn, label) {
     let pass = 0, fail = 0;
     const failures = [];
     for (const [body, expect] of LABELED) {
-      const r = await routerFn(stubBot(), body, 'Adalynn');
+      const bot = stubBot();
+      // These are independent utterances (the repeat rows explicitly have
+      // no prior skill). A fresh object still shares the username-keyed cache.
+      resetContextBuffer(bot);
+      const r = await routerFn(bot, body, 'Adalynn');
       const got = r.matched ? r.action : 'none';
       const ok = expect.includes(got);
       if (ok) pass++; else {

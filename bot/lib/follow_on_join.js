@@ -1,14 +1,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Vec3 } from 'vec3';
 import { isCompanionSpeaker } from './quests.js';
 import { findPlayerEntity } from './player_utils.js';
 
 // Follow-on-join (hermescraft#544, stage 1).
 //
 // When a player who is not a companion joins, one character teleports to that
-// player and stays with them, whichever world the server routed them to. The
-// characters are separate processes, so they agree on who follows whom through
+// player and stays with them, whichever world the server routed them to. A spare
+// character may visit a lone player as a guest, yielding to an unserved player.
+// Characters are separate processes, so they agree on who follows whom through
 // claim files: the first character to create `<player>.json` exclusively owns
 // that player until the player leaves. A character that already has a player
 // takes no second one, which is how two children get two different characters.
@@ -304,6 +306,75 @@ function rosterIndex(botName, env = process.env) {
   return i < 0 ? 0 : i;
 }
 
+const CLEAR_AIR = new Set(['air', 'cave_air', 'void_air']);
+const UNSAFE_SUPPORT = /water|lava|fire|cactus|magma|berry|powder_snow|portal|wither_rose|leaves/;
+const finitePosition = (p) => !!p && [p.x, p.y, p.z].every(Number.isFinite);
+const CENTRAL_VIEW_COS = Math.cos(Math.PI / 12);
+
+// Mineflayer yaw zero faces -Z (not +Z). Keep the whole three-to-six block
+// waiting area outside the central 30-degree cone. Off-centre companions remain
+// visible; only a turn directly onto a companion needs another correction.
+function inForwardView(position, player) {
+  const dx = position.x - player.position.x, dz = position.z - player.position.z;
+  const radius = Math.hypot(dx, dz);
+  return radius > 0 && (-Math.sin(player.yaw) * dx - Math.cos(player.yaw) * dz) / radius > CENTRAL_VIEW_COS;
+}
+
+function needsClearance(bot, player) {
+  if (!finitePosition(bot.entity?.position) || !finitePosition(player?.position) || !Number.isFinite(player.yaw)) return false;
+  const pos = bot.entity.position, p = player.position;
+  if (Math.abs(pos.y - p.y) > 2) return false;
+  const radius = Math.hypot(pos.x - p.x, pos.z - p.z);
+  return radius < 3 || (radius <= 6 && inForwardView(pos, player));
+}
+
+function safeStandingCell(bot, pos) {
+  try {
+    const foot = bot.blockAt(pos), head = bot.blockAt(pos.offset(0, 1, 0));
+    const support = bot.blockAt(pos.offset(0, -1, 0));
+    if (![foot, head].every((b) => b && CLEAR_AIR.has(b.name) && b.boundingBox === 'empty' && b.shapes?.length === 0)) return false;
+    if (!support || typeof support.name !== 'string' || !support.name || support.boundingBox !== 'block' || UNSAFE_SUPPORT.test(support.name)
+      || support.getProperties?.().waterlogged === true
+      || !support.shapes?.some((s) => s.length === 6 && s.every((v, i) => v === [0, 0, 0, 1, 1, 1][i]))) return false;
+    // Use observed entity bounds, with player-sized defaults for entities that
+    // omit them. Include tab-list entities even before bot.entities catches up.
+    const entities = new Set([...Object.values(bot.entities || {}), ...Object.values(bot.players || {}).map((p) => p?.entity)]);
+    for (const entity of entities) {
+      if (!entity || entity === bot.entity || !finitePosition(entity.position)) continue;
+      const width = Number.isFinite(entity.width) && entity.width > 0 ? entity.width : 0.6;
+      const height = Number.isFinite(entity.height) && entity.height > 0 ? entity.height : 1.8;
+      if (Math.abs(pos.x - entity.position.x) < (0.6 + width) / 2
+        && Math.abs(pos.z - entity.position.z) < (0.6 + width) / 2
+        && pos.y < entity.position.y + height && pos.y + 1.8 > entity.position.y) return false;
+    }
+    return true;
+  } catch { return false; } // unloaded or incomplete world data is not a landing
+}
+
+function clearanceDestination(bot, player, side) {
+  if (typeof bot.blockAt !== 'function' || !finitePosition(bot.entity?.position)
+    || !finitePosition(player?.position) || !Number.isFinite(player.yaw)) return null;
+  const p = player.position;
+  const preferredX = p.x + side * Math.cos(player.yaw) * 3 - Math.sin(player.yaw) * 4;
+  const preferredZ = p.z - side * Math.sin(player.yaw) * 3 - Math.cos(player.yaw) * 4;
+  const candidates = [];
+  // Finite local search: loaded cells only, within one block of the player's
+  // feet. No movement, digging, placing, or pathfinder is needed to inspect it.
+  for (let dx = -6; dx <= 6; dx++) {
+    for (let dz = -6; dz <= 6; dz++) {
+      for (const dy of [0, 1, -1]) {
+        const pos = new Vec3(Math.floor(p.x) + dx + 0.5, Math.floor(p.y) + dy, Math.floor(p.z) + dz + 0.5);
+        const distance = Math.hypot(pos.x - p.x, pos.y - p.y, pos.z - p.z);
+        const radius = Math.hypot(pos.x - p.x, pos.z - p.z);
+        if (radius < 3 || distance > 6 || inForwardView(pos, player)) continue;
+        candidates.push({ pos, score: Math.hypot(pos.x - preferredX, pos.z - preferredZ) + Math.abs(pos.y - p.y) * 2 });
+      }
+    }
+  }
+  candidates.sort((a, b) => a.score - b.score);
+  return candidates.find(({ pos }) => safeStandingCell(bot, pos))?.pos || null;
+}
+
 /**
  * installFollowOnJoin(bot, log, opts) → teardown fn
  *
@@ -336,6 +407,12 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   const homeDim = opts.homeDimension || homeDimensionFromEnv(env);
   const me = bot.username;
   const stagger = rosterIndex(me, env) * cfg.claimStaggerMs;
+  const side = rosterIndex(me, env) % 2 === 0 ? 1 : -1;
+  // Dynamic requested follow goals outlive their HTTP action promise and can
+  // be stationary within the follow radius. A goal, not isMoving(), owns that
+  // movement until the pathfinder clears it or a stop cancels it.
+  const isBusy = () => !!(bot.interrupt_code || (bot._hc_intent_action_depth || 0) > 0
+    || bot.pathfinder?.goal || opts.isKidTaskActive?.());
   const logFollow = (msg) => log(`[follow] ${msg}`);
 
   let running = true;
@@ -375,6 +452,7 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     return Math.hypot(pos.x - origin.x, pos.y - origin.y, pos.z - origin.z) <= cfg.homeRadius;
   }
   function goHome(why) {
+    if (isBusy()) return;
     const origin = readHome(dir, me);
     if (!origin) {
       if (why && currentDim() !== homeDim) {
@@ -389,16 +467,19 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     say(cmd);
   }
 
-  function consider(child) {
+  function consider(child, guest = false) {
     if (!running || !isFollowCandidate(child, me, candidateOpts)) return;
     if (!isOnline(child)) return;
+    // Existing ownership can stay alive during requested work, but do not
+    // reserve another player (or start a guest visit) that we cannot serve.
+    if (isBusy()) return;
     // One player per character. Busy means "has a player", online or not: during
     // the leave grace the player is briefly absent, and taking a second one then
     // would orphan the first claim.
-    if (state) return;
+    if (state && !state.guest) return;
     let result;
     try {
-      result = tryClaim(dir, child, me, Date.now(), cfg.claimTtlMs);
+      result = guest ? 'guest' : tryClaim(dir, child, me, Date.now(), cfg.claimTtlMs);
     } catch (e) {
       logFollow(`claim error for ${child}: ${e.message}`);
       return;
@@ -417,10 +498,12 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     }
     if (homeProblem) {
       logFollow(`cannot save home (${homeProblem}); not following ${child}`);
-      try { releaseClaim(dir, child, me); } catch { /* best effort */ }
+      if (!guest) { try { releaseClaim(dir, child, me); } catch { /* best effort */ } }
       return;
     }
-    state = { child, claimedAt: Date.now(), lastTpAt: 0, lastBeatAt: Date.now() };
+    // Promoting a guest on the same player retains teleport throttling.
+    const previous = state?.child === child ? state : null;
+    state = { child, guest, claimedAt: previous?.claimedAt ?? Date.now(), lastTpAt: previous?.lastTpAt ?? 0, lastBeatAt: Date.now() };
     logFollow(`following ${child} (${result})`);
   }
 
@@ -430,17 +513,33 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   let lastScanAt = Date.now();
   function scanForUnclaimed() {
     lastScanAt = Date.now();
-    const names = Object.keys(bot.players || {}).sort((a, b) => a.localeCompare(b));
+    if (state && !state.guest) return;
+    const names = Object.keys(bot.players || {}).filter((n) => isFollowCandidate(n, me, candidateOpts))
+      .sort((a, b) => a.localeCompare(b));
     for (const name of names) {
-      if (state) break;
       consider(name);
+      if (state && !state.guest) return;
+    }
+    // A guest is not an owner: never touch the primary's heartbeat or schema.
+    // Only a lone, already-served player gets a spare companion.
+    if (names.length === 1) {
+      const primary = readClaim(dir, names[0]);
+      if (primary && primary.character !== me && companions.has(primary.character.toLowerCase())) {
+        if (!state || state.child !== names[0]) consider(names[0], true);
+        return;
+      }
+    }
+    if (state?.guest) {
+      const child = state.child;
+      state = null;
+      goHome(`guest visit to ${child} ended`);
     }
   }
 
   function release(why) {
     if (!state) return;
-    const { child } = state;
-    try { releaseClaim(dir, child, me); } catch { /* best effort */ }
+    const { child, guest } = state;
+    if (!guest) { try { releaseClaim(dir, child, me); } catch { /* best effort */ } }
     state = null;
     goHome(`${child} ${why}`);
     later(scanForUnclaimed, stagger + 500);
@@ -461,7 +560,11 @@ export function installFollowOnJoin(bot, log, opts = {}) {
       return;
     }
     state.missingSince = 0;
-    if (Date.now() - state.lastBeatAt >= cfg.claimBeatMs) {
+    if (state.guest && Date.now() - lastScanAt >= cfg.rescanMs) {
+      scanForUnclaimed();
+      if (!state) return;
+    }
+    if (!state.guest && Date.now() - state.lastBeatAt >= cfg.claimBeatMs) {
       state.lastBeatAt = Date.now();
       if (!refreshClaim(dir, state.child, me)) {
         // This process stalled long enough for a sibling to take the player.
@@ -471,6 +574,7 @@ export function installFollowOnJoin(bot, log, opts = {}) {
         return;
       }
     }
+    if (isBusy()) return;
     const entity = findPlayerEntity(bot, state.child);
     const distance = entity ? bot.entity.position.distanceTo(entity.position) : Infinity;
     const action = nextFollowAction(
@@ -478,6 +582,16 @@ export function installFollowOnJoin(bot, log, opts = {}) {
       Date.now(),
       cfg,
     );
+    if (entity) {
+      if (action !== 'tp' && !needsClearance(bot, entity)) return;
+      if (Date.now() - state.lastTpAt < cfg.arriveRetryMs) return;
+      const destination = clearanceDestination(bot, entity, side);
+      if (!destination) return; // no verified fit: leave the player and world alone
+      state.lastTpAt = Date.now();
+      logFollow(`clearing ${state.child}'s view`);
+      say(`/tp ${destination.x.toFixed(2)} ${destination.y.toFixed(2)} ${destination.z.toFixed(2)}`);
+      return;
+    }
     if (action !== 'tp') return;
     state.lastTpAt = Date.now();
     logFollow(`tp to ${state.child} (visible=${!!entity}, dim=${currentDim()})`);
@@ -496,7 +610,7 @@ export function installFollowOnJoin(bot, log, opts = {}) {
   try { sweepBrokenClaims(dir); } catch { /* best effort */ }
   goHome('start');
 
-  const onJoin = (player) => later(() => consider(player?.username), stagger + 250);
+  const onJoin = () => later(scanForUnclaimed, stagger + 250);
   // No handler for playerLeft: the tick notices an absent player and releases
   // after leaveGraceMs, which rides out a tab-list flicker.
   bot.on('playerJoined', onJoin);
@@ -511,6 +625,7 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     for (const t of timers) clearTimeout(t);
     timers.clear();
     try { bot.removeListener('playerJoined', onJoin); } catch {}
-    if (state) { try { releaseClaim(dir, state.child, me); } catch {} state = null; }
+    if (state && !state.guest) { try { releaseClaim(dir, state.child, me); } catch {} }
+    state = null;
   };
 }

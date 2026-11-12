@@ -4,6 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { Vec3 } from 'vec3';
+import pathfinderPkg from 'mineflayer-pathfinder';
+import { registerHighLevelSkills } from '../lib/skills.js';
+import { findPlayerEntity, normalizePlayerName } from '../lib/player_utils.js';
 import {
   FOLLOW_DEFAULTS,
   followEnabled,
@@ -193,7 +197,7 @@ test('installed but disabled: no listeners, nothing claimed', () => {
   teardown();
 });
 
-test('two players get two different characters; a lone player gets exactly one', async () => {
+test('a lone player gets both characters and the guest yields when a second player joins', async () => {
   await withCompanions('Rosie,Steve', async () => {
     const dir = tmpDir();
     const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
@@ -210,9 +214,11 @@ test('two players get two different characters; a lone player gets exactly one',
       }
       await wait(700);
       assert.equal(rosie._hc_follow.child(), 'KidOne');
-      assert.equal(steve._hc_follow.child(), null, 'a claimed player is not followed twice');
+      assert.equal(steve._hc_follow.child(), 'KidOne', 'the spare character visits as a guest');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie', 'only Rosie owns the primary claim');
+      assert.deepEqual(claimsHeldBy(dir, 'Steve'), [], 'a guest owns no primary claim');
       assert.ok(rosie.sent.includes('/tp KidOne'));
-      assert.equal(steve.sent.length, 0);
+      assert.ok(steve.sent.includes('/tp KidOne'));
 
       for (const b of [rosie, steve]) {
         b.players.KidTwo = { username: 'KidTwo' };
@@ -222,6 +228,12 @@ test('two players get two different characters; a lone player gets exactly one',
       assert.equal(rosie._hc_follow.child(), 'KidOne', 'a busy character takes no second player');
       assert.equal(steve._hc_follow.child(), 'KidTwo');
       assert.ok(steve.sent.includes('/tp KidTwo'));
+      for (const b of [rosie, steve]) delete b.players.KidTwo;
+      await wait(800);
+      assert.equal(steve._hc_follow.child(), 'KidOne', 'two players back to one: spare visits again');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+      downs[1]();
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie', 'guest teardown never releases another claim');
     } finally {
       downs.forEach((d) => d());
     }
@@ -353,10 +365,12 @@ test('an idle character picks up a player whose character went away', async () =
     try {
       await wait(1400);
       assert.equal(rosie._hc_follow.child(), 'KidOne');
-      assert.equal(steve._hc_follow.child(), null);
+      assert.equal(steve._hc_follow.child(), 'KidOne');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
       downRosie();                                   // Rosie disconnects; her claim is released
       await wait(400);
       assert.equal(steve._hc_follow.child(), 'KidOne', 'no rejoin needed');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Steve', 'the guest becomes primary after release');
       assert.ok(steve.sent.includes('/tp KidOne'));
     } finally {
       downRosie();                                   // idempotent; never leave a timer behind
@@ -522,3 +536,565 @@ test('a following character keeps its claim fresh, and lets go if a sibling took
     }
   });
 });
+
+const FOLLOW_ENV = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+const STONE = { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] };
+const AIR = { name: 'air', boundingBox: 'empty', shapes: [] };
+
+function clearanceBot(name = 'Rosie', yaw = 0) {
+  const bot = fakeBot(name, { players: ['Rosie', 'Steve', 'KidOne'] });
+  bot.entity = { id: name === 'Rosie' ? 1 : 2, position: new Vec3(10.5, 64, 10.5), width: 0.6, height: 1.8 };
+  bot.players.KidOne.entity = { id: 3, username: 'KidOne', type: 'player', yaw, position: new Vec3(10.5, 64, 10.5), width: 0.6, height: 1.8 };
+  bot.entities = { [bot.entity.id]: bot.entity, 3: bot.players.KidOne.entity };
+  bot.blockAt = (p) => p.y === 63 ? STONE : AIR;
+  return bot;
+}
+
+function localTeleports(bot) {
+  return bot.sent.filter((m) => /^\/tp -?[\d.]+ -?[\d.]+ -?[\d.]+$/.test(m));
+}
+
+async function installedClearance(bot, fn, opts = {}) {
+  const dir = opts.claimDir || tmpDir();
+  const down = installFollowOnJoin(bot, () => {}, {
+    env: FOLLOW_ENV, claimDir: dir, config: { ...FAST, rescanMs: 40 }, ...opts,
+  });
+  try {
+    bot.emit('playerJoined', { username: 'KidOne' });
+    await wait(440);
+    await fn(dir);
+  } finally { down(); }
+}
+
+function tpPosition(command) {
+  return new Vec3(...command.split(' ').slice(1).map(Number));
+}
+
+test('overlapping idle follower clears the camera to a supported nearby side cell, then settles', async () => {
+  const bot = clearanceBot();
+  await installedClearance(bot, async () => {
+    assert.ok(localTeleports(bot).length > 0, 'overlap is corrected even though distance is zero');
+    assert.ok(!bot.sent.includes('/tp KidOne'), 'visible local arrival uses verified coordinates');
+    const landing = tpPosition(localTeleports(bot)[0]);
+    assert.ok(landing.distanceTo(bot.players.KidOne.entity.position) >= 3);
+    assert.ok(landing.distanceTo(bot.players.KidOne.entity.position) <= 6);
+    assert.equal(landing.y, 64);
+    assert.ok(-(landing.z - 10.5) / Math.hypot(landing.x - 10.5, landing.z - 10.5) <= Math.cos(Math.PI / 12), 'yaw zero looks -Z; correction clears the central view');
+    bot.entity.position = landing;
+    const count = bot.sent.length;
+    await wait(140);
+    assert.equal(bot.sent.length, count, 'a clear idle position is stable');
+    assert.ok(bot.sent.every((m) => /^\/tp -?[\d.]+ -?[\d.]+ -?[\d.]+$/.test(m)), 'only self coordinate teleports, no world edits');
+  });
+});
+
+test('roster sides separate both companions, and camera turns use Mineflayer yaw', async () => {
+  const dir = tmpDir();
+  const rosie = clearanceBot();
+  const steve = clearanceBot('Steve');
+  await installedClearance(rosie, async () => {
+    await installedClearance(steve, async () => {
+      assert.ok(localTeleports(rosie).length > 0, 'Rosie must clear the camera');
+      assert.ok(localTeleports(steve).length > 0, 'Steve must join and clear the camera');
+      const r = tpPosition(localTeleports(rosie)[0]);
+      const s = tpPosition(localTeleports(steve)[0]);
+      assert.ok(r.distanceTo(s) >= 3, 'roster preference separates simultaneous destinations');
+      rosie.entity.position = r;
+      const kid = rosie.players.KidOne.entity;
+      kid.yaw = Math.atan2(-(r.x - kid.position.x), -(r.z - kid.position.z));
+      const before = localTeleports(rosie).length;
+      await wait(140);
+      assert.ok(localTeleports(rosie).length > before, 'turning toward the companion clears the new view');
+      const moved = tpPosition(localTeleports(rosie).at(-1));
+      const dx = moved.x - kid.position.x, dz = moved.z - kid.position.z;
+      assert.ok((-Math.sin(kid.yaw) * dx - Math.cos(kid.yaw) * dz) / Math.hypot(dx, dz) <= Math.cos(Math.PI / 12));
+    }, { claimDir: dir });
+  }, { claimDir: dir });
+});
+
+for (const [label, change] of [
+  ['unloaded chunks', (b) => { b.blockAt = () => null; }],
+  ['unsupported air', (b) => { b.blockAt = () => AIR; }],
+  ['partial support', (b) => { b.blockAt = (p) => p.y === 63 ? { ...STONE, shapes: [[0, 0, 0, 1, 0.5, 1]] } : AIR; }],
+  ['unknown support identity', (b) => { b.blockAt = (p) => p.y === 63 ? { boundingBox: 'block', shapes: STONE.shapes } : AIR; }],
+  ['missing collision data', (b) => { b.blockAt = (p) => p.y === 63 ? { name: 'stone', boundingBox: 'block' } : AIR; }],
+  ['hazardous support', (b) => { b.blockAt = (p) => p.y === 63 ? { ...STONE, name: 'magma_block' } : AIR; }],
+  ['waterlogged support', (b) => { b.blockAt = (p) => p.y === 63 ? { ...STONE, getProperties: () => ({ waterlogged: true }) } : AIR; }],
+  ['water at feet', (b) => { b.blockAt = (p) => p.y === 63 ? STONE : { name: 'water', boundingBox: 'empty', shapes: [] }; }],
+  ['blocked headroom', (b) => { b.blockAt = (p) => p.y === 63 || p.y >= 65 ? STONE : AIR; }],
+  ['entity collision', (b) => { b.entities[9] = { position: new Vec3(10.5, 63, 10.5), width: 30, height: 10 }; }],
+  ['unknown yaw', (b) => { delete b.players.KidOne.entity.yaw; }],
+  ['nonfinite position', (b) => { b.players.KidOne.entity.position.x = NaN; }],
+  ['nonfinite bot position', (b) => { b.entity.position.x = NaN; }],
+]) {
+  test(`idle camera correction waits honestly with ${label}`, async () => {
+    const bot = clearanceBot();
+    change(bot);
+    await installedClearance(bot, async () => {
+      assert.deepEqual(bot.sent, [], 'no unsafe player-target or vanilla fallback');
+    });
+  });
+}
+
+test('an occupied preferred cell is skipped rather than overlapping another entity', async () => {
+  const first = clearanceBot();
+  let preferred;
+  await installedClearance(first, async () => {
+    assert.ok(localTeleports(first).length > 0, 'a clear preferred cell must be found');
+    preferred = tpPosition(localTeleports(first)[0]);
+  });
+  const bot = clearanceBot();
+  bot.entities[9] = { position: preferred, width: 0.6, height: 1.8 };
+  await installedClearance(bot, async () => {
+    assert.ok(localTeleports(bot).length > 0, 'an unoccupied alternate cell must be found');
+    const landing = tpPosition(localTeleports(bot)[0]);
+    assert.ok(Math.abs(landing.x - preferred.x) >= 0.6 || Math.abs(landing.z - preferred.z) >= 0.6);
+  });
+});
+
+test('requested tasks and stop suppress arrival and camera correction without losing ownership', async () => {
+  for (const visible of [true, false]) {
+    const bot = clearanceBot();
+    if (!visible) { delete bot.players.KidOne.entity; delete bot.entities[3]; }
+    let busy = false;
+    await installedClearance(bot, async (dir) => {
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+      busy = true;
+      bot.sent.length = 0;
+      await wait(100);
+      assert.deepEqual(bot.sent, [], 'active requested task owns movement');
+      busy = false;
+      bot.interrupt_code = true;
+      await wait(100);
+      assert.deepEqual(bot.sent, [], 'stop remains authoritative');
+      bot.interrupt_code = false;
+      await wait(100);
+      assert.ok(bot.sent.length > 0, 'idle following resumes');
+    }, { isKidTaskActive: () => busy });
+  }
+});
+
+test('local clearance retries are throttled while server teleport confirmation is pending', async () => {
+  const bot = clearanceBot();
+  await installedClearance(bot, async () => {
+    assert.equal(localTeleports(bot).length, 1, 'one correction pending, no per-tick teleport storm');
+  }, { config: { ...FAST, arriveRetryMs: 1000 } });
+});
+
+test('guest keeps its own home and neither heartbeats nor releases the primary claim', async () => {
+  const dir = tmpDir();
+  tryClaim(dir, 'KidOne', 'Rosie');
+  const file = path.join(dir, 'kidone.json');
+  const stamp = fs.statSync(file).mtimeMs;
+  const steve = clearanceBot('Steve');
+  await installedClearance(steve, async () => {
+    assert.equal(steve._hc_follow.child(), 'KidOne');
+    assert.deepEqual(readHome(dir, 'Steve'), { dim: 'overworld', x: 10.5, y: 64, z: 10.5 });
+    assert.equal(fs.statSync(file).mtimeMs, stamp, 'guest does not heartbeat');
+    steve._hc_world = 'bskyblock_world';
+    delete steve.players.KidOne;
+    await wait(300);
+    assert.equal(steve._hc_follow.child(), null);
+    assert.ok(steve.sent.some((m) => m === '/execute in minecraft:overworld run minecraft:tp @s 10.50 64.00 10.50'));
+    assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+    steve.players.KidOne = { username: 'KidOne' };
+    steve.emit('playerJoined', { username: 'KidOne' });
+    await wait(400);
+    assert.equal(steve._hc_follow.child(), 'KidOne', 'guest can rejoin using its original home');
+  }, { claimDir: dir, config: { ...FAST, claimBeatMs: 40 } });
+  assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+});
+
+test('a guest rides out a tab-list flicker and takes over a stale primary without rejoining', async () => {
+  const dir = tmpDir();
+  tryClaim(dir, 'KidOne', 'Rosie');
+  const steve = clearanceBot('Steve');
+  await installedClearance(steve, async () => {
+    assert.equal(steve._hc_follow.child(), 'KidOne');
+    assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+    const child = steve.players.KidOne;
+    delete steve.players.KidOne;
+    await wait(50);
+    steve.players.KidOne = child;
+    await wait(150);
+    assert.equal(steve._hc_follow.child(), 'KidOne', 'guest survives the same leave grace as a primary');
+    assert.ok(!steve.sent.some((m) => m.startsWith('/execute')));
+    await wait(450);
+    assert.equal(readClaim(dir, 'KidOne').character, 'Steve', 'a guest does not keep a dead primary alive');
+  }, { claimDir: dir, config: { ...FAST, rescanMs: 40, claimBeatMs: 40, claimTtlMs: 800 } });
+});
+
+test('visible arrival with no loaded safe cell waits rather than falling back to a player teleport', async () => {
+  const bot = clearanceBot();
+  bot.entity.position = new Vec3(30.5, 64, 10.5);
+  bot.blockAt = () => null;
+  await installedClearance(bot, async () => { assert.deepEqual(bot.sent, []); });
+});
+
+test('an elevated-only landing inside horizontal clearance is refused without repeated corrections', async () => {
+  const bot = clearanceBot();
+  bot.players.KidOne.entity.position = new Vec3(10, 64, 10);
+  bot.entity.position = new Vec3(10, 64, 10);
+  bot.blockAt = (p) => {
+    if (p.x === 12.5 && p.z === 11.5) {
+      if (p.y === 64) return STONE;
+      if (p.y === 65 || p.y === 66) return AIR;
+    }
+    return null;
+  };
+  await installedClearance(bot, async () => {
+    assert.deepEqual(bot.sent, [], '3D distance above three cannot excuse horizontal overlap');
+  });
+});
+
+test('an off-centre visible companion remains still while the player looks past it', async () => {
+  const bot = clearanceBot();
+  bot.entity.position = new Vec3(13.5, 64, 6.5); // five blocks away, 37 degrees off-centre
+  await installedClearance(bot, async () => {
+    assert.deepEqual(bot.sent, [], 'a companion near the edge of view is welcome to stay visible');
+  });
+});
+
+// Execute the production synchronous action route, following the extraction
+// pattern in build_claims_wiring.test.js. No listener or Minecraft is started.
+const serverSource = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+function actionOwnershipSource() {
+  const start = serverSource.indexOf('function installActionOwnership(');
+  // On the red baseline there is no shared installer; direct dispatch remains
+  // exactly as production runs it, so behavioral assertions expose the gap.
+  return start < 0 ? 'function installActionOwnership() {}'
+    : serverSource.slice(start, serverSource.indexOf('\nfunction armIntentRoutedAction', start));
+}
+
+function synchronousActionHarness(initialBot, ACTIONS) {
+  const armStart = serverSource.indexOf('function armIntentRoutedAction(');
+  const armSource = serverSource.slice(armStart, serverSource.indexOf('\nfunction isActionEpochCurrent', armStart));
+  const routeStart = serverSource.indexOf('const actionName = actionMatch[1];', serverSource.indexOf('// Synchronous action:'));
+  const routeSource = serverSource.slice(routeStart, serverSource.indexOf('\n    }\n\n    respond(res, 404', routeStart));
+  const intentStart = serverSource.indexOf('function runIntentRoutedAction(');
+  const intentSource = serverSource.slice(intentStart, serverSource.indexOf('\nfunction intentRouterOutcomeFailed', intentStart));
+  const taskStart = serverSource.indexOf('const actionName = taskMatch[1];');
+  const taskSource = serverSource.slice(taskStart, serverSource.indexOf('\n      }\n\n      // Synchronous action:', taskStart));
+  return new Function('initialBot', 'ACTIONS', `
+    let bot = initialBot;
+    let currentTask = null;
+    const TASK_VISIBLE_INTENT_ACTIONS = new Set();
+    const actionHistory = [], MAX_ACTION_HISTORY = 40;
+    const briefState = () => ({});
+    const respond = (_res, status, payload) => ({ status, payload });
+    ${actionOwnershipSource()}
+    ${armSource}
+    ${intentSource}
+    installActionOwnership(ACTIONS, () => bot);
+    return {
+      handle: async (name, body = {}) => {
+        const actionMatch = ['', name], res = {};
+        ${routeSource}
+      },
+      intent: runIntentRoutedAction,
+      task: async (name, body = {}) => {
+        const taskMatch = ['', name], res = {};
+        ${taskSource}
+      },
+      dispatch: (name, body) => ACTIONS[name](body),
+      actions: ACTIONS,
+      reinstallOwnership: () => installActionOwnership(ACTIONS, () => bot),
+      replaceBot: (next) => { bot = next; },
+      history: actionHistory,
+    };
+  `)(initialBot, ACTIONS);
+}
+
+test('an idle tick retries a busy-deferred home return after the player leaves', async () => {
+  const bot = clearanceBot();
+  let busy = false;
+  await installedClearance(bot, async (dir) => {
+    assert.equal(bot._hc_follow.child(), 'KidOne');
+    bot._hc_world = 'bskyblock_world';
+    bot.entity.position = new Vec3(30.5, 64, 10.5);
+    busy = true;
+    bot.sent.length = 0;
+    delete bot.players.KidOne;
+    await wait(300);
+    assert.equal(bot._hc_follow.child(), null);
+    assert.equal(readClaim(dir, 'KidOne'), null, 'release still clears the departed primary');
+    assert.ok(readHome(dir, 'Rosie'), 'saved return remains on disk while busy');
+    assert.deepEqual(bot.sent, [], 'busy ownership defers the return');
+    busy = false;
+    await wait(120);
+    assert.ok(bot.sent.includes('/execute in minecraft:overworld run minecraft:tp @s 10.50 64.00 10.50'), 'the existing idle branch retries the return');
+    bot._hc_world = 'overworld';
+    bot.entity.position = new Vec3(10.5, 64, 10.5);
+    await wait(100);
+    assert.equal(readHome(dir, 'Rosie'), null, 'only observed home arrival clears the return');
+  }, { isKidTaskActive: () => busy });
+});
+
+test('a stopped companion leaves a new primary claim available to an idle sibling', async () => {
+  const dir = tmpDir(), rosie = clearanceBot(), steve = clearanceBot('Steve');
+  rosie.interrupt_code = true;
+  await installedClearance(rosie, async () => {
+    await installedClearance(steve, async () => {
+      assert.equal(readClaim(dir, 'KidOne')?.character, 'Steve', 'the stopped companion cannot hold a primary it will not serve');
+      assert.equal(rosie._hc_follow.child(), null);
+      assert.deepEqual(rosie.sent, []);
+    }, { claimDir: dir });
+  }, { claimDir: dir });
+});
+
+test('a busy companion starts no new guest visit until it becomes idle', async () => {
+  const dir = tmpDir(), steve = clearanceBot('Steve');
+  tryClaim(dir, 'KidOne', 'Rosie');
+  let busy = true;
+  await installedClearance(steve, async () => {
+    assert.equal(steve._hc_follow.child(), null, 'requested work wins over a new guest visit');
+    assert.equal(readHome(dir, 'Steve'), null, 'no guest breadcrumb or claim is acquired while busy');
+    busy = false;
+    await wait(160);
+    assert.equal(steve._hc_follow.child(), 'KidOne', 'the existing idle rescan starts the deferred visit');
+    assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+  }, { claimDir: dir, isKidTaskActive: () => busy });
+});
+
+const questSource = fs.readFileSync(new URL('../lib/quests.js', import.meta.url), 'utf8');
+const questStart = questSource.indexOf('async function executeAction(');
+const dispatchQuestAction = new Function(`return ${questSource.slice(questStart, questSource.indexOf('\nfunction questOwnerMatches', questStart))}`)();
+
+test('production quest dispatch owns the real give skill throughout its goal-free pickup wait', async () => {
+  const bot = clearanceBot();
+  bot.inventory = { items: () => [{ name: 'oak_planks', type: 17, count: 8 }] };
+  bot.pathfinder = { goal: null, goto: async () => {} };
+  bot.lookAt = async () => {};
+  bot.toss = async () => {};
+  const route = synchronousActionHarness(bot, registerHighLevelSkills({}, () => bot));
+  await installedClearance(bot, async () => {
+    bot.sent.length = 0;
+    const pending = dispatchQuestAction(route.actions, bot, { kind: 'give_to_player', player: 'KidOne', item: 'oak_planks', count: 8 }, {});
+    try {
+      await wait(440);
+      assert.equal(bot.pathfinder.goal, null, 'the pickup wait has no pathfinder goal');
+      assert.deepEqual(bot.sent, [], 'quest gift must not be interrupted by idle camera teleports');
+      assert.equal(bot._hc_intent_action_depth, 1);
+      const result = await pending;
+      assert.equal(result.item_transfer.tossed, 8);
+      assert.equal(result.item_transfer.pickup_confirmed, false);
+      assert.equal(bot._hc_intent_action_depth, 0);
+    } finally { await pending; }
+  });
+});
+
+test('shared action ownership covers direct, quest, intent, task and HTTP entrypoints exactly once', async () => {
+  for (const entry of ['direct', 'quest', 'intent', 'task', 'http']) {
+    const bot = clearanceBot(), done = deferred();
+    const route = synchronousActionHarness(bot, { goto: async () => { await done.promise; return { result: 'arrived' }; } });
+    const invoke = {
+      direct: () => route.dispatch('goto', {}),
+      quest: () => dispatchQuestAction(route.actions, bot, { kind: 'goto', x: 1, y: 64, z: 1 }, {}),
+      intent: () => route.intent('goto', {}),
+      task: () => route.task('goto', {}),
+      http: () => route.handle('goto', {}),
+    }[entry];
+    const pending = invoke();
+    try {
+      assert.equal(bot._hc_intent_action_depth, 1, `${entry} holds one shared action owner`);
+    } finally { done.resolve(); await pending; await wait(0); }
+    assert.equal(bot._hc_intent_action_depth, 0, `${entry} releases shared ownership`);
+  }
+});
+
+test('the shared installer preserves function metadata, this binding and current-connection ownership', async () => {
+  const oldBot = clearanceBot(), newBot = clearanceBot();
+  const key = Symbol('metadata'), state = {};
+  const action = async function () { return { depth: this.bot._hc_intent_action_depth, state: this.state }; };
+  action._hc_automem_wrapped = true;
+  Object.defineProperty(action, '_buildClaimState', { value: state, enumerable: false });
+  action[key] = 'symbol metadata';
+  const route = synchronousActionHarness(oldBot, { inspect: action });
+  const wrapped = route.actions.inspect;
+  route.reinstallOwnership();
+  assert.equal(route.actions.inspect, wrapped, 'reinstall does not nest existing ownership wrappers');
+  assert.equal(wrapped._hc_automem_wrapped, true);
+  assert.equal(wrapped._buildClaimState, state);
+  assert.equal(wrapped[key], 'symbol metadata');
+  route.replaceBot(newBot);
+  assert.deepEqual(await wrapped.call({ bot: newBot, state }), { depth: 1, state });
+  assert.equal(newBot._hc_intent_action_depth, 0);
+  assert.equal(oldBot._hc_intent_action_depth, undefined, 'the installer does not capture an old connection');
+});
+
+test('skill re-registration preserves unchanged automemory wrappers and records each fact once', async () => {
+  const bot = clearanceBot(), facts = [];
+  const sourceStart = serverSource.indexOf('        registerHighLevelSkills(ACTIONS, ensureBot);');
+  const sourceEnd = serverSource.indexOf("        log('high-level skills registered:", sourceStart);
+  const register = new Function('ACTIONS', 'ensureBot', 'registerHighLevelSkills', 'autoRememberFact', `
+    const BUILD_CLAIMS_EXPERIMENT = false;
+    ${serverSource.slice(sourceStart, sourceEnd)}
+  `);
+  const actions = { find_blocks: async () => ({ result: 'Found stone', observed_depth: bot._hc_intent_action_depth, locations: [{ x: 1, y: 64, z: 2 }] }) };
+  // Preserve production ordering if core actions were wrapped at module boot,
+  // before spawn adds auto-memory wrappers around unchanged core methods.
+  const bootStart = serverSource.indexOf('// Core actions are callable before');
+  if (bootStart >= 0) {
+    const bootSource = serverSource.slice(bootStart, serverSource.indexOf('\nfunction parseBody', bootStart));
+    new Function('ACTIONS', 'bot', `${actionOwnershipSource()}\n${bootSource}`)(actions, bot);
+  }
+  register(actions, () => bot, registerHighLevelSkills, (fact) => facts.push(fact));
+  const route = synchronousActionHarness(bot, actions);
+  const oldFind = actions.find_blocks, oldGive = actions.give_to_player;
+  await actions.find_blocks({ block: 'stone' });
+  register(actions, () => bot, registerHighLevelSkills, (fact) => facts.push(fact));
+  route.reinstallOwnership();
+  assert.equal(actions.find_blocks, oldFind, 'unchanged core methods must not gain new automemory or ownership layers');
+  assert.notEqual(actions.give_to_player, oldGive, 'fresh bound skills are wrapped after re-registration');
+  const found = await actions.find_blocks({ block: 'stone' });
+  assert.equal(found.locations.length, 1);
+  assert.equal(found.observed_depth, 1, 'first-spawn auto-memory registration must not nest ownership around owned core methods');
+  assert.equal(bot._hc_intent_action_depth, 0);
+  assert.deepEqual(facts, [
+    'Found stone vein at 1,64,2 (1 block visible).',
+    'Found stone vein at 1,64,2 (1 block visible).',
+  ]);
+  assert.equal(actions.give_to_player._hc_automem_wrapped, true);
+});
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+for (const action of ['goto', 'give_to_player']) {
+  test(`synchronous ${action} owns movement until the production route finishes awaiting it`, async () => {
+    const bot = clearanceBot();
+    const done = deferred();
+    const result = { result: `${action} complete`, detail: { preserved: true } };
+    const route = synchronousActionHarness(bot, { [action]: async () => { await done.promise; return result; } });
+    const pending = route.handle(action);
+    try {
+      await installedClearance(bot, async () => {
+        assert.deepEqual(bot.sent, [], 'idle correction cannot interrupt the requested synchronous action');
+        assert.equal(bot._hc_intent_action_depth, 1);
+        done.resolve();
+        assert.deepEqual(await pending, { status: 200, payload: { ok: true, ...result, state: {} } });
+        assert.equal(bot._hc_intent_action_depth, 0);
+        await wait(100);
+        assert.ok(localTeleports(bot).length > 0, 'idle clearance resumes after the action settles');
+      });
+    } finally { done.resolve(); await pending; }
+    assert.equal(bot._actionEpoch, 1, 'ownership must not re-arm or replace the action epoch');
+    assert.equal(route.history.length, 1);
+    assert.equal(route.history[0].status, 'done');
+  });
+}
+
+test('synchronous action ownership unwinds on rejection and synchronous throw without changing the error', async () => {
+  for (const syncThrow of [false, true]) {
+    const bot = clearanceBot();
+    const failure = new Error('requested action failed');
+    const done = deferred();
+    const action = syncThrow ? () => { throw failure; } : async () => { await done.promise; throw failure; };
+    const route = synchronousActionHarness(bot, { give_to_player: action });
+    const pending = route.handle('give_to_player');
+    const rejection = assert.rejects(pending, (error) => error === failure);
+    try {
+      if (!syncThrow) assert.equal(bot._hc_intent_action_depth, 1);
+    } finally { done.resolve(); await rejection; }
+    assert.equal(bot._hc_intent_action_depth, 0, 'no leaked busy depth after failure');
+    assert.deepEqual(route.history, [], 'the existing error path does not report success');
+    assert.equal(bot._actionEpoch, 1);
+  }
+});
+
+test('overlapping synchronous requests retain ownership until both finish', async () => {
+  const bot = clearanceBot(), first = deferred(), second = deferred();
+  const route = synchronousActionHarness(bot, {
+    goto: async () => { await first.promise; return { result: 'arrived' }; },
+    give_to_player: async () => { await second.promise; return { result: 'given' }; },
+  });
+  const one = route.handle('goto'), two = route.handle('give_to_player');
+  try {
+    assert.equal(bot._hc_intent_action_depth, 2);
+    first.resolve(); await one;
+    assert.equal(bot._hc_intent_action_depth, 1, 'one completion cannot release the other request');
+    second.resolve(); await two;
+    assert.equal(bot._hc_intent_action_depth, 0);
+    assert.equal(bot._actionEpoch, 2);
+  } finally { first.resolve(); second.resolve(); await Promise.all([one, two]); }
+});
+
+test('reconnecting during a synchronous request releases the original bot only', async () => {
+  const original = clearanceBot(), replacement = clearanceBot(), done = deferred();
+  replacement._hc_intent_action_depth = 7;
+  const route = synchronousActionHarness(original, { goto: async () => { await done.promise; return { result: 'arrived' }; } });
+  const pending = route.handle('goto');
+  try {
+    assert.equal(original._hc_intent_action_depth, 1);
+    route.replaceBot(replacement);
+    done.resolve(); await pending;
+    assert.equal(original._hc_intent_action_depth, 0);
+    assert.equal(replacement._hc_intent_action_depth, 7, 'a completed old request cannot decrement the new connection');
+  } finally { done.resolve(); await pending; }
+});
+
+function productionMovementAction(name, next, bot) {
+  const start = serverSource.indexOf(`  async ${name}(`);
+  const source = serverSource.slice(start, serverSource.indexOf(next, start));
+  return new Function('ensureBot', 'goals', 'findPlayerEntity', 'normalizePlayerName', 'currentTask',
+    `return ({${source}}).${name};`)(() => bot, pathfinderPkg.goals, findPlayerEntity, normalizePlayerName, null);
+}
+
+test('synchronous stop retains its stop generation, action epoch and response contracts', async () => {
+  const bot = clearanceBot();
+  bot.pathfinder = { goal: {}, setGoal(goal) { this.goal = goal; } };
+  bot.stopDigging = () => {};
+  const stop = productionMovementAction('stop', '\n  // ── Mining', bot);
+  const route = synchronousActionHarness(bot, { stop });
+  const response = await route.handle('stop');
+  assert.deepEqual(response, { status: 200, payload: { ok: true, result: 'Stopped all actions.', state: {} } });
+  assert.equal(bot._actionEpoch, 2, 'existing arm + stop epoch increments are preserved');
+  assert.equal(bot._stopGeneration, 1);
+  assert.equal(bot.interrupt_code, true);
+  assert.equal(bot.pathfinder.goal, null);
+  assert.equal(bot._hc_intent_action_depth, 0);
+});
+
+test('finishing a synchronous request after stop does not clear the stop or rewind its epoch', async () => {
+  const bot = clearanceBot(), done = deferred();
+  bot.pathfinder = { goal: {}, setGoal(goal) { this.goal = goal; } };
+  bot.stopDigging = () => {};
+  const route = synchronousActionHarness(bot, {
+    goto: async () => { await done.promise; return { result: 'interrupted' }; },
+    stop: productionMovementAction('stop', '\n  // ── Mining', bot),
+  });
+  const pending = route.handle('goto');
+  try {
+    await route.handle('stop');
+    assert.equal(bot._hc_intent_action_depth, 1, 'the pending request retains its own depth after stop returns');
+    assert.equal(bot._actionEpoch, 3);
+    done.resolve(); await pending;
+    assert.equal(bot._hc_intent_action_depth, 0);
+    assert.equal(bot.interrupt_code, true, 'completion must not resume stopped idle movement');
+    assert.equal(bot._actionEpoch, 3);
+    assert.equal(bot._stopGeneration, 1);
+  } finally { done.resolve(); await pending; }
+});
+
+for (const action of ['follow', 'follow_player_v2']) {
+  test(`requested ${action} keeps its sustained goal after returning and suppresses idle clearance`, async () => {
+    const bot = clearanceBot();
+    bot.pathfinder = { goal: null, isMoving: () => false, setGoal(goal) { this.goal = goal; } };
+    const actions = registerHighLevelSkills({}, () => bot);
+    actions.follow = productionMovementAction('follow', '\n\n  async look(', bot);
+    const route = synchronousActionHarness(bot, actions);
+    const response = await route.handle(action, { player: 'KidOne' });
+    assert.equal(response.status, 200);
+    assert.ok(bot.pathfinder.goal instanceof pathfinderPkg.goals.GoalFollow);
+    assert.match(response.payload.result, /Following KidOne/);
+    await installedClearance(bot, async () => {
+      assert.deepEqual(bot.sent, [], 'an active follow goal owns movement even while standing within its radius');
+      bot.pathfinder.setGoal(null);
+      await wait(100);
+      assert.ok(localTeleports(bot).length > 0, 'idle correction resumes once the requested goal is cleared');
+    });
+  });
+}

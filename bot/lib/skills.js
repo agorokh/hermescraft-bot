@@ -32,6 +32,7 @@ import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { findPlayerEntity, itemNameFromCollectEntity, playerNameMatchesResolvedCollector } from './player_utils.js';
+import { findNearbySchematicSite, MAX_FOUNDATION_PLACEMENTS, schematicSiteDimensions, validateSchematicSite } from './schematic_site.js';
 import {
   blockReadbackMatches,
   buildStateFileForId,
@@ -56,7 +57,6 @@ import {
 } from './advanced_build_pipeline.js';
 
 const BUILD_STATE_SAVE_EVERY_N = 10;
-const MAX_FOUNDATION_PLACEMENTS = 4096;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -127,7 +127,12 @@ function sendServerCommand(command) {
 const STATE_SUFFIX_PATTERN = '\\[]|\\[[a-z0-9_]+=[a-z0-9_]+(,[a-z0-9_]+=[a-z0-9_]+)*\\]';
 const BLOCK_NAME_RE = new RegExp(`^[a-z0-9_.-]+:[a-z0-9_./-]+(${STATE_SUFFIX_PATTERN})?$`);
 
-export function safeSetblockCommand(x, y, z, block) {
+function isDoorHalf(block) {
+  return normalizeBlockBaseName(block).endsWith('_door')
+    && /(?:\[|,)half=(?:upper|lower)(?:,|\])/.test(normalizeBlockName(block));
+}
+
+export function safeSetblockCommand(x, y, z, block, { strict = false } = {}) {
   const rawCoords = [x, y, z];
   if (rawCoords.some((value) => value == null || value === '' || typeof value === 'boolean')) {
     throw new Error('Unsafe setblock command arguments');
@@ -144,11 +149,13 @@ export function safeSetblockCommand(x, y, z, block) {
   if (!coords.every(Number.isInteger) || !BLOCK_NAME_RE.test(blockName)) {
     throw new Error('Unsafe setblock command arguments');
   }
-  return `setblock ${coords[0]} ${coords[1]} ${coords[2]} ${blockName}`;
+  return `setblock ${coords[0]} ${coords[1]} ${coords[2]} ${blockName}${strict === true ? ' strict' : ''}`;
 }
 
 function sendSetblockCommand(bot, x, y, z, block) {
-  const command = safeSetblockCommand(x, y, z, block);
+  // Java 1.21.5+ strict placement preserves an explicit door half while its
+  // matching half is assembled. Ordinary blocks still use normal updates.
+  const command = safeSetblockCommand(x, y, z, block, { strict: isDoorHalf(block) });
   const sent = sendServerCommand(command);
   if (sent === true) return 'console_fifo';
   if (process.env.HERMESCRAFT_TRUST_SETBLOCK_AUTH === '1'
@@ -826,14 +833,45 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const blocks = data.blocks || [];
   if (blocks.length === 0) return { result: `Schematic ${name} is empty.` };
 
-  const baseX = Math.floor(x), baseZ = Math.floor(z);
-  const requestedBaseY = Math.floor(y);
+  let baseX = Math.floor(x), baseZ = Math.floor(z);
+  let requestedBaseY = Math.floor(y);
   // baseY is `let` because terrain-aware grounding may adjust it below to
   // sit on the highest sampled ground under the schematic footprint.
   let baseY = requestedBaseY;
-  const buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
-  const stateFile = buildStateFileForId(buildId);
+  let buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
+  let stateFile = buildStateFileForId(buildId);
   const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
+  const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
+  const respectExplicitBaseY = bodyFlagEnabled(bodyArgs.respect_explicit_base_y, false);
+  const automaticSite = Boolean(bodyArgs.auto_site);
+  let savedState = resumeEnabled && !automaticSite ? await loadBuildState(stateFile) : null;
+  if (savedState && savedState.build_id !== buildId) savedState = null;
+  let siteValidated = false;
+  const occupiedPositions = () => [bot.entity?.position, ...Object.values(bot.players || {}).map(p => p.entity?.position)];
+
+  // Fresh ordinary builds are validated before even the setblock auth probe.
+  // Saved resumes and deliberate aerial/skip-foundation requests retain their
+  // established planner semantics; they are not automatic site selection.
+  if (automaticSite || (!savedState && name !== 'sky_bridge' && !bodyFlagEnabled(bodyArgs.skip_foundation, false))) {
+    const dimensions = schematicSiteDimensions(entry, data);
+    const blockAt = (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz));
+    const site = bodyArgs.auto_site
+      ? findNearbySchematicSite({ blockAt, ...dimensions, anchor: bodyArgs.auto_site,
+        occupied: occupiedPositions() })
+      : validateSchematicSite({ blockAt, ...dimensions, origin: { x: baseX, y: baseY, z: baseZ },
+        occupied: occupiedPositions(), adjustTerrain: !respectExplicitBaseY });
+    if (!site.ok) return { result: `Couldn't find a safe site for "${name}": ${site.reason}. Nothing was built.`,
+      site_refused: true, site_code: site.code, site_reason: site.reason };
+    siteValidated = true;
+    baseX = site.origin.x;
+    baseY = site.origin.y;
+    baseZ = site.origin.z;
+    if (bodyArgs.auto_site) {
+      requestedBaseY = baseY;
+      buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
+      stateFile = buildStateFileForId(buildId);
+    }
+  }
   const centerX = baseX + Math.floor(fw / 2);
   const centerZ = baseZ + Math.floor(fl / 2);
 
@@ -847,12 +885,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
   const useChatCommand = await detectSetblockAuth(bot);
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
-  const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
-  const respectExplicitBaseY = bodyFlagEnabled(bodyArgs.respect_explicit_base_y, false);
-  let savedState = resumeEnabled ? await loadBuildState(stateFile) : null;
-  if (savedState && savedState.build_id !== buildId) {
-    savedState = null;
-  }
   if (savedState && Number.isFinite(Number(savedState.origin?.y))) {
     const savedBaseY = Math.floor(Number(savedState.origin.y));
     if (savedBaseY !== baseY) {
@@ -874,13 +906,15 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // available, because physical mode cannot cheaply backfill terrain supports.
   let foundationPlacements = [];
   let foundationStats = null;
-  const skipFoundation = bodyFlagEnabled(bodyArgs.skip_foundation, false)
-    || name === 'sky_bridge';   // sky_bridge is the canonical aerial schematic
+  const skipFoundation = !automaticSite && (bodyFlagEnabled(bodyArgs.skip_foundation, false)
+    || name === 'sky_bridge');   // sky_bridge is the canonical aerial schematic
   if (!skipFoundation && useChatCommand) {
     try {
       const floorCells = computeFloorCells(blocks);
       const completedCoords = new Set((savedState?.completed || []).map((id) => String(id).split(':')[0]));
-      const groundSearchTopY = Math.min(319, baseY + 48);
+      // Preflight already fixed the clear volume. A second scan above it must
+      // not move a checked ground-level build onto a distant roof.
+      const groundSearchTopY = siteValidated ? baseY - 1 : Math.min(319, baseY + 48);
       const sample = sampleFootprintGround({
         blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)),
         floorCells,
@@ -901,12 +935,16 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           return true;
         },
       });
+      if (siteValidated && sample.sampledCells !== floorCells.length) {
+        return { result: `Couldn't confirm solid ground for "${name}" after checking the site. Nothing was built.`,
+          site_refused: true, site_code: 'unsupported' };
+      }
       // If we found ground under most cells, retarget baseY to the highest
       // ground +1. This prevents the schematic from being buried into a hill.
       // Tolerate up to half the footprint having no ground (e.g. cliff edges)
       // before falling back to the caller's baseY.
       let adjustedBaseY = baseY;
-      if (!savedState && !respectExplicitBaseY && sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
+      if (!siteValidated && !savedState && !respectExplicitBaseY && sample.sampledCells > 0 && sample.sampledCells * 2 >= floorCells.length) {
         adjustedBaseY = sample.maxGroundY + 1;
       }
       // After potential Y adjustment, generate foundation under the schematic.
@@ -922,6 +960,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         maxFillDepth: 16,
       });
       if (foundationResult.placements.length > MAX_FOUNDATION_PLACEMENTS) {
+        if (siteValidated) return { result: `Couldn't safely support "${name}": its foundation would be too large. Nothing was built.`,
+          site_refused: true, site_code: 'foundation_size' };
         console.log(`[build_schematic] foundation for "${name}" skipped: ${foundationResult.placements.length} blocks exceeds cap ${MAX_FOUNDATION_PLACEMENTS}`);
       } else {
         if (adjustedBaseY !== baseY) {
@@ -935,10 +975,20 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         console.log(`[build_schematic] foundation for "${name}": ${foundationStats.blocksAdded} ${fillBlock} blocks across ${foundationStats.cellsFilled} cells (max depth ${foundationStats.maxDepth}, capped ${foundationStats.capped})`);
       }
     } catch (e) {
+      if (siteValidated) return { result: `Couldn't confirm the foundation for "${name}". Nothing was built.`,
+        site_refused: true, site_code: 'foundation_error' };
       console.log(`[build_schematic] foundation generation failed: ${e.message} — proceeding without foundation`);
       foundationPlacements = [];
       foundationStats = null;
     }
+  }
+
+  if (siteValidated) {
+    const dimensions = schematicSiteDimensions(entry, data);
+    const site = validateSchematicSite({ ...dimensions, origin: { x: baseX, y: baseY, z: baseZ },
+      occupied: occupiedPositions(), blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)) });
+    if (!site.ok) return { result: `Couldn't keep the site safe for "${name}": ${site.reason}. Nothing was built.`,
+      site_refused: true, site_code: site.code, site_reason: site.reason };
   }
 
   const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
@@ -1061,6 +1111,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     if (a[0] !== b[0]) return a[0] - b[0];
     return a[2] - b[2];
   });
+  // Finish all normal wall/roof updates before assembling the two door halves.
+  // Stable partition retains lower-before-upper order within the final group.
+  if (useChatCommand) sorted.sort((a, b) => Number(isDoorHalf(a[3])) - Number(isDoorHalf(b[3])));
   for (const [dx, dy, dz, block] of sorted) {
     if (skillWasStopped(bot, stopGen)) break;
     // Skip explicit air cells — schematic authors sometimes encode them as

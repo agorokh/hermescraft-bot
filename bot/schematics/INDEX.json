@@ -11,7 +11,7 @@
       "height": 4,
       "summary": "5x5 oak cottage with door, roof, and one window",
       "materials": {
-        "oak_planks": 80,
+        "oak_planks": 79,
         "oak_door": 1,
         "glass_pane": 1
       }

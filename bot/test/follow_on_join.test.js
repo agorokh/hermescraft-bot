@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { Vec3 } from 'vec3';
 import {
   FOLLOW_DEFAULTS,
   followEnabled,
@@ -193,7 +194,7 @@ test('installed but disabled: no listeners, nothing claimed', () => {
   teardown();
 });
 
-test('two players get two different characters; a lone player gets exactly one', async () => {
+test('a lone player gets both characters and the guest yields when a second player joins', async () => {
   await withCompanions('Rosie,Steve', async () => {
     const dir = tmpDir();
     const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
@@ -210,9 +211,11 @@ test('two players get two different characters; a lone player gets exactly one',
       }
       await wait(700);
       assert.equal(rosie._hc_follow.child(), 'KidOne');
-      assert.equal(steve._hc_follow.child(), null, 'a claimed player is not followed twice');
+      assert.equal(steve._hc_follow.child(), 'KidOne', 'the spare character visits as a guest');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie', 'only Rosie owns the primary claim');
+      assert.deepEqual(claimsHeldBy(dir, 'Steve'), [], 'a guest owns no primary claim');
       assert.ok(rosie.sent.includes('/tp KidOne'));
-      assert.equal(steve.sent.length, 0);
+      assert.ok(steve.sent.includes('/tp KidOne'));
 
       for (const b of [rosie, steve]) {
         b.players.KidTwo = { username: 'KidTwo' };
@@ -222,6 +225,12 @@ test('two players get two different characters; a lone player gets exactly one',
       assert.equal(rosie._hc_follow.child(), 'KidOne', 'a busy character takes no second player');
       assert.equal(steve._hc_follow.child(), 'KidTwo');
       assert.ok(steve.sent.includes('/tp KidTwo'));
+      for (const b of [rosie, steve]) delete b.players.KidTwo;
+      await wait(800);
+      assert.equal(steve._hc_follow.child(), 'KidOne', 'two players back to one: spare visits again');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+      downs[1]();
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie', 'guest teardown never releases another claim');
     } finally {
       downs.forEach((d) => d());
     }
@@ -353,10 +362,12 @@ test('an idle character picks up a player whose character went away', async () =
     try {
       await wait(1400);
       assert.equal(rosie._hc_follow.child(), 'KidOne');
-      assert.equal(steve._hc_follow.child(), null);
+      assert.equal(steve._hc_follow.child(), 'KidOne');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
       downRosie();                                   // Rosie disconnects; her claim is released
       await wait(400);
       assert.equal(steve._hc_follow.child(), 'KidOne', 'no rejoin needed');
+      assert.equal(readClaim(dir, 'KidOne').character, 'Steve', 'the guest becomes primary after release');
       assert.ok(steve.sent.includes('/tp KidOne'));
     } finally {
       downRosie();                                   // idempotent; never leave a timer behind
@@ -520,5 +531,220 @@ test('a following character keeps its claim fresh, and lets go if a sibling took
     } finally {
       down();
     }
+  });
+});
+
+const FOLLOW_ENV = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+const STONE = { name: 'stone', boundingBox: 'block', shapes: [[0, 0, 0, 1, 1, 1]] };
+const AIR = { name: 'air', boundingBox: 'empty', shapes: [] };
+
+function clearanceBot(name = 'Rosie', yaw = 0) {
+  const bot = fakeBot(name, { players: ['Rosie', 'Steve', 'KidOne'] });
+  bot.entity = { id: name === 'Rosie' ? 1 : 2, position: new Vec3(10.5, 64, 10.5), width: 0.6, height: 1.8 };
+  bot.players.KidOne.entity = { id: 3, username: 'KidOne', type: 'player', yaw, position: new Vec3(10.5, 64, 10.5), width: 0.6, height: 1.8 };
+  bot.entities = { [bot.entity.id]: bot.entity, 3: bot.players.KidOne.entity };
+  bot.blockAt = (p) => p.y === 63 ? STONE : AIR;
+  return bot;
+}
+
+function localTeleports(bot) {
+  return bot.sent.filter((m) => /^\/tp -?[\d.]+ -?[\d.]+ -?[\d.]+$/.test(m));
+}
+
+async function installedClearance(bot, fn, opts = {}) {
+  const dir = opts.claimDir || tmpDir();
+  const down = installFollowOnJoin(bot, () => {}, {
+    env: FOLLOW_ENV, claimDir: dir, config: { ...FAST, rescanMs: 40 }, ...opts,
+  });
+  try {
+    bot.emit('playerJoined', { username: 'KidOne' });
+    await wait(440);
+    await fn(dir);
+  } finally { down(); }
+}
+
+function tpPosition(command) {
+  return new Vec3(...command.split(' ').slice(1).map(Number));
+}
+
+test('overlapping idle follower clears the camera to a supported nearby side cell, then settles', async () => {
+  const bot = clearanceBot();
+  await installedClearance(bot, async () => {
+    assert.ok(localTeleports(bot).length > 0, 'overlap is corrected even though distance is zero');
+    assert.ok(!bot.sent.includes('/tp KidOne'), 'visible local arrival uses verified coordinates');
+    const landing = tpPosition(localTeleports(bot)[0]);
+    assert.ok(landing.distanceTo(bot.players.KidOne.entity.position) >= 3);
+    assert.ok(landing.distanceTo(bot.players.KidOne.entity.position) <= 6);
+    assert.equal(landing.y, 64);
+    assert.ok(-(landing.z - 10.5) / Math.hypot(landing.x - 10.5, landing.z - 10.5) <= Math.cos(Math.PI / 12), 'yaw zero looks -Z; correction clears the central view');
+    bot.entity.position = landing;
+    const count = bot.sent.length;
+    await wait(140);
+    assert.equal(bot.sent.length, count, 'a clear idle position is stable');
+    assert.ok(bot.sent.every((m) => /^\/tp -?[\d.]+ -?[\d.]+ -?[\d.]+$/.test(m)), 'only self coordinate teleports, no world edits');
+  });
+});
+
+test('roster sides separate both companions, and camera turns use Mineflayer yaw', async () => {
+  const dir = tmpDir();
+  const rosie = clearanceBot();
+  const steve = clearanceBot('Steve');
+  await installedClearance(rosie, async () => {
+    await installedClearance(steve, async () => {
+      assert.ok(localTeleports(rosie).length > 0, 'Rosie must clear the camera');
+      assert.ok(localTeleports(steve).length > 0, 'Steve must join and clear the camera');
+      const r = tpPosition(localTeleports(rosie)[0]);
+      const s = tpPosition(localTeleports(steve)[0]);
+      assert.ok(r.distanceTo(s) >= 3, 'roster preference separates simultaneous destinations');
+      rosie.entity.position = r;
+      const kid = rosie.players.KidOne.entity;
+      kid.yaw = Math.atan2(-(r.x - kid.position.x), -(r.z - kid.position.z));
+      const before = localTeleports(rosie).length;
+      await wait(140);
+      assert.ok(localTeleports(rosie).length > before, 'turning toward the companion clears the new view');
+      const moved = tpPosition(localTeleports(rosie).at(-1));
+      const dx = moved.x - kid.position.x, dz = moved.z - kid.position.z;
+      assert.ok((-Math.sin(kid.yaw) * dx - Math.cos(kid.yaw) * dz) / Math.hypot(dx, dz) <= Math.cos(Math.PI / 12));
+    }, { claimDir: dir });
+  }, { claimDir: dir });
+});
+
+for (const [label, change] of [
+  ['unloaded chunks', (b) => { b.blockAt = () => null; }],
+  ['unsupported air', (b) => { b.blockAt = () => AIR; }],
+  ['partial support', (b) => { b.blockAt = (p) => p.y === 63 ? { ...STONE, shapes: [[0, 0, 0, 1, 0.5, 1]] } : AIR; }],
+  ['unknown support identity', (b) => { b.blockAt = (p) => p.y === 63 ? { boundingBox: 'block', shapes: STONE.shapes } : AIR; }],
+  ['missing collision data', (b) => { b.blockAt = (p) => p.y === 63 ? { name: 'stone', boundingBox: 'block' } : AIR; }],
+  ['hazardous support', (b) => { b.blockAt = (p) => p.y === 63 ? { ...STONE, name: 'magma_block' } : AIR; }],
+  ['waterlogged support', (b) => { b.blockAt = (p) => p.y === 63 ? { ...STONE, getProperties: () => ({ waterlogged: true }) } : AIR; }],
+  ['water at feet', (b) => { b.blockAt = (p) => p.y === 63 ? STONE : { name: 'water', boundingBox: 'empty', shapes: [] }; }],
+  ['blocked headroom', (b) => { b.blockAt = (p) => p.y === 63 || p.y >= 65 ? STONE : AIR; }],
+  ['entity collision', (b) => { b.entities[9] = { position: new Vec3(10.5, 63, 10.5), width: 30, height: 10 }; }],
+  ['unknown yaw', (b) => { delete b.players.KidOne.entity.yaw; }],
+  ['nonfinite position', (b) => { b.players.KidOne.entity.position.x = NaN; }],
+  ['nonfinite bot position', (b) => { b.entity.position.x = NaN; }],
+]) {
+  test(`idle camera correction waits honestly with ${label}`, async () => {
+    const bot = clearanceBot();
+    change(bot);
+    await installedClearance(bot, async () => {
+      assert.deepEqual(bot.sent, [], 'no unsafe player-target or vanilla fallback');
+    });
+  });
+}
+
+test('an occupied preferred cell is skipped rather than overlapping another entity', async () => {
+  const first = clearanceBot();
+  let preferred;
+  await installedClearance(first, async () => {
+    assert.ok(localTeleports(first).length > 0, 'a clear preferred cell must be found');
+    preferred = tpPosition(localTeleports(first)[0]);
+  });
+  const bot = clearanceBot();
+  bot.entities[9] = { position: preferred, width: 0.6, height: 1.8 };
+  await installedClearance(bot, async () => {
+    assert.ok(localTeleports(bot).length > 0, 'an unoccupied alternate cell must be found');
+    const landing = tpPosition(localTeleports(bot)[0]);
+    assert.ok(Math.abs(landing.x - preferred.x) >= 0.6 || Math.abs(landing.z - preferred.z) >= 0.6);
+  });
+});
+
+test('requested tasks and stop suppress arrival and camera correction without losing ownership', async () => {
+  for (const visible of [true, false]) {
+    const bot = clearanceBot();
+    if (!visible) { delete bot.players.KidOne.entity; delete bot.entities[3]; }
+    let busy = true;
+    await installedClearance(bot, async (dir) => {
+      assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+      assert.deepEqual(bot.sent, [], 'active requested task owns movement');
+      busy = false;
+      bot.interrupt_code = true;
+      await wait(100);
+      assert.deepEqual(bot.sent, [], 'stop remains authoritative');
+      bot.interrupt_code = false;
+      await wait(100);
+      assert.ok(bot.sent.length > 0, 'idle following resumes');
+    }, { isKidTaskActive: () => busy });
+  }
+});
+
+test('local clearance retries are throttled while server teleport confirmation is pending', async () => {
+  const bot = clearanceBot();
+  await installedClearance(bot, async () => {
+    assert.equal(localTeleports(bot).length, 1, 'one correction pending, no per-tick teleport storm');
+  }, { config: { ...FAST, arriveRetryMs: 1000 } });
+});
+
+test('guest keeps its own home and neither heartbeats nor releases the primary claim', async () => {
+  const dir = tmpDir();
+  tryClaim(dir, 'KidOne', 'Rosie');
+  const file = path.join(dir, 'kidone.json');
+  const stamp = fs.statSync(file).mtimeMs;
+  const steve = clearanceBot('Steve');
+  await installedClearance(steve, async () => {
+    assert.equal(steve._hc_follow.child(), 'KidOne');
+    assert.deepEqual(readHome(dir, 'Steve'), { dim: 'overworld', x: 10.5, y: 64, z: 10.5 });
+    assert.equal(fs.statSync(file).mtimeMs, stamp, 'guest does not heartbeat');
+    steve._hc_world = 'bskyblock_world';
+    delete steve.players.KidOne;
+    await wait(300);
+    assert.equal(steve._hc_follow.child(), null);
+    assert.ok(steve.sent.some((m) => m === '/execute in minecraft:overworld run minecraft:tp @s 10.50 64.00 10.50'));
+    assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+    steve.players.KidOne = { username: 'KidOne' };
+    steve.emit('playerJoined', { username: 'KidOne' });
+    await wait(400);
+    assert.equal(steve._hc_follow.child(), 'KidOne', 'guest can rejoin using its original home');
+  }, { claimDir: dir, config: { ...FAST, claimBeatMs: 40 } });
+  assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+});
+
+test('a guest rides out a tab-list flicker and takes over a stale primary without rejoining', async () => {
+  const dir = tmpDir();
+  tryClaim(dir, 'KidOne', 'Rosie');
+  const steve = clearanceBot('Steve');
+  await installedClearance(steve, async () => {
+    assert.equal(steve._hc_follow.child(), 'KidOne');
+    assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');
+    const child = steve.players.KidOne;
+    delete steve.players.KidOne;
+    await wait(50);
+    steve.players.KidOne = child;
+    await wait(150);
+    assert.equal(steve._hc_follow.child(), 'KidOne', 'guest survives the same leave grace as a primary');
+    assert.ok(!steve.sent.some((m) => m.startsWith('/execute')));
+    await wait(450);
+    assert.equal(readClaim(dir, 'KidOne').character, 'Steve', 'a guest does not keep a dead primary alive');
+  }, { claimDir: dir, config: { ...FAST, rescanMs: 40, claimBeatMs: 40, claimTtlMs: 800 } });
+});
+
+test('visible arrival with no loaded safe cell waits rather than falling back to a player teleport', async () => {
+  const bot = clearanceBot();
+  bot.entity.position = new Vec3(30.5, 64, 10.5);
+  bot.blockAt = () => null;
+  await installedClearance(bot, async () => { assert.deepEqual(bot.sent, []); });
+});
+
+test('an elevated-only landing inside horizontal clearance is refused without repeated corrections', async () => {
+  const bot = clearanceBot();
+  bot.players.KidOne.entity.position = new Vec3(10, 64, 10);
+  bot.entity.position = new Vec3(10, 64, 10);
+  bot.blockAt = (p) => {
+    if (p.x === 12.5 && p.z === 11.5) {
+      if (p.y === 64) return STONE;
+      if (p.y === 65 || p.y === 66) return AIR;
+    }
+    return null;
+  };
+  await installedClearance(bot, async () => {
+    assert.deepEqual(bot.sent, [], '3D distance above three cannot excuse horizontal overlap');
+  });
+});
+
+test('an off-centre visible companion remains still while the player looks past it', async () => {
+  const bot = clearanceBot();
+  bot.entity.position = new Vec3(13.5, 64, 6.5); // five blocks away, 37 degrees off-centre
+  await installedClearance(bot, async () => {
+    assert.deepEqual(bot.sent, [], 'a companion near the edge of view is welcome to stay visible');
   });
 });

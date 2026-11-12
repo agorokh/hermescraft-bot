@@ -1454,7 +1454,13 @@ async function createBot() {
       // HERMESCRAFT_FOLLOW_ON_JOIN=1.
       try {
         if (_follow_tear_down) _follow_tear_down();
-        _follow_tear_down = installFollowOnJoin(thisBot, log);
+        _follow_tear_down = installFollowOnJoin(thisBot, log, {
+          isKidTaskActive: () => !!(
+            thisBot.interrupt_code
+            || currentTask?.status === 'running'
+            || (thisBot._hc_intent_action_depth || 0) > 0
+          ),
+        });
         _follow_owner = thisBot;
       } catch (e) {
         log(`follow-on-join install failed: ${e.message}`);

@@ -407,10 +407,16 @@ async function place_near_player(bot, { player, item, direction = 'side' }) {
 async function give_to_player(bot, { player, item, count = 1 }) {
   const stopGen = captureStopGen(bot);
   if (!player || !item) return { result: `give_to_player needs player + item` };
+  const requestedCount = Number(count);
+  if (typeof count === 'boolean' || !Number.isSafeInteger(requestedCount) || requestedCount < 1) {
+    return { result: 'give_to_player needs a positive whole count' };
+  }
   const entity = findPlayerEntity(bot, player);
   if (!entity) return { result: `Can't see ${player} nearby.` };
   const stack = findInventoryItem(bot, item);
   if (!stack) return { result: `No ${item} in my inventory to give.` };
+  const tossedCount = Math.min(requestedCount, stack.count);
+  if (!Number.isSafeInteger(tossedCount) || tossedCount < 1) return { result: `No ${item} in my inventory to give.` };
 
   // Pathfind close.
   const p = entity.position;
@@ -436,7 +442,7 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   };
   bot.on('playerCollect', onCollect);
   try {
-    await bot.toss(stack.type, null, Math.min(count, stack.count));
+    await bot.toss(stack.type, null, tossedCount);
   } catch (e) {
     bot.removeListener('playerCollect', onCollect);
     return { result: `Couldn't toss ${item}: ${e.message}` };
@@ -450,10 +456,13 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   }
   bot.removeListener('playerCollect', onCollect);
 
+  const partial = tossedCount < requestedCount
+    ? ` Only ${tossedCount} of the ${requestedCount} requested were available.` : '';
   return {
     result: received
-      ? `Gave ${count} ${item} to ${player} (they picked it up).`
-      : `Tossed ${count} ${item} toward ${player} — couldn't confirm pickup within 3s.`,
+      ? `Gave ${tossedCount} ${item} to ${player} (they picked it up).${partial}`
+      : `Tossed ${tossedCount} ${item} toward ${player} — pickup not confirmed within 3s.${partial}`,
+    item_transfer: { item, requested: requestedCount, tossed: tossedCount, pickup_confirmed: received },
   };
 }
 

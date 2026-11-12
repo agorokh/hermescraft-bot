@@ -3,6 +3,51 @@
 const ORE_STEM_RE = /^(iron|coal|diamond|copper|gold)(s{0,3})$/;
 const GATHER_STEM_RE = /^(wood|log|logs|oak|dirt|stone|cobblestone|cobble|sand)(s{0,3})$/;
 
+function directRequestBody(bot, body) {
+  let text = String(body || '').trim();
+  const name = String(bot?.username || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (name) text = text.replace(new RegExp(`^${name}(?:\\s*[:,!]\\s*|\\s+)`, 'i'), '');
+  return text.replace(/^(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+|pls\s+)?/i, '');
+}
+
+function itemWords(name) {
+  return String(name || '').toLowerCase().replace(/^minecraft:/, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Resolve an explicit inventory handoff before classification can turn a
+// material noun ("oak plank") into gathering its source block (oak_log).
+// A framed but unknown item is returned with item=null so the original request
+// falls through to the brain rather than another guessed mutating skill.
+export function extractExplicitGiveRequest(bot, body) {
+  const match = directRequestBody(bot, body).match(/^(?:give|hand|pass|toss)\s+me\s+(.+?)[.!?]*$/i);
+  if (!match) return null;
+  let requested = match[1].replace(/\s+(?:please|pls)$/i, '').trim();
+  const quantity = requested.match(/^(\d+|an?|some)\s+(.+)$/i);
+  const count = quantity && /^\d+$/.test(quantity[1]) ? Number(quantity[1]) : 1;
+  if (quantity) requested = quantity[2];
+  // Existing social/food/flower handlers own these intentionally generic
+  // requests; they are not canonical inventory item names.
+  if (/^(?:a |an |some )?(?:wave|hug|hand|high five|compliment|flower|flowers|food|something to eat)$/i.test(requested)) return null;
+  if (!Number.isSafeInteger(count) || count < 1) return { item: null, count };
+  const names = [...new Set([
+    ...Object.keys(bot?.registry?.itemsByName || {}),
+    ...(bot?.inventory?.items?.() || []).map(item => item.name),
+  ])];
+  const words = itemWords(requested);
+  const item = names.find(name => itemWords(name) === words)
+    || names.find(name => itemWords(name).replace(/s$/, '') === words.replace(/s$/, ''));
+  return { item: item || null, count };
+}
+
+// A classifier score is not authority to mine. Require a positive action
+// frame; a platform/build/give sentence containing "stone" or "oak" is not
+// a gathering request, and should retain its original command for the brain.
+export function hasGatherRequest(bot, body) {
+  const request = directRequestBody(bot, body);
+  return /^(?:get|grab|chop|mine|fetch|bring)\b/i.test(request)
+    || /^i\s+(?:need|want)\s+(?:some\s+|a few\s+)?(?:\d+\s+)?(?:wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i.test(request);
+}
+
 /** Collapse kid stretching to at most a natural double: wooood → wood, ironnnn → iron. */
 export function collapseKidStretch(s) {
   return s.replace(/(.)\1{2,}/gi, '$1$1');

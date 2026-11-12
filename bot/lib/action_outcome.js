@@ -1,6 +1,11 @@
 /** Shared heuristic: did a skill/ACTION return a failed or partial outcome? */
 export function actionOutcomeFailed(result, opts = {}) {
   if (!result || result.error) return true;
+  // A successful toss is an observed side effect, even with partial stock or
+  // uncertain pickup. Keep its receipt visible instead of encouraging a replay.
+  const transfer = result.item_transfer;
+  if (Number.isSafeInteger(transfer?.tossed) && transfer.tossed > 0
+    && Number.isSafeInteger(transfer.requested) && transfer.requested >= transfer.tossed) return false;
   const text = String(result.result || '');
   const lower = text.toLowerCase();
   if (/\bforeman rejected\b|\bmissing materials\b|\bpaused for sentry mode\b/.test(lower)) {

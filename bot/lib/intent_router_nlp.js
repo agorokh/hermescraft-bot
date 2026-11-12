@@ -28,7 +28,7 @@
 
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { extractGatherBlockFromBody, extractKidName, extractOreFromBody } from './intent_slot_extract.js';
+import { extractExplicitGiveRequest, extractGatherBlockFromBody, extractKidName, extractOreFromBody, hasGatherRequest } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { buildRequestContract, unsupportedBuildReply } from './build_request_contract.js';
 import { fileURLToPath } from 'node:url';
@@ -382,7 +382,8 @@ const DISPATCHERS = {
     return { action: 'chat', body: { text: 'sitting :)' } };
   },
 
-  gather_block: (_bot, ctx) => {
+  gather_block: (bot, ctx) => {
+    if (!hasGatherRequest(bot, ctx.body)) return null;
     const block = extractGatherBlockFromBody(ctx.body);
     if (!block) return null;
     const countMatch = ctx.body.match(/\b(\d+)\s*(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i);
@@ -725,6 +726,14 @@ export async function contractBuildRoute(bot, body, sender, schematicName) {
 // Same return shape: {matched, intent_name, action, body}.
 export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
+  const gift = extractExplicitGiveRequest(bot, body);
+  if (gift) {
+    if (!gift.item) return { matched: false, nlp_zone: 'unresolved_give' };
+    const actionBody = { player: sender, item: gift.item, count: gift.count };
+    return { matched: true, intent_name: 'give_items', action: 'give_to_player', body: actionBody,
+      skill_id: opts.dryRun ? null : recordLastSkill(bot, 'give_items', 'give_to_player', actionBody, body),
+      nlp_score: null, nlp_zone: 'explicit_give' };
+  }
   // ANAPHORA PRE-PROCESSOR (council round 2 unanimous): short modifier
   // phrases ("higher", "again", "over there") amend the last fired skill
   // BEFORE NLP gets a vote. NLP doesn't know the previous action; only

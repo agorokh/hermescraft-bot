@@ -24,7 +24,7 @@
 //
 // ctx = { sender, senderEntity, message, body }
 
-import { extractKidName, extractOreFromBody } from './intent_slot_extract.js';
+import { extractExplicitGiveRequest, extractKidName, extractOreFromBody, hasGatherRequest } from './intent_slot_extract.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { explicitSchematicBaseY, findPlayerEntity, resolveAnchorPos, intFromMatch, normalizeBuildBaseY, schematicBuildBaseY, pickTowerFootOffset } from './player_utils.js';
 import { runEmoteWave, runEmoteJump, runEmoteDance, runEmoteSit } from './emotes.js';
@@ -163,6 +163,7 @@ const INTENTS = [
       /\b(I need|i want)\b.*\b(wood|logs?|dirt|stone|cobble|sand)\b/i,
     ],
     async handler(bot, ctx) {
+      if (!hasGatherRequest(bot, ctx.body)) return null;
       const m = ctx.body.match(/\b(wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i);
       if (!m) return null;
       const raw = m[1].toLowerCase();
@@ -494,6 +495,14 @@ export async function tryStopRoute(bot, body, sender) {
 // normal LLM-driven command queue.
 export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
+  const gift = extractExplicitGiveRequest(bot, body);
+  if (gift) {
+    const stop = await tryStopRoute(bot, body, sender);
+    if (stop.matched) return stop;
+    if (!gift.item) return { matched: false, nlp_zone: 'unresolved_give' };
+    return { matched: true, intent_name: 'give_items', action: 'give_to_player',
+      body: { player: sender, item: gift.item, count: gift.count } };
+  }
   const senderEntity = findPlayerEntity(bot, sender);
   const ctx = { sender, senderEntity, message: body, body, dryRun: opts.dryRun };
 

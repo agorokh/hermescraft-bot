@@ -493,15 +493,19 @@ export async function tryStopRoute(bot, body, sender) {
 // Caller is responsible for executing ACTIONS[action](body) AND optionally
 // chatting target_chat back. If matched=false, caller falls through to the
 // normal LLM-driven command queue.
+// Existing dedicated replies, emotes, light and handoff skills may own a
+// "give me ..." sentence. Generic mining/build guesses must not own it.
+export function isDedicatedGiveAction(action) {
+  return ['stop', 'chat', 'give_to_player', 'feed_player', 'place_near_player'].includes(action);
+}
+
 export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
   const gift = extractExplicitGiveRequest(bot, body);
   if (gift) {
     const stop = await tryStopRoute(bot, body, sender);
     if (stop.matched) return stop;
-    if (!gift.item) return { matched: false, nlp_zone: 'unresolved_give' };
-    return { matched: true, intent_name: 'give_items', action: 'give_to_player',
-      body: { player: sender, item: gift.item, count: gift.count } };
+    if (!Number.isSafeInteger(gift.count) || gift.count < 1) return { matched: false, nlp_zone: 'unresolved_give' };
   }
   const senderEntity = findPlayerEntity(bot, sender);
   const ctx = { sender, senderEntity, message: body, body, dryRun: opts.dryRun };
@@ -509,7 +513,10 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   for (const intent of INTENTS) {
     if (intent.patterns.some((p) => p.test(body))) {
       const decision = await intent.handler(bot, ctx);
-      if (decision) {
+      if (decision && (!gift || isDedicatedGiveAction(decision.action))) {
+        // An explicit canonical quantity must not become the flower/food
+        // helper's default quantity. Generic requests keep those helpers.
+        if (gift?.item && decision.action === 'give_to_player' && gift.count !== 1) continue;
         return {
           matched: true,
           intent_name: intent.name,
@@ -519,6 +526,11 @@ export async function tryRoute(bot, body, sender, opts = {}) {
       }
     }
   }
+  if (gift?.item) {
+    return { matched: true, intent_name: 'give_items', action: 'give_to_player',
+      body: { player: sender, item: gift.item, count: gift.count } };
+  }
+  if (gift) return { matched: false, nlp_zone: 'unresolved_give' };
   return { matched: false };
 }
 

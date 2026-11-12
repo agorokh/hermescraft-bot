@@ -7,11 +7,19 @@ function directRequestBody(bot, body) {
   let text = String(body || '').trim();
   const name = String(bot?.username || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (name) text = text.replace(new RegExp(`^${name}(?:\\s*[:,!]\\s*|\\s+)`, 'i'), '');
-  return text.replace(/^(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+|pls\s+)?/i, '');
+  return text.replace(/^(?:please\s+|pls\s+)?(?:(?:can|could|would|will)\s+(?:you|u)\s+)?(?:please\s+|pls\s+)?/i, '')
+    .replace(/^(?:go\s+|let'?s\s+)/i, '');
 }
 
 function itemWords(name) {
   return String(name || '').toLowerCase().replace(/^minecraft:/, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function isRawGatherObject(text) {
+  if (!extractGatherBlockFromBody(text)) return false;
+  return (text.match(/[a-z]+|\d+/gi) || []).every(word =>
+    wordLooksLikeGather(word)
+      || /^(?:\d+|some|a|few|of|like|bunch|stack|million|lot+s|please|pls|rn|lol)$/.test(collapseKidStretch(word.toLowerCase())));
 }
 
 // Resolve an explicit inventory handoff before classification can turn a
@@ -19,15 +27,13 @@ function itemWords(name) {
 // A framed but unknown item is returned with item=null so the original request
 // falls through to the brain rather than another guessed mutating skill.
 export function extractExplicitGiveRequest(bot, body) {
-  const match = directRequestBody(bot, body).match(/^(?:give|hand|pass|toss)\s+me\s+(.+?)[.!?]*$/i);
+  const match = directRequestBody(bot, body).match(/^(give|hand|pass|toss|get|grab|fetch|bring)\s+me\s+(.+?)[.!?]*$/i);
   if (!match) return null;
-  let requested = match[1].replace(/\s+(?:please|pls)$/i, '').trim();
-  const quantity = requested.match(/^(\d+|an?|some)\s+(.+)$/i);
-  const count = quantity && /^\d+$/.test(quantity[1]) ? Number(quantity[1]) : 1;
+  const retrieval = /^(?:get|grab|fetch|bring)$/i.test(match[1]);
+  let requested = match[2].replace(/\s+(?:please|pls)$/i, '').trim();
+  const quantity = requested.match(/^([+-]?\d\S*|an?|some)\s+(.+)$/i);
+  const count = quantity && /^[+-]?\d/.test(quantity[1]) ? Number(quantity[1]) : 1;
   if (quantity) requested = quantity[2];
-  // Existing social/food/flower handlers own these intentionally generic
-  // requests; they are not canonical inventory item names.
-  if (/^(?:a |an |some )?(?:wave|hug|hand|high five|compliment|flower|flowers|food|something to eat)$/i.test(requested)) return null;
   if (!Number.isSafeInteger(count) || count < 1) return { item: null, count };
   const names = [...new Set([
     ...Object.keys(bot?.registry?.itemsByName || {}),
@@ -36,6 +42,11 @@ export function extractExplicitGiveRequest(bot, body) {
   const words = itemWords(requested);
   const item = names.find(name => itemWords(name) === words)
     || names.find(name => itemWords(name).replace(/s$/, '') === words.replace(/s$/, ''));
+  // "Get me wood/logs" retains gathering semantics. A crafted item such as
+  // planks is a handoff, even when absent from inventory; never mine its noun.
+  const rawBlock = extractGatherBlockFromBody(words);
+  const rawAlias = isRawGatherObject(words);
+  if (retrieval && ((item && item === rawBlock) || (!item && rawAlias))) return null;
   return { item: item || null, count };
 }
 
@@ -44,8 +55,12 @@ export function extractExplicitGiveRequest(bot, body) {
 // a gathering request, and should retain its original command for the brain.
 export function hasGatherRequest(bot, body) {
   const request = directRequestBody(bot, body);
+  if (!extractGatherBlockFromBody(request)) return false;
+  const need = request.match(/^i\s+(?:need|want)\s+(.+)$/i);
+  if (need) return isRawGatherObject(need[1]);
   return /^(?:get|grab|chop|mine|fetch|bring)\b/i.test(request)
-    || /^i\s+(?:need|want)\s+(?:some\s+|a few\s+)?(?:\d+\s+)?(?:wood|logs?|oak|dirt|stone|cobble|cobblestone|sand)\b/i.test(request);
+    || (request.match(/[a-z]+/gi) || []).every(word =>
+      wordLooksLikeGather(word) || /^(?:please|pls)$/.test(collapseKidStretch(word.toLowerCase())));
 }
 
 /** Collapse kid stretching to at most a natural double: wooood → wood, ironnnn → iron. */

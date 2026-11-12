@@ -29,6 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { extractExplicitGiveRequest, extractGatherBlockFromBody, extractKidName, extractOreFromBody, hasGatherRequest } from './intent_slot_extract.js';
+import { isDedicatedGiveAction, tryRoute as tryRegexRoute, tryStopRoute } from './intent_router.js';
 import { isAdvancedSchematicName, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 import { buildRequestContract, unsupportedBuildReply } from './build_request_contract.js';
 import { fileURLToPath } from 'node:url';
@@ -728,11 +729,15 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   if (!bot || !body) return { matched: false };
   const gift = extractExplicitGiveRequest(bot, body);
   if (gift) {
-    if (!gift.item) return { matched: false, nlp_zone: 'unresolved_give' };
-    const actionBody = { player: sender, item: gift.item, count: gift.count };
-    return { matched: true, intent_name: 'give_items', action: 'give_to_player', body: actionBody,
-      skill_id: opts.dryRun ? null : recordLastSkill(bot, 'give_items', 'give_to_player', actionBody, body),
-      nlp_score: null, nlp_zone: 'explicit_give' };
+    const stop = await tryStopRoute(bot, body, sender);
+    if (stop.matched) return { ...stop, skill_id: null, nlp_score: null, nlp_zone: 'deterministic_stop' };
+    if (!Number.isSafeInteger(gift.count) || gift.count < 1) return { matched: false, nlp_zone: 'unresolved_give' };
+    const direct = await tryRegexRoute(bot, body, sender, opts);
+    if (direct.matched) {
+      return { ...direct,
+        skill_id: opts.dryRun ? null : recordLastSkill(bot, direct.intent_name, direct.action, direct.body, body),
+        nlp_score: null, nlp_zone: 'explicit_give' };
+    }
   }
   // ANAPHORA PRE-PROCESSOR (council round 2 unanimous): short modifier
   // phrases ("higher", "again", "over there") amend the last fired skill
@@ -760,7 +765,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
       anaphora_rule: anaphora.anaphora,
     };
   }
-  if (hasPositiveMovementRequest(body) && hasCombatImperative(body)) {
+  if (!gift && hasPositiveMovementRequest(body) && hasCombatImperative(body)) {
     const combatText = combatImperativeText(body);
     const explicitGetHostile = /\bget\b.*\b(?:mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i.test(combatText);
     const explicitContactAttackHostile = /\b(hit|punch|smack)\b.*\b(?:mob|mobs|zombie|skeleton|creeper|spider|enderman|witch|blaze|phantom|drowned|husk|stray|slime|ghast|silverfish|pillager|vindicator|hoglin|piglin)\b/i.test(combatText);
@@ -786,7 +791,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
       };
     }
   }
-  if (hasPositiveMovementRequest(body)
+  if (!gift && hasPositiveMovementRequest(body)
     && !hasNegativeMovementRequest(body)
     && !hasCombatImperative(body)
     && !hasWorldMutationImperative(body)
@@ -833,7 +838,7 @@ export async function tryRoute(bot, body, sender, opts = {}) {
     // will handle the chat. Never blocking on NLP startup is critical for
     // production health. An unsupported "build ..." sentence is still refused:
     // that check does not depend on the classifier.
-    const refused = checkBuildRequest(bot, body, sender).route;
+    const refused = !gift && checkBuildRequest(bot, body, sender).route;
     if (refused) return { ...refused, error: e.message };
     return { matched: false, error: e.message };
   }
@@ -841,12 +846,25 @@ export async function tryRoute(bot, body, sender, opts = {}) {
   try {
     result = await nlp.process('en', stripExplicitBaseYForNlp(body) || body);
   } catch (e) {
-    const refused = checkBuildRequest(bot, body, sender).route;
+    const refused = !gift && checkBuildRequest(bot, body, sender).route;
     if (refused) return { ...refused, error: e.message };
     return { matched: false, error: e.message, nlp_zone: 'process_error' };
   }
   const intent = result.intent === 'None' ? null : result.intent;
   const score = result.score || 0;
+  if (gift) {
+    // Unknown item wording may still be a known position/emote/light/flower
+    // request. Keep the classifier's dedicated skill; never use its guess to
+    // gather or build from a material word in an unresolved handoff.
+    const decision = intent && score >= ACT_THRESHOLD && DISPATCHERS[intent]
+      ? await Promise.resolve(DISPATCHERS[intent](bot, ctx)) : null;
+    if (!decision || !isDedicatedGiveAction(decision.action)) {
+      return { matched: false, nlp_intent: intent, nlp_score: score, nlp_zone: 'unresolved_give' };
+    }
+    return { matched: true, intent_name: intent, action: decision.action, body: decision.body,
+      skill_id: opts.dryRun ? null : recordLastSkill(bot, intent, decision.action, decision.body, body),
+      nlp_score: score, nlp_zone: 'act' };
+  }
   // Build-request contract (#501): the library decides, not the score. An
   // unsupported build is a handled refusal in every confidence zone.
   // "acting" means the classifier would place blocks. A confident movement,

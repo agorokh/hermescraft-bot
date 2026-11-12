@@ -1328,9 +1328,14 @@ async function createBot() {
           const _wrapGiveToPlayer = async (body) => {
             const result = await _origGiveToPlayer(body);
             try {
-              const r = result?.result || '';
-              if (/gave|tossed|delivered/i.test(r) || /^\s*Sent /i.test(r)) {
-                autoRememberFact(`Gave ${body.count || ''} ${body.item} to ${body.player}.`);
+              const transfer = result?.item_transfer;
+              if (!result?.error && typeof transfer?.item === 'string' && transfer.item
+                && Number.isSafeInteger(transfer.tossed) && transfer.tossed > 0
+                && Number.isSafeInteger(transfer.requested) && transfer.requested >= transfer.tossed
+                && typeof transfer.pickup_confirmed === 'boolean') {
+                autoRememberFact(transfer.pickup_confirmed
+                  ? `Gave ${transfer.tossed} ${transfer.item} to ${body.player}.`
+                  : `Tossed ${transfer.tossed} ${transfer.item} toward ${body.player}. Pickup unconfirmed.`);
               }
             } catch { /* swallow */ }
             return result;

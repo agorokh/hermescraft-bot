@@ -5,6 +5,7 @@ import { registerHighLevelSkills } from '../lib/skills.js';
 import { tryRoute as routeRegex } from '../lib/intent_router.js';
 import { tryRoute as routeNlp } from '../lib/intent_router_nlp.js';
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { actionOutcomeFailed, publicActionResult } from '../lib/action_outcome.js';
 import { validateSchematicSite } from '../lib/schematic_site.js';
 
@@ -155,6 +156,64 @@ test('automatic build refuses when no supported footprint fits, rather than fall
     auto_site: { x: 0, y: 64, z: 0 } });
   assert.match(result.result, /couldn't find a safe/i);
   assert.deepEqual(bot.commands, []);
+});
+
+test('a requested campfire can use clear island ground twelve blocks from a crowded player area', async () => {
+  const bot = new WorldBot(p => p.y === 63 && p.x >= 10 && p.x <= 14
+    && p.z >= -2 && p.z <= 2 ? ground() : air());
+  const result = await build(bot, { name: 'campfire_spot', x: 2, y: 64, z: 0,
+    auto_site: { x: 0, y: 64, z: 0 } });
+  assert.match(result.result, /Built schematic "campfire_spot" at 10,64,-2/);
+  assert.equal(bot.blocks.size, 13);
+  assert.ok([...bot.blocks.keys()].every(key => {
+    const [x, y, z] = key.split(',').map(Number);
+    return x >= 10 && x <= 14 && y === 64 && z >= -2 && z <= 2;
+  }));
+});
+
+test('automatic campfire search still refuses a clear site beyond the nearby island limit', async () => {
+  const bot = new WorldBot(p => p.y === 63 && p.x >= 17 && p.x <= 21
+    && p.z >= -2 && p.z <= 2 ? ground() : air());
+  const result = await build(bot, { name: 'campfire_spot', x: 2, y: 64, z: 0,
+    auto_site: { x: 0, y: 64, z: 0 } });
+  assert.equal(result.site_refused, true);
+  assert.deepEqual(bot.commands, []);
+});
+
+test('the saved crowded starter island supports two requested campfires without changing existing blocks', async () => {
+  const fixture = JSON.parse(await readFile(new URL('./fixtures/starter_island_campfire.json', import.meta.url)));
+  const definitions = createRequire(import.meta.url)('minecraft-data')('1.21.11').blocksByName;
+  const cells = new Map();
+  for (const [y, z, startX, endX, palette] of fixture.runs) {
+    for (let x = startX; x <= endX; x++) cells.set(`${x},${y},${z}`, palette);
+  }
+  const terrain = p => {
+    const b = fixture.bounds;
+    if (p.x < b.minX || p.x > b.maxX || p.y < b.minY || p.y > b.maxY
+      || p.z < b.minZ || p.z > b.maxZ) return null;
+    const palette = cells.get(`${p.x},${p.y},${p.z}`) ?? 0;
+    if (palette < 0) return null;
+    const name = fixture.names[palette];
+    return { name, boundingBox: definitions[name]?.boundingBox ?? 'unknown' };
+  };
+  const bot = new WorldBot(terrain);
+  bot.entity.position = fixture.rosie;
+  bot.players.Arsenyzzz.entity.position = fixture.anchor;
+  bot.players.Steve = { entity: { position: fixture.steve, username: 'Steve' } };
+  const request = { name: 'campfire_spot', x: 4002, y: 87, z: 4002, auto_site: fixture.anchor };
+  const first = await build(bot, request);
+  assert.match(first.result, /Built schematic "campfire_spot" at 3988,85,4000/);
+  assert.equal(bot.blocks.size, 13);
+  const firstBlocks = new Map(bot.blocks);
+  const second = await build(bot, request);
+  assert.match(second.result, /Built schematic "campfire_spot" at 3988,85,4005/);
+  assert.equal(bot.blocks.size, 26);
+  for (const [key, name] of firstBlocks) assert.equal(bot.blocks.get(key), name);
+  for (const key of bot.blocks.keys()) {
+    const [x, y, z] = key.split(',').map(Number);
+    assert.equal(terrain({ x, y, z }).name, 'air', `existing island cell changed: ${key}`);
+    assert.equal(terrain({ x, y: y - 1, z }).name, 'stone');
+  }
 });
 
 test('automatic requests cannot bypass site safety by adding skip_foundation', async () => {

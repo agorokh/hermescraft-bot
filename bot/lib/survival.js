@@ -142,7 +142,7 @@ export function startSurvivalTick(bot, log, opts = {}) {
       if (!running || !bot.entity) continue;
 
       // Hunger — only if autoEat didn't fire (belt-and-suspenders)
-      if (opts.eatEnabled !== false && bot.food !== undefined && bot.food <= HUNGER_EAT_THRESHOLD) {
+      if (opts.eatEnabled !== false && !bot._schematicBuildActive && bot.food !== undefined && bot.food <= HUNGER_EAT_THRESHOLD) {
         const food = findFoodInInventory(bot);
         if (food && !bot.pathfinder?.isMoving()) {
           try {

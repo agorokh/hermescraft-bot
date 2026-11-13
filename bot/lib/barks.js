@@ -192,7 +192,7 @@ export function installBarksAndPresence(bot, opts = {}) {
 
   // 2. Gaze-on-proximity loop
   const gazeTimer = setInterval(() => {
-    if (stopped || !bot || !bot.entity) return;
+    if (stopped || !bot || !bot.entity || bot._schematicBuildActive) return;
     const np = nearestPlayer(bot, PLAYER_GAZE_DISTANCE);
     if (!np) { lastGazeTarget = null; lastGazePos = null; return; }
     const gazePos = np.position.offset(0, 1.6, 0);

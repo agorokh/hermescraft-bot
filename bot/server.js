@@ -1496,6 +1496,7 @@ async function createBot() {
         _survival_tear_down = startSurvivalTick(bot, log, {
           isKidTaskActive: () => !!(
             bot.interrupt_code
+            || bot._schematicBuildActive
             || currentTask?.status === 'running'
             || (bot._hc_intent_action_depth || 0) > 0
           ),

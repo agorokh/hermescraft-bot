@@ -1168,7 +1168,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     if (useChatCommand && name === 'campfire_spot') {
       if (skillWasStopped(bot, stopGen)) break;
       // A player or their work may have entered the cell during the wait.
-      let site = validateSchematicSite({ footprint: [1, 1], height: 1, adjustTerrain: true,
+      let site = validateSchematicSite({ footprint: [1, 1], height: 2, adjustTerrain: true,
         origin: { x: tx, y: ty, z: tz }, occupied: occupiedPositions(),
         blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)) });
       if (site.ok && site.origin.y !== ty) {
@@ -1180,7 +1180,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           buildState.pause_reason = site.reason;
           await persistBuildState(true);
         }
-        return { result: `Stopped "${name}" after ${totalPlacedSoFar()}/${buildPlan.totalBlocks} blocks: ${site.reason}.`,
+        return { result: `Refused further "${name}" placements after ${totalPlacedSoFar()}/${buildPlan.totalBlocks} blocks: ${site.reason}.`,
           site_refused: true, site_code: site.code, site_reason: site.reason };
       }
     }

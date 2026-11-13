@@ -222,7 +222,7 @@ test('campfire pacing does not delay an ordinary well build', { timeout: 3000 },
   assert.equal(bot.commands.length, 25);
 });
 
-for (const obstruction of ['player', 'manual block', 'unloaded cell', 'removed support']) {
+for (const obstruction of ['player', 'player on a seat', 'manual block', 'unloaded cell', 'removed support']) {
   test(`a paced campfire preserves a ${obstruction} entering the next cell`, async () => {
     const bot = new WorldBot(p => p.y <= 63 ? ground() : air());
     const next = '11,64,11';
@@ -232,6 +232,7 @@ for (const obstruction of ['player', 'manual block', 'unloaded cell', 'removed s
       chat(command);
       if (bot.commands.length === 1) arrive = setTimeout(() => {
         if (obstruction === 'player') bot.players.Arsenyzzz.entity.position = { x: 11.5, y: 64, z: 11.5 };
+        if (obstruction === 'player on a seat') bot.players.Arsenyzzz.entity.position = { x: 11.1, y: 65, z: 11.8 };
         if (obstruction === 'manual block') bot.blocks.set(next, 'gold_block');
         if (obstruction === 'unloaded cell') {
           const blockAt = bot.blockAt.bind(bot);
@@ -247,6 +248,17 @@ for (const obstruction of ['player', 'manual block', 'unloaded cell', 'removed s
       assert.equal(bot.commands.length, 1);
       assert.equal(bot._schematicBuildActive, false);
       if (obstruction === 'manual block') assert.equal(bot.blocks.get(next), 'gold_block');
+      if (obstruction === 'player') {
+        // Exercise the server's actual classifier: a safety refusal must keep
+        // the recovery line rather than masquerade as a user stop request.
+        const server = await readFile(new URL('../server.js', import.meta.url), 'utf8');
+        const start = server.indexOf('function intentRouterFailureWasInterrupted(');
+        const end = server.indexOf('\nfunction queueSurvivalEscalation(', start);
+        assert.ok(start >= 0 && end > start);
+        const wasInterrupted = new Function(`return ${server.slice(start, end)}`)();
+        assert.equal(wasInterrupted(result), false);
+        assert.match(publicActionResult('build_schematic', result, { failed: actionOutcomeFailed(result) }), /step aside/i);
+      }
     } finally {
       clearTimeout(arrive);
     }

@@ -70,6 +70,10 @@ const PHYSICAL_HAZARDS = new Set(['lava', 'water', 'fire', 'soul_fire', 'campfir
   'soul_campfire', 'magma_block', 'cactus', 'sweet_berry_bush', 'powder_snow']);
 const isPhysicalBuild = () => process.env.HERMESCRAFT_PHYSICAL_BUILDS === '1';
 
+function logPhysicalBuild(bot, event, details) {
+  console.log(`[physical-build] ${JSON.stringify({ at: Date.now(), actor: bot.username, event, ...details })}`);
+}
+
 function captureStopGen(bot) {
   return bot._stopGeneration || 0;
 }
@@ -217,7 +221,7 @@ function findBuildOffBlock(bot, x, y, z) {
 
 // Reuse the existing pathfinder and placement primitive, with a read-only
 // movement policy while a household co-build owns the body.
-function physicalBuildMovements(bot, original) {
+export function physicalBuildMovements(bot, original) {
   const moves = Object.assign(new Movements(bot), original);
   moves.canDig = false;
   moves.allow1by1towers = false;
@@ -245,6 +249,19 @@ function physicalBuildMovements(bot, original) {
     const block = bot.registry.blocksByName[name];
     if (block) moves.blocksToAvoid.add(block.id);
   }
+  // Native pathfinder blocksToAvoid checks body-space collisions, but may
+  // still walk or jump onto a damaging supporting block. Filter every native
+  // destination, not just the selected final stance or forward-step costs.
+  const neighbors = moves.getNeighbors.bind(moves);
+  moves.getNeighbors = node => neighbors(node).filter(next => {
+    const feet = new Vec3(next.x, next.y, next.z);
+    const support = bot.blockAt(feet.offset(0, -1, 0));
+    const body = bot.blockAt(feet);
+    const head = bot.blockAt(feet.offset(0, 1, 0));
+    return support && body && head && support.boundingBox === 'block'
+      && ![support, body, head].some(block => PHYSICAL_HAZARDS.has(block.name))
+      && body.boundingBox !== 'block' && head.boundingBox !== 'block';
+  });
   return moves;
 }
 
@@ -303,7 +320,7 @@ async function walkToPhysicalPlacement(bot, target, stopGen) {
     if (!error && goal.isEnd(arrived.floored()) && arrived.distanceTo(from) > .35
       && safePhysicalStance(bot, arrived.floored(), target)
       && arrived.distanceTo(target.offset(.5, 0, .5)) <= 3) {
-      console.log(`[physical-build] ${JSON.stringify({ event: 'approach', target, from, position: arrived })}`);
+      logPhysicalBuild(bot, 'approach', { target, from, position: arrived });
       return { ok: true };
     }
   }
@@ -494,14 +511,14 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       if (!bot.heldItem || normalizeBlockBaseName(bot.heldItem.name) !== normalizeBlockBaseName(itemName)) {
         return { ok: false, reason: 'held building material changed' };
       }
-      console.log(`[physical-build] ${JSON.stringify({ event: 'hand', target: targetPos, item: bot.heldItem.name, position: bot.entity.position })}`);
+      logPhysicalBuild(bot, 'hand', { target: targetPos, item: bot.heldItem.name, position: bot.entity.position });
     }
     await bot.placeBlock(buildOff.block, buildOff.faceVec);
     if (physical) {
       const deadline = performance.now() + 1500;
       while (!blockAtMatches(bot, tx, ty, tz, expected) && performance.now() < deadline) await sleep(50);
       if (!blockAtMatches(bot, tx, ty, tz, expected)) return { ok: false, reason: 'hand placement readback mismatch' };
-      console.log(`[physical-build] ${JSON.stringify({ event: 'verified', target: targetPos, block: expected, position: bot.entity.position })}`);
+      logPhysicalBuild(bot, 'verified', { target: targetPos, block: expected, position: bot.entity.position });
       return { ok: true };
     }
     await sleep(200); // settle (Mindcraft uses 200ms)

@@ -108,6 +108,25 @@ test('physical Foreman does not exempt op inventory or send an auth probe', asyn
   assert.equal(bot.trace.filter(e => e.kind === 'chat').length, 0);
 });
 
+for (const floor of ['stone', 'oak_planks']) test(`direct place-beside-player obeys physical policy on ${floor}`, async () => {
+  const bot = new PhysicalBot();
+  const blockAt = bot.blockAt.bind(bot);
+  bot.blockAt = p => p.y === 63 ? { ...blockAt(p), name: floor, type: registry.blocksByName[floor].id } : blockAt(p);
+  const keys = ['HERMESCRAFT_PHYSICAL_BUILDS', 'HERMESCRAFT_TRUST_SETBLOCK_AUTH', 'HERMESCRAFT_ALLOW_SETBLOCK_CHAT_FALLBACK'];
+  const prior = keys.map(k => process.env[k]);
+  keys.forEach(k => { process.env[k] = '1'; });
+  try {
+    const result = await registerHighLevelSkills({}, () => bot).place_near_player({ player: 'Arsenyzzz', item: 'cobblestone' });
+    assert.match(result.result, /placed/i);
+    assert.equal(bot.trace.filter(e => e.kind === 'chat' && e.text.startsWith('/')).length, 0);
+    assert.equal(bot.trace.filter(e => e.kind === 'hand').length, 1);
+    assert.equal(bot.stock.get('cobblestone'), 7);
+    assert.equal(bot.pathfinder.movements, bot.originalMovements);
+  } finally {
+    keys.forEach((key, i) => { if (prior[i] == null) delete process.env[key]; else process.env[key] = prior[i]; });
+  }
+});
+
 test('a physical build with missing materials refuses before walking or mutation', async () => {
   const bot = new PhysicalBot();
   bot.stock.delete('campfire');

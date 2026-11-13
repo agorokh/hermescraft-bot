@@ -360,12 +360,56 @@ async function _cachedSetblockAuth(bot) {
 // `bot.placeBlock` was emitting on aerial cells (treehouse roof, tower
 // top, etc.), and the "STUCK detected" 10s pathfinder stalls that come
 // from the bot trying to physically reach floating placements.
-async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { physical = false, stopGen, expected = itemName, recheck } = {}) {
+async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { physical = isPhysicalBuild(), stopGen = captureStopGen(bot), expected = itemName, recheck, approached = false } = {}) {
   const tx = Math.floor(x), ty = Math.floor(y), tz = Math.floor(z);
 
   // Skip air/cave_air targets defensively.
   if (!itemName || itemName === 'air' || itemName === 'cave_air' || itemName === 'void_air') {
     return { ok: false, reason: 'placeOne: refused to place air' };
+  }
+
+  // Direct place_near_player/light_area callers share the household policy.
+  // They cannot accidentally re-enter the op shortcut just because they did
+  // not originate in build_schematic.
+  physical = physical || isPhysicalBuild();
+  if (physical && !approached) {
+    if (bot._schematicBuildActive) return { ok: false, reason: 'another physical build owns the body' };
+    if (!findInventoryItem(bot, itemName)) return { ok: false, reason: `no ${itemName} in inventory` };
+    if (!bot.pathfinder?.movements || !bot.registry || !bot.waitForTicks) return { ok: false, reason: 'the walking body is not ready' };
+    const original = bot.pathfinder.movements;
+    const movement = physicalBuildMovements(bot, original);
+    const autoEat = bot.autoEat?.enabled === true;
+    bot._schematicBuildActive = true;
+    try {
+      bot.pathfinder.setMovements(movement);
+      if (autoEat) bot.autoEat.disableAuto();
+      if (bot.autoEat?.isEating) return { ok: false, reason: 'a meal is still in progress' };
+      const sentry = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
+      if (sentry.paused) return { ok: false, reason: `Sentry Mode: ${sentry.reason}` };
+      const target = new Vec3(tx, ty, tz);
+      const arrival = await walkToPhysicalPlacement(bot, target, stopGen);
+      if (!arrival.ok) return arrival;
+      const check = () => {
+        const current = bot.blockAt(target);
+        const reference = findBuildOffBlock(bot, tx, ty, tz)?.block;
+        if (!current || !reference) return { ok: false, reason: 'target or support is unloaded or missing' };
+        if (!['air', 'cave_air', 'void_air'].includes(current.name) || PHYSICAL_HAZARDS.has(reference.name)) {
+          return { ok: false, reason: 'target is occupied or its support is unsafe' };
+        }
+        const occupied = [bot.entity.position, ...Object.values(bot.players || {}).map(p => p.entity?.position)];
+        if (occupied.some(p => p && Math.abs(p.x - tx - .5) < .8 && Math.abs(p.z - tz - .5) < .8
+          && p.y < ty + 1 && p.y + 1.8 > ty)) return { ok: false, reason: 'someone is standing in the next cell' };
+        return { ok: true };
+      };
+      const safe = check();
+      if (!safe.ok) return safe;
+      return await placeOne(bot, itemName, tx, ty, tz, false,
+        { physical: true, stopGen, expected, recheck: check, approached: true });
+    } finally {
+      if (bot.pathfinder.movements === movement) bot.pathfinder.setMovements(original);
+      if (autoEat) bot.autoEat.enableAuto();
+      bot._schematicBuildActive = false;
+    }
   }
 
   if (!physical && await _cachedSetblockAuth(bot)) {
@@ -1204,7 +1248,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   let announcedLayer;
   try {
   if (physicalBuild) {
-    if (!bot.pathfinder?.goto || !bot.registry || !bot.waitForTicks) {
+    if (!bot.pathfinder?.goto || !bot.pathfinder.movements || !bot.registry || !bot.waitForTicks) {
       return { result: `Couldn't start physical build "${name}": the walking body is not ready.` };
     }
     originalMovements = bot.pathfinder.movements;
@@ -1325,7 +1369,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
           announcedLayer = phase;
         }
         safe = await placeOne(bot, normalizeBlockBaseName(block), tx, ty, tz, false,
-          { physical: true, stopGen, expected: block, recheck: recheckCell });
+          { physical: true, stopGen, expected: block, recheck: recheckCell, approached: true });
       } else if (safe.ok) safe = { ok: false, reason: 'interrupted before hand placement' };
       if (!safe.ok) {
         if (buildState) {

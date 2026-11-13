@@ -27,7 +27,7 @@ class PhysicalBot extends EventEmitter {
       setGoal: goal => { this.pathfinder.goal = goal; this.trace.push({ kind: 'setGoal', goal }); },
       goto: async goal => {
         this.pathfinder.goal = goal;
-        this.trace.push({ kind: 'walk', goal, policy: this.pathfinder.movements,
+        this.trace.push({ kind: 'walk', goal, policy: this.pathfinder.movements, owned: !!this._schematicBuildActive,
           from: this.entity.position.clone() });
         await this.onWalk?.(goal);
         if (!this.falseArrival) this.entity.position = new Vec3(goal.x + .5, goal.y, goal.z + .5);
@@ -121,6 +121,8 @@ for (const floor of ['stone', 'oak_planks']) test(`direct place-beside-player ob
     assert.equal(bot.trace.filter(e => e.kind === 'chat' && e.text.startsWith('/')).length, 0);
     assert.equal(bot.trace.filter(e => e.kind === 'hand').length, 1);
     assert.equal(bot.stock.get('cobblestone'), 7);
+    assert.ok(bot.trace.filter(e => e.kind === 'walk').every(e => e.policy.canDig === false && e.owned),
+      'even the preliminary approach must be owned and read-only');
     assert.equal(bot.pathfinder.movements, bot.originalMovements);
   } finally {
     keys.forEach((key, i) => { if (prior[i] == null) delete process.env[key]; else process.env[key] = prior[i]; });

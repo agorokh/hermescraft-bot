@@ -544,7 +544,7 @@ async function place_near_player(bot, { player, item, direction = 'side' }) {
   // Move closer if too far away so place range is reachable.
   const myPos = bot.entity.position;
   const dist = Math.sqrt((myPos.x - p.x) ** 2 + (myPos.z - p.z) ** 2);
-  if (dist > 4) {
+  if (dist > 4 && !isPhysicalBuild()) {
     try {
       const goalCloser = new goals.GoalNear(px, py, pz, 3);
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000));

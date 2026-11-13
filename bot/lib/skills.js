@@ -23,7 +23,7 @@
 //   - follow_player_v2(player, [distance]) — interrupt_code-aware follow
 
 import pathfinderPkg from 'mineflayer-pathfinder';
-const { goals } = pathfinderPkg;
+const { goals, Movements } = pathfinderPkg;
 import schematicPkg from 'prismarine-schematic';
 const { Schematic } = schematicPkg;
 import { Vec3 } from 'vec3';
@@ -65,6 +65,10 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 // Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
 const SETBLOCK_CHAT_INTERVAL_MS = 150;
 const CAMPFIRE_PLACEMENT_INTERVAL_MS = 1000;
+const PHYSICAL_WALK_TIMEOUT_MS = 8000;
+const PHYSICAL_HAZARDS = new Set(['lava', 'water', 'fire', 'soul_fire', 'campfire',
+  'soul_campfire', 'magma_block', 'cactus', 'sweet_berry_bush', 'powder_snow']);
+const isPhysicalBuild = () => process.env.HERMESCRAFT_PHYSICAL_BUILDS === '1';
 
 function captureStopGen(bot) {
   return bot._stopGeneration || 0;
@@ -211,6 +215,101 @@ function findBuildOffBlock(bot, x, y, z) {
   return null;
 }
 
+// Reuse the existing pathfinder and placement primitive, with a read-only
+// movement policy while a household co-build owns the body.
+function physicalBuildMovements(bot, original) {
+  const moves = Object.assign(new Movements(bot), original);
+  moves.canDig = false;
+  moves.allow1by1towers = false;
+  moves.allowParkour = false;
+  moves.allowSprinting = false;
+  moves.allowFreeMotion = false;
+  moves.canOpenDoors = false;
+  moves.maxDropDown = 1;
+  moves.infiniteLiquidDropdownDistance = false;
+  moves.scafoldingBlocks = [];
+  moves.exclusionAreasBreak = [() => 100];
+  moves.exclusionAreasPlace = [() => 100];
+  moves.exclusionAreasStep = [...(original?.exclusionAreasStep || []), block => {
+    const at = block?.position;
+    if (!at) return 0;
+    return Object.entries(bot.players || {}).some(([name, player]) => {
+      if (name === bot.username || player.entity === bot.entity) return false;
+      const p = player.entity?.position;
+      return p && Math.abs(p.x - at.x - .5) < .8 && Math.abs(p.z - at.z - .5) < .8
+        && Math.abs(p.y - at.y) < 2;
+    }) ? 100 : 0;
+  }];
+  moves.blocksToAvoid = new Set(original?.blocksToAvoid || []);
+  for (const name of PHYSICAL_HAZARDS) {
+    const block = bot.registry.blocksByName[name];
+    if (block) moves.blocksToAvoid.add(block.id);
+  }
+  return moves;
+}
+
+function safePhysicalStance(bot, position, target) {
+  if (position.x === target.x && position.z === target.z) return false;
+  const floor = bot.blockAt(position.offset(0, -1, 0));
+  const feet = bot.blockAt(position);
+  const head = bot.blockAt(position.offset(0, 1, 0));
+  if (!floor || floor.boundingBox !== 'block' || PHYSICAL_HAZARDS.has(floor.name)
+    || !feet || !head || !['air', 'cave_air', 'void_air'].includes(feet.name)
+    || !['air', 'cave_air', 'void_air'].includes(head.name)) return false;
+  for (const [name, player] of Object.entries(bot.players || {})) {
+    if (name === bot.username || player.entity === bot.entity) continue;
+    const p = player.entity?.position;
+    if (p && Math.abs(p.x - position.x - .5) < .8
+      && Math.abs(p.z - position.z - .5) < .8 && Math.abs(p.y - position.y) < 2) return false;
+  }
+  return true;
+}
+
+async function walkToPhysicalPlacement(bot, target, stopGen) {
+  const from = bot.entity.position.clone();
+  const candidates = [];
+  for (let dx = -2; dx <= 2; dx++) {
+    for (let dz = -2; dz <= 2; dz++) {
+      if (Math.abs(dx) + Math.abs(dz) < 1 || Math.abs(dx) + Math.abs(dz) > 2) continue;
+      for (const dy of [0, 1, -1]) {
+        const p = target.offset(dx, dy, dz);
+        const center = p.offset(.5, 0, .5);
+        if (center.distanceTo(from) <= .75 || !safePhysicalStance(bot, p, target)) continue;
+        candidates.push({ p, distance: center.distanceTo(from) });
+      }
+    }
+  }
+  candidates.sort((a, b) => a.distance - b.distance);
+  const deadline = performance.now() + PHYSICAL_WALK_TIMEOUT_MS;
+  for (const { p } of candidates) {
+    if (skillWasStopped(bot, stopGen) || performance.now() >= deadline) break;
+    if (!safePhysicalStance(bot, p, target)) continue;
+    const goal = new goals.GoalBlock(p.x, p.y, p.z);
+    let settled = false;
+    let error;
+    // Observe rejection even when a stop/timeout wins. Cancel only our goal;
+    // a replacement action may already have installed a different one.
+    Promise.resolve().then(() => bot.pathfinder.goto(goal)).then(
+      () => { settled = true; }, e => { error = e; settled = true; },
+    );
+    while (!settled && !skillWasStopped(bot, stopGen) && performance.now() < deadline) await sleep(50);
+    if (bot.pathfinder.goal === goal) {
+      bot.pathfinder.setGoal(null);
+      bot.clearControlStates?.();
+    }
+    if (skillWasStopped(bot, stopGen)) return { ok: false, reason: 'interrupted while walking' };
+    if (!settled) return { ok: false, reason: 'safe walking timed out' };
+    const arrived = bot.entity.position;
+    if (!error && goal.isEnd(arrived.floored()) && arrived.distanceTo(from) > .35
+      && safePhysicalStance(bot, arrived.floored(), target)
+      && arrived.distanceTo(target.offset(.5, 0, .5)) <= 3) {
+      console.log(`[physical-build] ${JSON.stringify({ event: 'approach', target, from, position: arrived })}`);
+      return { ok: true };
+    }
+  }
+  return { ok: false, reason: skillWasStopped(bot, stopGen) ? 'interrupted while walking' : 'could not safely walk to the next block' };
+}
+
 // Blocks that vanilla placement replaces silently — same set Minecraft uses.
 // If we try to place at a coord occupied by one of these, the place call
 // just works (the existing block becomes the drop).
@@ -261,7 +360,7 @@ async function _cachedSetblockAuth(bot) {
 // `bot.placeBlock` was emitting on aerial cells (treehouse roof, tower
 // top, etc.), and the "STUCK detected" 10s pathfinder stalls that come
 // from the bot trying to physically reach floating placements.
-async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
+async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { physical = false, stopGen, expected = itemName, recheck } = {}) {
   const tx = Math.floor(x), ty = Math.floor(y), tz = Math.floor(z);
 
   // Skip air/cave_air targets defensively.
@@ -269,7 +368,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
     return { ok: false, reason: 'placeOne: refused to place air' };
   }
 
-  if (await _cachedSetblockAuth(bot)) {
+  if (!physical && await _cachedSetblockAuth(bot)) {
     // Already-matching block? Don't re-fire.
     const existing = bot.blockAt(new Vec3(tx, ty, tz));
     if (existing && existing.name === itemName) {
@@ -305,7 +404,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
   // If a replaceable plant is in the way, break it first so the place call
   // doesn't no-op or fail (placeBlock on tall_grass works in vanilla, but
   // Mineflayer is inconsistent across versions; explicit dig is safest).
-  if (existing && REPLACEABLE_BLOCKS.has(existing.name) && !LIQUID_BLOCKS.has(existing.name)
+  if (!physical && existing && REPLACEABLE_BLOCKS.has(existing.name) && !LIQUID_BLOCKS.has(existing.name)
       && existing.name !== 'air' && existing.name !== 'cave_air' && existing.name !== 'void_air') {
     try { await bot.dig(existing); } catch (e) { /* swallow */ }
     await sleep(120);
@@ -313,7 +412,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
 
   // If bot is too far for reach, pathfind closer once before placing.
   // Mineflayer's place-block reach is ~5 blocks from eye height.
-  if (allowReachRecover) {
+  if (allowReachRecover && !physical) {
     const myPos = bot.entity.position;
     const eye = new Vec3(myPos.x, myPos.y + 1.62, myPos.z);
     const dist = Math.sqrt(
@@ -338,7 +437,29 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true) {
   try {
     await bot.equip(item, 'hand');
     await bot.lookAt(buildOff.block.position.offset(0.5, 0.5, 0.5));
+    if (physical) {
+      // Hold the real material visibly before the native hand-placement
+      // packet. Mineflayer placeBlock itself sends the right-arm animation.
+      for (let i = 0; i < 4; i++) {
+        if (skillWasStopped(bot, stopGen)) return { ok: false, reason: 'interrupted before hand placement' };
+        await bot.waitForTicks(2);
+      }
+      if (skillWasStopped(bot, stopGen)) return { ok: false, reason: 'interrupted before hand placement' };
+      const safe = recheck?.();
+      if (safe && !safe.ok) return { ok: false, reason: safe.reason };
+      if (!bot.heldItem || normalizeBlockBaseName(bot.heldItem.name) !== normalizeBlockBaseName(itemName)) {
+        return { ok: false, reason: 'held building material changed' };
+      }
+      console.log(`[physical-build] ${JSON.stringify({ event: 'hand', target: targetPos, item: bot.heldItem.name, position: bot.entity.position })}`);
+    }
     await bot.placeBlock(buildOff.block, buildOff.faceVec);
+    if (physical) {
+      const deadline = performance.now() + 1500;
+      while (!blockAtMatches(bot, tx, ty, tz, expected) && performance.now() < deadline) await sleep(50);
+      if (!blockAtMatches(bot, tx, ty, tz, expected)) return { ok: false, reason: 'hand placement readback mismatch' };
+      console.log(`[physical-build] ${JSON.stringify({ event: 'verified', target: targetPos, block: expected, position: bot.entity.position })}`);
+      return { ok: true };
+    }
     await sleep(200); // settle (Mindcraft uses 200ms)
     return { ok: true };
   } catch (err) {
@@ -901,7 +1022,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // "Cannot read properties of undefined (reading 'type')" unhandled rejection.
   // Detect once, then route every cell through chat commands until proven
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
-  const useChatCommand = await detectSetblockAuth(bot);
+  const physicalBuild = isPhysicalBuild();
+  const useChatCommand = !physicalBuild && await detectSetblockAuth(bot);
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
   if (savedState && Number.isFinite(Number(savedState.origin?.y))) {
     const savedBaseY = Math.floor(Number(savedState.origin.y));
@@ -1019,7 +1141,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     await saveBuildState(buildState, stateFile);
     placementsSinceSave = 0;
   };
-  const sentryEnabled = bodyFlagEnabled(bodyArgs.sentry_pause, false);
+  const sentryEnabled = physicalBuild || bodyFlagEnabled(bodyArgs.sentry_pause, false);
   if (resumeEnabled && savedState?.build_id === buildId && savedState?.status === 'done') {
     const verifiedState = reconcileCompletedPlacements(buildPlan, savedState, (wx, wy, wz) => {
       return bot.blockAt(new Vec3(wx, wy, wz));
@@ -1034,7 +1156,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     await saveBuildState(savedState, stateFile);
   }
   const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
-  if (bodyArgs.foreman === true && !resumingBuild) {
+  if ((bodyArgs.foreman === true || physicalBuild) && !resumingBuild) {
     const required = trustedSetblock
       ? {}
       : foremanBillOfMaterials(
@@ -1076,10 +1198,25 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   const missing = new Set();
   const totalPlacedSoFar = () => (buildState ? (buildState.completed?.length || 0) : placed);
   let nextCampfirePlacementAt = 0;
+  let originalMovements;
+  let buildMovements;
+  let autoEatWasEnabled = false;
+  let announcedLayer;
   try {
+  if (physicalBuild) {
+    if (!bot.pathfinder?.goto || !bot.registry || !bot.waitForTicks) {
+      return { result: `Couldn't start physical build "${name}": the walking body is not ready.` };
+    }
+    originalMovements = bot.pathfinder.movements;
+    buildMovements = physicalBuildMovements(bot, originalMovements);
+    bot.pathfinder.setMovements(buildMovements);
+    autoEatWasEnabled = bot.autoEat?.enabled === true;
+    if (autoEatWasEnabled) bot.autoEat.disableAuto();
+    if (bot.autoEat?.isEating) return { result: `Couldn't start physical build "${name}" while eating. Try again after this meal.` };
+  }
   // Pathfind near the origin (footprint center) only when we'll actually
   // need to be near it. /setblock works at arbitrary range from the bot.
-  if (!useChatCommand) {
+  if (!useChatCommand && !physicalBuild) {
     try {
       const goal = new goals.GoalNear(centerX, baseY, centerZ, 3);
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000));
@@ -1133,6 +1270,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // Finish all normal wall/roof updates before assembling the two door halves.
   // Stable partition retains lower-before-upper order within the final group.
   if (useChatCommand) sorted.sort((a, b) => Number(isDoorHalf(a[3])) - Number(isDoorHalf(b[3])));
+  if (physicalBuild) sorted.sort((a, b) => Number(['campfire', 'soul_campfire'].includes(normalizeBlockBaseName(a[3])))
+    - Number(['campfire', 'soul_campfire'].includes(normalizeBlockBaseName(b[3]))));
   for (const [dx, dy, dz, block] of sorted) {
     if (skillWasStopped(bot, stopGen)) break;
     // Skip explicit air cells — schematic authors sometimes encode them as
@@ -1141,6 +1280,70 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     if (!block || ['air', 'cave_air', 'void_air'].includes(normalizeBlockBaseName(block))) continue;
     const tx = baseX + dx, ty = baseY + dy, tz = baseZ + dz;
     const placementForState = { id: `${tx},${ty},${tz}:${normalizeBlockName(block)}` };
+
+    const recheckCell = () => {
+      if (name !== 'campfire_spot') {
+        const current = bot.blockAt(new Vec3(tx, ty, tz));
+        if (!current || !['air', 'cave_air', 'void_air'].includes(current.name)) {
+          return { ok: false, code: 'occupied', reason: 'the next cell is occupied or unloaded' };
+        }
+        if (occupiedPositions().some(p => p && Math.abs(p.x - tx - .5) < .8
+          && Math.abs(p.z - tz - .5) < .8 && p.y < ty + 1 && p.y + 1.8 > ty)) {
+          return { ok: false, code: 'occupied_player', reason: 'someone is standing in the next cell' };
+        }
+        return { ok: true };
+      }
+      const site = validateSchematicSite({ footprint: [1, 1], height: 2, adjustTerrain: true,
+        origin: { x: tx, y: ty, z: tz }, occupied: occupiedPositions(),
+        blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)) });
+      return site.ok && site.origin.y !== ty
+        ? { ok: false, code: 'unsupported', reason: 'the next block no longer has solid ground' } : site;
+    };
+    if (physicalBuild) {
+      if (blockAtMatches(bot, tx, ty, tz, block)) {
+        placed++;
+        if (buildState) {
+          buildState = markPlacementComplete(buildState, placementForState);
+          placementsSinceSave++;
+          await persistBuildState();
+        }
+        continue;
+      }
+      const beforeWalk = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
+      const approach = beforeWalk.paused
+        ? { ok: false, reason: `Sentry Mode: ${beforeWalk.reason}` }
+        : await walkToPhysicalPlacement(bot, new Vec3(tx, ty, tz), stopGen);
+      let safe = approach.ok ? recheckCell() : approach;
+      if (safe.ok && sentryEnabled) {
+        const sentry = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
+        if (sentry.paused) safe = { ok: false, reason: `Sentry Mode: ${sentry.reason}` };
+      }
+      if (safe.ok && !skillWasStopped(bot, stopGen)) {
+        const phase = normalizeBlockBaseName(block) === 'campfire' ? 'fire' : dy;
+        if (phase !== announcedLayer) {
+          bot.chat(phase === 'fire' ? "I'm adding the fire now." : "I'm placing this layer by hand.");
+          announcedLayer = phase;
+        }
+        safe = await placeOne(bot, normalizeBlockBaseName(block), tx, ty, tz, false,
+          { physical: true, stopGen, expected: block, recheck: recheckCell });
+      } else if (safe.ok) safe = { ok: false, reason: 'interrupted before hand placement' };
+      if (!safe.ok) {
+        if (buildState) {
+          buildState.status = 'partial';
+          buildState.pause_reason = safe.reason;
+          await persistBuildState(true);
+        }
+        return { result: `Refused further "${name}" placements after ${totalPlacedSoFar()}/${buildPlan.totalBlocks} blocks: ${safe.reason}.`,
+          site_refused: true, site_code: safe.code || 'physical_placement', site_reason: safe.reason };
+      }
+      placed++;
+      if (buildState) {
+        buildState = markPlacementComplete(buildState, placementForState);
+        placementsSinceSave++;
+        await persistBuildState();
+      }
+      continue;
+    }
 
     if (useChatCommand && name === 'campfire_spot') {
       // Leave each block visible, keeping stop requests responsive. Perform
@@ -1315,6 +1518,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     result: `Built ${placedCount}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${foundationStr}${missingStr}${unverifiedStr}`,
   };
   } finally {
+    if (buildMovements && bot.pathfinder.movements === buildMovements) bot.pathfinder.setMovements(originalMovements);
+    if (autoEatWasEnabled) bot.autoEat.enableAuto();
     bot._schematicBuildActive = false;
   }
 }
@@ -1349,7 +1554,7 @@ async function plan_advanced_build(bot, { name, x, y, z }) {
   const { entry, data } = loaded;
   const baseX = Math.floor(x), baseY = Math.floor(y), baseZ = Math.floor(z);
   const plan = createLayeredPlan({ name, blocks: data.blocks || [], origin: { x: baseX, y: baseY, z: baseZ } });
-  const useChatCommand = await detectSetblockAuth(bot);
+  const useChatCommand = !isPhysicalBuild() && await detectSetblockAuth(bot);
   const required = shouldBypassForemanMaterials(useChatCommand)
     ? {}
     : foremanBillOfMaterials(

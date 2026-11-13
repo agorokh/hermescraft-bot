@@ -30,7 +30,7 @@ import {
   trackWorldName,
   currentWorldName,
 } from '../lib/follow_on_join.js';
-import { torchSuppressedByVisit } from '../lib/survival.js';
+import { startSurvivalTick, torchSuppressedByVisit } from '../lib/survival.js';
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'hc-follow-test-'));
@@ -675,6 +675,26 @@ test('requested tasks and stop suppress arrival and camera correction without lo
   }
 });
 
+test('physical builds retain movement ownership between per-cell goals until the build finishes', async () => {
+  const bot = clearanceBot();
+  bot.pathfinder = { goal: null, isMoving: () => false };
+  await installedClearance(bot, async (dir) => {
+    bot._schematicBuildActive = true;
+    bot.sent.length = 0;
+    const placementGoal = new pathfinderPkg.goals.GoalNear(14, 64, 10, 2);
+    bot.pathfinder.goal = placementGoal;
+    await wait(100);
+    assert.equal(bot.pathfinder.goal, placementGoal, 'the cell approach keeps its pathfinder goal');
+    bot.pathfinder.goal = null;
+    await wait(140);
+    assert.deepEqual(bot.sent, [], 'equip and placement gaps cannot trigger follow teleports');
+    assert.equal(readClaim(dir, 'KidOne')?.character, 'Rosie', 'the existing player claim stays owned');
+    bot._schematicBuildActive = false;
+    await wait(100);
+    assert.ok(localTeleports(bot).length > 0, 'idle clearance resumes when the build releases movement');
+  });
+});
+
 test('local clearance retries are throttled while server teleport confirmation is pending', async () => {
   const bot = clearanceBot();
   await installedClearance(bot, async () => {
@@ -759,6 +779,38 @@ test('an off-centre visible companion remains still while the player looks past 
 // Execute the production synchronous action route, following the extraction
 // pattern in build_claims_wiring.test.js. No listener or Minecraft is started.
 const serverSource = fs.readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+
+test('production survival wiring defers hostile escape between physical build goals', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const bot = clearanceBot();
+  const assignedGoals = [];
+  bot._schematicBuildActive = true;
+  bot.entities[4] = { type: 'mob', name: 'creeper', position: new Vec3(11, 64, 10) };
+  bot.pathfinder = {
+    goal: null,
+    isMoving: () => false,
+    setGoal(goal) { this.goal = goal; assignedGoals.push(goal); },
+  };
+  const start = serverSource.indexOf('startSurvivalTick(bot, log, {');
+  assert.ok(start >= 0, 'exercise the survival options installed by the real server');
+  const call = serverSource.slice(start, serverSource.indexOf('\n        });', start) + '\n        })'.length);
+  const down = new Function('startSurvivalTick', 'bot', 'thisBot', 'currentTask', 'log', `return ${call}`)(
+    startSurvivalTick, bot, bot, null, () => {},
+  );
+  try {
+    t.mock.timers.tick(2000);
+    await Promise.resolve();
+    assert.deepEqual(assignedGoals, [], 'a goal-free placement gap still belongs to the build');
+    bot._schematicBuildActive = false;
+    t.mock.timers.tick(2000);
+    await Promise.resolve();
+    assert.ok(bot.pathfinder.goal instanceof pathfinderPkg.goals.GoalInvert, 'escape resumes after build completion');
+  } finally {
+    down();
+    t.mock.timers.tick(10000);
+    await Promise.resolve();
+  }
+});
 function actionOwnershipSource() {
   const start = serverSource.indexOf('function installActionOwnership(');
   // On the red baseline there is no shared installer; direct dispatch remains

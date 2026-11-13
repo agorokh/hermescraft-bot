@@ -30,13 +30,13 @@ background gaze and survival tasks must not teleport, turn or interrupt the buil
 
 ## Execution plan
 
-- [ ] Baseline: run all bot tests at e1d5962 (584/584 pass).
-- [ ] RED: exercise actual registered build/plan actions with op auth and physical launch;
+- [x] Baseline: run all bot tests at e1d5962 (584/584 pass).
+- [x] RED: exercise actual registered build/plan actions with op auth and physical launch;
   require no commands, per-cell movement before real placement, truthful inventory/readback.
   Cover missing material, unreachable/false arrival, stop/timeout, new obstruction, wrong readback,
   conservative movement policy/restoration and fire-last ordering.
-- [ ] GREEN: integrate physical policy/approach into the existing skills, not a second placer.
-- [ ] Independent background-ownership task: RED/GREEN follow/gaze/survival guards.
+- [x] GREEN: integrate physical policy/approach into the existing skills, not a second placer.
+- [x] Independent background-ownership task: RED/GREEN follow/gaze/survival guards.
 - [ ] Run focused then full bot checks; review exact-head behavior and failure/cancellation paths.
 - [ ] Parent integration: RED/GREEN normal launcher physical mode and finite campfire kits;
   reviewed gitlink, parent ci-fast, normal mint-dev installation and console-pin audit.

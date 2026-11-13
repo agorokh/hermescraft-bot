@@ -1047,7 +1047,18 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   let savedState = resumeEnabled && !automaticSite ? await loadBuildState(stateFile) : null;
   if (savedState && savedState.build_id !== buildId) savedState = null;
   let siteValidated = false;
+  const physicalBuild = isPhysicalBuild();
   const occupiedPositions = () => [bot.entity?.position, ...Object.values(bot.players || {}).map(p => p.entity?.position)];
+  // The builder walks away before each hand placement. Planning must not reject
+  // its initial pose; the unchanged per-cell recheck includes it after walking.
+  const siteOccupiedPositions = () => physicalBuild
+    ? Object.entries(bot.players || {}).filter(([name, p]) => name !== bot.username && p.entity !== bot.entity)
+      .map(([, p]) => p.entity?.position)
+    : occupiedPositions();
+  const actorCells = physicalBuild && name === 'campfire_spot'
+    ? blocks.filter(b => b[3] && !['air', 'cave_air', 'void_air'].includes(normalizeBlockBaseName(b[3])))
+      .map(b => b.slice(0, 3))
+    : undefined;
 
   // Fresh ordinary builds are validated before even the setblock auth probe.
   // Saved resumes and deliberate aerial/skip-foundation requests retain their
@@ -1057,9 +1068,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     const blockAt = (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz));
     const site = bodyArgs.auto_site
       ? findNearbySchematicSite({ blockAt, ...dimensions, anchor: bodyArgs.auto_site,
-        occupied: occupiedPositions() })
+        occupied: siteOccupiedPositions(), actorCells })
       : validateSchematicSite({ blockAt, ...dimensions, origin: { x: baseX, y: baseY, z: baseZ },
-        occupied: occupiedPositions(), adjustTerrain: !respectExplicitBaseY });
+        occupied: siteOccupiedPositions(), actorCells, adjustTerrain: !respectExplicitBaseY });
     if (!site.ok) return { result: `Couldn't find a safe site for "${name}": ${site.reason}. Nothing was built.`,
       site_refused: true, site_code: site.code, site_reason: site.reason };
     siteValidated = true;
@@ -1083,7 +1094,6 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // "Cannot read properties of undefined (reading 'type')" unhandled rejection.
   // Detect once, then route every cell through chat commands until proven
   // otherwise. Companion bots in this repo are always op (`server/ops.json`).
-  const physicalBuild = isPhysicalBuild();
   const useChatCommand = !physicalBuild && await detectSetblockAuth(bot);
   const trustedSetblock = shouldBypassForemanMaterials(useChatCommand);
   if (savedState && Number.isFinite(Number(savedState.origin?.y))) {
@@ -1187,7 +1197,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (siteValidated) {
     const dimensions = schematicSiteDimensions(entry, data);
     const site = validateSchematicSite({ ...dimensions, origin: { x: baseX, y: baseY, z: baseZ },
-      occupied: occupiedPositions(), blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)) });
+      occupied: siteOccupiedPositions(), actorCells, blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)) });
     if (!site.ok) return { result: `Couldn't keep the site safe for "${name}": ${site.reason}. Nothing was built.`,
       site_refused: true, site_code: site.code, site_reason: site.reason };
   }

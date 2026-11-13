@@ -31,7 +31,7 @@ export function schematicSiteDimensions(entry, data) {
   };
 }
 
-export function validateSchematicSite({ blockAt, footprint, height, origin, occupied = [], adjustTerrain = false }) {
+export function validateSchematicSite({ blockAt, footprint, height, origin, occupied = [], actorCells, adjustTerrain = false }) {
   const [width, length] = footprint;
   const { x, y, z } = origin;
   if (![x, y, z, width, length, height].every(Number.isInteger)
@@ -66,9 +66,21 @@ export function validateSchematicSite({ blockAt, footprint, height, origin, occu
   // Foundation fill is part of the mutation volume, even below a raised base.
   // Include the actors' width so a hitbox crossing the footprint edge is safe too.
   const collisionBottom = Math.min(...ground) + 1;
-  if (occupied.some(p => p && p.x + 0.3 > x && p.x - 0.3 < x + width
-    && p.z + 0.3 > z && p.z - 0.3 < z + length
-    && p.y + 2 > collisionBottom && p.y < baseY + height)) {
+  // Walking builds can leave unused space between their actual placements.
+  // Invalid or absent offsets retain the legacy full-volume actor exclusion.
+  const sparseActors = Array.isArray(actorCells) && actorCells.length > 0
+    && Array.from(actorCells).every(cell => Array.isArray(cell) && cell.length >= 3
+      && cell.slice(0, 3).every(Number.isInteger)
+      && cell[0] >= 0 && cell[0] < width && cell[1] >= 0 && cell[1] < height
+      && cell[2] >= 0 && cell[2] < length);
+  const overlapsActor = (p, bx, by, bz, w, h, l) => p
+    && p.x + 0.3 > bx && p.x - 0.3 < bx + w
+    && p.z + 0.3 > bz && p.z - 0.3 < bz + l
+    && p.y + 2 > by && p.y < by + h;
+  if (occupied.some(p => sparseActors
+    ? (collisionBottom < baseY && overlapsActor(p, x, collisionBottom, z, width, baseY - collisionBottom, length))
+      || actorCells.some(([dx, dy, dz]) => overlapsActor(p, x + dx, baseY + dy, z + dz, 1, 2, 1))
+    : overlapsActor(p, x, collisionBottom, z, width, baseY + height - collisionBottom, length))) {
     return denied('occupied_player', 'a player or character is standing in the build space');
   }
   for (let dx = 0; dx < width; dx++) {
@@ -85,7 +97,7 @@ export function validateSchematicSite({ blockAt, footprint, height, origin, occu
 
 // A crowded starter island can have its first clear footprint just beyond eight
 // blocks. Search up to one chunk away, retaining every support/clearance check.
-export function findNearbySchematicSite({ blockAt, footprint, height, anchor, occupied = [], radius = 16 }) {
+export function findNearbySchematicSite({ blockAt, footprint, height, anchor, occupied = [], actorCells, radius = 16 }) {
   if (!anchor || ![anchor.x, anchor.y, anchor.z].every(Number.isFinite)) {
     return denied('anchor', 'the player position is unavailable');
   }
@@ -104,7 +116,7 @@ export function findNearbySchematicSite({ blockAt, footprint, height, anchor, oc
   for (const candidate of candidates) {
     for (const dy of [0, 1, -1]) {
       const origin = { x: candidate.x, y: py + dy, z: candidate.z };
-      const site = validateSchematicSite({ blockAt, footprint, height, origin, occupied, adjustTerrain: true });
+      const site = validateSchematicSite({ blockAt, footprint, height, origin, occupied, actorCells, adjustTerrain: true });
       if (site.ok) return site;
       if (!failure) failure = site;
       else if (failure.code !== site.code) mixedReasons = true;

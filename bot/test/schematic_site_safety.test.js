@@ -180,6 +180,79 @@ test('automatic campfire search still refuses a clear site beyond the nearby isl
   assert.deepEqual(bot.commands, []);
 });
 
+test('a requested campfire leaves a visible interval between all thirteen placements', { timeout: 20000 }, async () => {
+  const bot = new WorldBot(p => p.y <= 63 ? ground() : air());
+  const sentAt = [];
+  const chat = bot.chat.bind(bot);
+  bot.chat = command => {
+    if (/^\/setblock /.test(command)) sentAt.push(performance.now());
+    chat(command);
+  };
+  const result = await build(bot, { name: 'campfire_spot', x: 10, y: 64, z: 10 });
+  assert.match(result.result, /13\/13 blocks placed/);
+  assert.equal(sentAt.length, 13);
+  for (let i = 1; i < sentAt.length; i++) {
+    assert.ok(sentAt[i] - sentAt[i - 1] >= 950,
+      `placements ${i} and ${i + 1} arrived only ${sentAt[i] - sentAt[i - 1]}ms apart`);
+  }
+});
+
+test('stopping during a campfire interval prevents the next placement', async () => {
+  const bot = new WorldBot(p => p.y <= 63 ? ground() : air());
+  const chat = bot.chat.bind(bot);
+  let stop;
+  bot.chat = command => {
+    chat(command);
+    if (bot.commands.length === 1) stop = setTimeout(() => { bot._stopGeneration = 1; }, 50);
+  };
+  try {
+    const result = await build(bot, { name: 'campfire_spot', x: 10, y: 64, z: 10 });
+    assert.match(result.result, /Built 1\/13 of "campfire_spot"/);
+    assert.equal(bot.commands.length, 1);
+    assert.equal(bot._schematicBuildActive, false);
+  } finally {
+    clearTimeout(stop);
+  }
+});
+
+test('campfire pacing does not delay an ordinary well build', { timeout: 3000 }, async () => {
+  const bot = new WorldBot(p => p.y <= 63 ? ground() : air());
+  const result = await build(bot, { name: 'well', x: 10, y: 64, z: 10 });
+  assert.match(result.result, /25\/25 blocks placed/);
+  assert.equal(bot.commands.length, 25);
+});
+
+for (const obstruction of ['player', 'manual block', 'unloaded cell', 'removed support']) {
+  test(`a paced campfire preserves a ${obstruction} entering the next cell`, async () => {
+    const bot = new WorldBot(p => p.y <= 63 ? ground() : air());
+    const next = '11,64,11';
+    const chat = bot.chat.bind(bot);
+    let arrive;
+    bot.chat = command => {
+      chat(command);
+      if (bot.commands.length === 1) arrive = setTimeout(() => {
+        if (obstruction === 'player') bot.players.Arsenyzzz.entity.position = { x: 11.5, y: 64, z: 11.5 };
+        if (obstruction === 'manual block') bot.blocks.set(next, 'gold_block');
+        if (obstruction === 'unloaded cell') {
+          const blockAt = bot.blockAt.bind(bot);
+          bot.blockAt = p => `${p.x},${p.y},${p.z}` === next ? null : blockAt(p);
+        }
+        if (obstruction === 'removed support') bot.blocks.set('11,63,11', 'air');
+      }, 50);
+    };
+    try {
+      const result = await build(bot, { name: 'campfire_spot', x: 10, y: 64, z: 10 });
+      assert.equal(result.site_refused, true);
+      assert.match(result.result, /after 1\/13 blocks/);
+      assert.equal(bot.commands.length, 1);
+      assert.equal(bot._schematicBuildActive, false);
+      if (obstruction === 'manual block') assert.equal(bot.blocks.get(next), 'gold_block');
+    } finally {
+      clearTimeout(arrive);
+    }
+  });
+}
+
 test('the saved crowded starter island supports two requested campfires without changing existing blocks', async () => {
   const fixture = JSON.parse(await readFile(new URL('./fixtures/starter_island_campfire.json', import.meta.url)));
   const definitions = createRequire(import.meta.url)('minecraft-data')('1.21.11').blocksByName;

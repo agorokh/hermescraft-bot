@@ -64,6 +64,7 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 
 // Mineflayer chat throttle is ~1s; /setblock bursts must respect it.
 const SETBLOCK_CHAT_INTERVAL_MS = 150;
+const CAMPFIRE_PLACEMENT_INTERVAL_MS = 1000;
 
 function captureStopGen(bot) {
   return bot._stopGeneration || 0;
@@ -1074,6 +1075,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   let foundationUnverified = 0;
   const missing = new Set();
   const totalPlacedSoFar = () => (buildState ? (buildState.completed?.length || 0) : placed);
+  let nextCampfirePlacementAt = 0;
   try {
   // Pathfind near the origin (footprint center) only when we'll actually
   // need to be near it. /setblock works at arbitrary range from the bot.
@@ -1140,6 +1142,17 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     const tx = baseX + dx, ty = baseY + dy, tz = baseZ + dz;
     const placementForState = { id: `${tx},${ty},${tz}:${normalizeBlockName(block)}` };
 
+    if (useChatCommand && name === 'campfire_spot') {
+      // Leave each block visible, keeping stop requests responsive. Perform
+      // Sentry and cell checks after this pause, immediately before placement.
+      while (!skillWasStopped(bot, stopGen)) {
+        const remaining = nextCampfirePlacementAt - performance.now();
+        if (remaining <= 0) break;
+        await sleep(Math.min(100, remaining));
+      }
+      if (skillWasStopped(bot, stopGen)) break;
+    }
+
     if (sentryEnabled) {
       const sentry = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
       if (sentry.paused) {
@@ -1152,12 +1165,33 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       }
     }
 
+    if (useChatCommand && name === 'campfire_spot') {
+      if (skillWasStopped(bot, stopGen)) break;
+      // A player or their work may have entered the cell during the wait.
+      let site = validateSchematicSite({ footprint: [1, 1], height: 1, adjustTerrain: true,
+        origin: { x: tx, y: ty, z: tz }, occupied: occupiedPositions(),
+        blockAt: (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz)) });
+      if (site.ok && site.origin.y !== ty) {
+        site = { ok: false, code: 'unsupported', reason: 'the next block no longer has solid ground' };
+      }
+      if (!site.ok) {
+        if (buildState) {
+          buildState.status = 'partial';
+          buildState.pause_reason = site.reason;
+          await persistBuildState(true);
+        }
+        return { result: `Stopped "${name}" after ${totalPlacedSoFar()}/${buildPlan.totalBlocks} blocks: ${site.reason}.`,
+          site_refused: true, site_code: site.code, site_reason: site.reason };
+      }
+    }
+
     if (useChatCommand) {
       // Rapid /setblock burst. The server processes commands in order, so
       // we don't need to wait between them — but a small rate limit keeps
       // the chat queue from tripping Paper's flood-protection.
       try {
         const transport = sendSetblockCommand(bot, tx, ty, tz, block);
+        if (name === 'campfire_spot') nextCampfirePlacementAt = performance.now() + CAMPFIRE_PLACEMENT_INTERVAL_MS;
         // Wait for server + world sync, then verify before counting success.
         const outcome = await waitForSetblockOutcome(
           bot,

@@ -89,6 +89,31 @@ test('fixed-base recheck excludes the foundation slab, including an entity cross
   assert.equal(validateSchematicSite({ ...params, occupied: [{ x: 10.5, y: 62, z: 10.5 }] }).ok, true);
 });
 
+test('sparse actor planning changes neither full terrain clearance nor foundation protection', () => {
+  const params = { blockAt: (_x, y) => y <= 63 ? ground() : air(),
+    footprint: [5, 5], height: 2, origin: { x: 10, y: 64, z: 10 }, actorCells: [[2, 0, 2]] };
+  assert.equal(validateSchematicSite({ ...params, occupied: [{ x: 10.5, y: 64, z: 10.5 }] }).ok, true,
+    'an unused corner is not a placement cell');
+  assert.equal(validateSchematicSite({ ...params, occupied: [{ x: 12.5, y: 65, z: 12.5 }] }).code, 'occupied_player',
+    'retain two-block actor clearance over a planned cell');
+  assert.equal(validateSchematicSite({ ...params, origin: { x: 10, y: 66, z: 10 },
+    occupied: [{ x: 10.5, y: 64, z: 10.5 }] }).code, 'occupied_player',
+  'the complete foundation slab still excludes actors in unused corners');
+  const obstruction = (x, y, z) => x === 10 && y === 64 && z === 10
+    ? { name: 'gold_block', boundingBox: 'block' } : params.blockAt(x, y, z);
+  assert.equal(validateSchematicSite({ ...params, blockAt: obstruction }).code, 'occupied',
+    'an unused corner still requires full terrain clearance');
+});
+
+for (const actorCells of [undefined, [], null, [[NaN, 0, 0]], [[5, 0, 0]], ['invalid'], new Array(1)]) {
+  test(`missing or invalid sparse actor cells retain fullvolume safety: ${JSON.stringify(actorCells)}`, () => {
+    const site = validateSchematicSite({ blockAt: (_x, y) => y <= 63 ? ground() : air(),
+      footprint: [5, 5], height: 2, origin: { x: 10, y: 64, z: 10 }, actorCells,
+      occupied: [{ x: 10.5, y: 64, z: 10.5 }] });
+    assert.equal(site.code, 'occupied_player');
+  });
+}
+
 test('automatic well finds a fully supported nearby alternative instead of building over void', async () => {
   const bot = new WorldBot(p => p.y <= 63 && p.x >= -5 && p.x <= -1 && p.z >= -2 && p.z <= 2 ? ground() : air());
   const result = await build(bot, { name: 'well', x: 2, y: 64, z: 0,

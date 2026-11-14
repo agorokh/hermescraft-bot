@@ -385,7 +385,9 @@ export function physicalBuildMovements(bot, original) {
   moves.allowSprinting = false;
   moves.allowFreeMotion = false;
   moves.canOpenDoors = false;
-  moves.maxDropDown = 1;
+  // Native cardinal descent measures feet-to-support, so a one-block foot
+  // descent needs 2 here. Bound the actual foot delta below for every move.
+  moves.maxDropDown = 2;
   moves.infiniteLiquidDropdownDistance = false;
   moves.scafoldingBlocks = [];
   moves.exclusionAreasBreak = [() => 100];
@@ -410,6 +412,7 @@ export function physicalBuildMovements(bot, original) {
   // destination, not just the selected final stance or forward-step costs.
   const neighbors = moves.getNeighbors.bind(moves);
   moves.getNeighbors = node => neighbors(node).filter(next => {
+    if (node.y - next.y > 1) return false;
     const feet = new Vec3(next.x, next.y, next.z);
     const support = bot.blockAt(feet.offset(0, -1, 0));
     const body = bot.blockAt(feet);

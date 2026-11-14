@@ -88,3 +88,78 @@ test('native physical step-ups do not route through an intermediate player', () 
       || Math.abs(node.y - actor.y) >= 2, 'intermediate step enters the player hitbox');
   }
 });
+
+// A single-cell-wide stair prevents a diagonal detour from concealing a
+// rejected cardinal descent in the native pathfinder.
+function nativeDescent({ drop = 1, hazard, unknownSupport = false, wall = false, gap = false } = {}) {
+  const bot = {
+    registry,
+    players: {},
+    inventory: { items: () => [] },
+    game: { minY: -64 },
+    blockAt(position) {
+      const p = position.floored();
+      if (p.x < 0 || p.x > 3 || p.z !== 0 || p.y < 60 || p.y > 69) return null;
+      const floorY = p.x === 0 ? 64 : 64 - drop;
+      if (unknownSupport && p.x === 1 && p.y === floorY) return null;
+      let name = p.y <= floorY ? 'stone' : 'air';
+      if (p.x === 1) {
+        if (gap && p.y <= floorY) name = 'air';
+        if (hazard && p.y === floorY) name = hazard;
+        if (wall && p.y > floorY && p.y <= floorY + 3) name = 'stone';
+      }
+      const block = Block.fromStateId(registry.blocksByName[name].defaultState, 0);
+      block.position = p;
+      return block;
+    },
+  };
+  const movements = physicalBuildMovements(bot, new Movements(bot));
+  const start = new Move(0, 65, 0, 0);
+  const goal = new goals.GoalBlock(2, 65 - drop, 0);
+  const result = new AStar(start, movements, goal, 1000, 1000, 8).compute();
+  return { movements, start, goal, result };
+}
+
+test('native physical walking descends a one-block cardinal stair', () => {
+  const { start, goal, result } = nativeDescent();
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'success');
+  assert.ok(goal.isEnd(result.path.at(-1)));
+  let previous = start;
+  for (const node of result.path) {
+    assert.ok(previous.y - node.y <= 1, 'physical walking must not drop more than one foot block');
+    previous = node;
+  }
+});
+
+test('native physical walking refuses a two-block cardinal drop', () => {
+  const { result } = nativeDescent({ drop: 2 });
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'noPath');
+});
+
+for (const hazard of [...damagingSupport, 'water', 'lava', 'fire']) {
+  test(`native physical descent refuses ${hazard} landing support`, () => {
+    const { result } = nativeDescent({ hazard });
+    assertReadOnlyPath(result);
+    assert.equal(result.status, 'noPath');
+  });
+}
+
+test('native physical descent refuses unknown support', () => {
+  const { result } = nativeDescent({ unknownSupport: true });
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'noPath');
+});
+
+test('native physical descent preserves the no-dig and no-parkour policy', () => {
+  for (const options of [{ wall: true }, { gap: true }]) {
+    const { movements, result } = nativeDescent(options);
+    assert.equal(movements.canDig, false);
+    assert.equal(movements.allowParkour, false);
+    assert.equal(movements.allow1by1towers, false);
+    assert.deepEqual(movements.scafoldingBlocks, []);
+    assertReadOnlyPath(result);
+    assert.equal(result.status, 'noPath');
+  }
+});

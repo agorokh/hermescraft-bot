@@ -596,10 +596,8 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   }
   const entity = findPlayerEntity(bot, player);
   if (!entity) return { result: `Can't see ${player} nearby.` };
-  const stack = findInventoryItem(bot, item);
+  let stack = findInventoryItem(bot, item);
   if (!stack) return { result: `No ${item} in my inventory to give.` };
-  const tossedCount = Math.min(requestedCount, stack.count);
-  if (!Number.isSafeInteger(tossedCount) || tossedCount < 1) return { result: `No ${item} in my inventory to give.` };
 
   // Pathfind close.
   const p = entity.position;
@@ -621,38 +619,90 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   if (skillWasStopped(bot, stopGen)) return { result: `give_to_player interrupted` };
 
   await bot.lookAt(p);
+  if (skillWasStopped(bot, stopGen)) return { result: `give_to_player interrupted` };
+  // Navigation may have changed the inventory. Never borrow an existing cursor
+  // stack: Mineflayer's transfer() would swap it into the requested source slot.
+  stack = findInventoryItem(bot, item);
+  if (!stack) return { result: `No ${item} in my inventory to give.` };
+  if (bot.inventory.selectedItem) return { result: `Couldn't toss ${item}: inventory cursor is occupied.` };
+  const plannedCount = Math.min(requestedCount, stack.count);
+  if (!Number.isSafeInteger(plannedCount) || plannedCount < 1) return { result: `No ${item} in my inventory to give.` };
+  const sourceType = stack.type;
+  const countOwned = () => bot.inventory.items()
+    .filter(i => i.type === sourceType).reduce((sum, i) => sum + i.count, 0);
+  const beforeCount = countOwned();
   // Register before toss so fast LAN pickups cannot fire before we listen.
-  let received = false;
+  let receivedCount = 0;
+  const collectedItems = new Set();
   const requestedPlayer = String(player || '');
   const resolvedPlayer = entity.username || entity.name || requestedPlayer;
   const onCollect = (collector, collected) => {
     const who = collector?.username || collector?.name;
     if (playerNameMatchesResolvedCollector(who, requestedPlayer, resolvedPlayer) && collectItemMatches(item, collected)) {
-      received = true;
+      const key = collected?.id ?? collected;
+      if (collectedItems.has(key)) return;
+      let count;
+      try { count = collected?.getDroppedItem?.()?.count; } catch { /* unknown quantity is not confirmation */ }
+      if (Number.isSafeInteger(count) && count > 0) {
+        collectedItems.add(key);
+        receivedCount += count;
+      }
     }
   };
   bot.on('playerCollect', onCollect);
+  let transferError;
   try {
-    await bot.toss(stack.type, null, tossedCount);
+    if (Number.isSafeInteger(stack.stackSize) && stack.count > stack.stackSize) {
+      // Mineflayer transfer() accounts an outside left-click as stackSize even
+      // though it drops the entire cursor. An oversized 12-tool stack would all
+      // be lost when requesting one. Existing native slot-drop-one (mode 4)
+      // leaves the remainder, its components, and the cursor in place even when
+      // every inventory slot is full. Ordinary legal stacks keep the toss path.
+      const slot = stack.slot;
+      const identity = i => JSON.stringify([i.type, i.metadata, i.nbt, i.components, i.removedComponents]);
+      const expected = identity(stack);
+      if (!Number.isInteger(slot) || typeof bot.clickWindow !== 'function') throw new Error('native slot drop is unavailable');
+      for (let i = 0; i < plannedCount; i++) {
+        if (skillWasStopped(bot, stopGen)) throw new Error('interrupted');
+        const current = bot.inventory.slots?.[slot];
+        if (bot.inventory.selectedItem || !current || identity(current) !== expected) {
+          throw new Error('inventory cursor or source item changed');
+        }
+        const beforeDrop = countOwned();
+        await bot.clickWindow(slot, 0, 4);
+        if (beforeDrop - countOwned() !== 1) throw new Error('native slot drop quantity was not one');
+      }
+    } else {
+      await bot.toss(sourceType, null, plannedCount);
+    }
   } catch (e) {
+    transferError = e.message;
+  }
+  // A stop or an error can follow real partial progress. Retain that receipt so
+  // callers do not blindly retry a transfer that already changed inventory.
+  const tossedCount = beforeCount - countOwned();
+  if (!Number.isSafeInteger(tossedCount) || tossedCount < 1) {
     bot.removeListener('playerCollect', onCollect);
-    return { result: `Couldn't toss ${item}: ${e.message}` };
+    return { result: `Couldn't toss ${item}: ${transferError || 'no inventory decrease was verified'}` };
   }
 
   // 3s wait for collect event (Mindcraft pattern).
   const start = Date.now();
-  while (Date.now() - start < 3000 && !received) {
+  while (Date.now() - start < 3000 && receivedCount < tossedCount) {
     if (skillWasStopped(bot, stopGen)) break;
     await sleep(200);
   }
   bot.removeListener('playerCollect', onCollect);
 
-  const partial = tossedCount < requestedCount
-    ? ` Only ${tossedCount} of the ${requestedCount} requested were available.` : '';
+  const received = receivedCount === tossedCount;
+  const partial = plannedCount < requestedCount
+    ? ` Only ${plannedCount} of the ${requestedCount} requested were available.` : '';
+  const stopped = transferError ? ` Transfer stopped after ${tossedCount} of ${plannedCount}: ${transferError}.`
+    : tossedCount !== plannedCount ? ` Inventory decreased by ${tossedCount}, not the ${plannedCount} planned.` : '';
   return {
     result: received
-      ? `Gave ${tossedCount} ${item} to ${player} (they picked it up).${partial}`
-      : `Tossed ${tossedCount} ${item} toward ${player} — pickup not confirmed within 3s.${partial}`,
+      ? `Gave ${tossedCount} ${item} to ${player} (they picked it up).${partial}${stopped}`
+      : `Tossed ${tossedCount} ${item} toward ${player} — pickup not confirmed within 3s.${partial}${stopped}`,
     item_transfer: { item, requested: requestedCount, tossed: tossedCount, pickup_confirmed: received },
   };
 }

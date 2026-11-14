@@ -24,7 +24,7 @@ import http from 'http';
 import { URL } from 'url';
 import mineflayer from 'mineflayer';
 import pathfinderPkg from 'mineflayer-pathfinder';
-const { pathfinder, Movements, goals } = pathfinderPkg;
+const { pathfinder, goals } = pathfinderPkg;
 // pvp plugin disabled — its deprecated physicTick event breaks pathfinder
 // import pvpPkg from 'mineflayer-pvp';
 // const pvpPlugin = pvpPkg.plugin;
@@ -57,7 +57,7 @@ import {
 // primitives + idle bark / presence loop. Each module is self-contained;
 // wiring below registers skills with ACTIONS map and installs the bark
 // loop on first spawn.
-import { registerHighLevelSkills } from './lib/skills.js';
+import { createNavigationMovements, registerHighLevelSkills } from './lib/skills.js';
 import { installBuildClaimExperiment, createBuildClaimState, resolveBuildRequest, parseBuildClaimPeers, cleanKidBuildName } from './lib/build_claims.js';
 import { actionOutcomeFailed, isSurvivalBlock, publicActionResult } from './lib/action_outcome.js';
 import { installBarksAndPresence } from './lib/barks.js';
@@ -1223,12 +1223,7 @@ async function createBot() {
       bot.loadPlugin(collectBlock);
 
       // Configure pathfinder
-      const moves = new Movements(bot);
-      moves.allowSprinting = true;
-      // Walking to someone must not excavate their builds. Digging is explicit.
-      moves.canDig = false;
-      moves.allowParkour = true;
-      bot.pathfinder.setMovements(moves);
+      bot.pathfinder.setMovements(createNavigationMovements(bot));
       bot._stopGeneration = 0;
 
       // Configure auto-eat

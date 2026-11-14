@@ -1,13 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import minecraftData from 'minecraft-data';
 import prismarineBlock from 'prismarine-block';
 import pathfinderPkg from 'mineflayer-pathfinder';
 import AStar from 'mineflayer-pathfinder/lib/astar.js';
 import Move from 'mineflayer-pathfinder/lib/move.js';
 import { Vec3 } from 'vec3';
-import { physicalBuildMovements } from '../lib/skills.js';
+import { createNavigationMovements, physicalBuildMovements } from '../lib/skills.js';
 
 const registry = minecraftData('1.21.11');
 const Block = prismarineBlock(registry);
@@ -22,7 +21,6 @@ function defaultNavigation({ openPassage = false } = {}) {
     game: { minY: -64 },
     pathfinder: {
       bestHarvestTool: () => null,
-      setMovements(movements) { this.movements = movements; },
     },
     blockAt(position) {
       const p = position.floored();
@@ -37,15 +35,12 @@ function defaultNavigation({ openPassage = false } = {}) {
       return block;
     },
   };
-  // Execute the real spawn configuration, rather than reconstructing its flags.
-  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
-  const start = server.indexOf('// Configure pathfinder');
-  const endMarker = 'bot.pathfinder.setMovements(moves);';
-  const end = server.indexOf(endMarker, start);
-  assert.ok(start >= 0 && end > start, 'server spawn must install navigation movements');
-  new Function('bot', 'Movements', server.slice(start, end + endMarker.length))(bot, Movements);
+  const movements = createNavigationMovements(bot);
+  assert.equal(movements.allowSprinting, true);
+  assert.equal(movements.allowParkour, true);
+  assert.equal(movements.maxDropDown, 4, 'default navigation retains its native drop policy');
   const goal = new goals.GoalBlock(0, 64, 0);
-  return new AStar(new Move(-3, 64, 0, 0), bot.pathfinder.movements, goal, 1000, 1000, 16).compute();
+  return new AStar(new Move(-3, 64, 0, 0), movements, goal, 1000, 1000, 16).compute();
 }
 
 test('default spawned navigation cannot tunnel through a closed glass shelter', () => {

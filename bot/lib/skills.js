@@ -375,6 +375,15 @@ function findBuildOffBlock(bot, x, y, z) {
   return null;
 }
 
+export function createNavigationMovements(bot) {
+  const moves = new Movements(bot);
+  moves.allowSprinting = true;
+  // Walking to someone must not excavate their builds. Digging is explicit.
+  moves.canDig = false;
+  moves.allowParkour = true;
+  return moves;
+}
+
 // Reuse the existing pathfinder and placement primitive, with a read-only
 // movement policy while a household co-build owns the body.
 export function physicalBuildMovements(bot, original) {

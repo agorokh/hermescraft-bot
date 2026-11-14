@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { Vec3 } from 'vec3';
 import { registerHighLevelSkills } from '../lib/skills.js';
+import { actionOutcomeFailed } from '../lib/action_outcome.js';
 
 const require = createRequire(import.meta.url);
 const registry = require('prismarine-registry')('1.21.11');
@@ -155,6 +156,55 @@ test('an ordinary sixty-four cobblestone gift retains the installed toss path', 
   assert.deepEqual(packets.map(p => [p.slot, p.mouseButton, p.mode]), [[9, 0, 0], [-999, 0, 0]]);
   assert.deepEqual(result.item_transfer, { item: 'cobblestone', requested: 64, tossed: 64, pickup_confirmed: true });
 });
+
+for (const completedDrops of [0, 1]) {
+  test(`an ordinary transfer error counts its cursor as owned after ${completedDrops} actual drops`, async () => {
+    const { bot, server, packets, dropped, recipient, source } = inventoryBot({ item: 'cobblestone', count: 64, full: false });
+    source.components = [{ type: 'custom_data', data: { type: 'compound', value: { marker: { type: 'string', value: 'preserve cursor' } } } }];
+    bot.inventory.updateSlot(9, copy(source));
+    server.updateSlot(9, copy(source));
+    const diamond = new Item(registry.itemsByName.diamond.id, 3);
+    bot.inventory.updateSlot(10, copy(diamond));
+    server.updateSlot(10, copy(diamond));
+    const before = contents(server);
+    const acceptClick = bot.inventory.acceptClick.bind(bot.inventory);
+    let outsideClicks = 0;
+    bot.inventory.acceptClick = click => {
+      if (click.slot === -999 && outsideClicks++ === completedDrops) throw new Error('outside click rejected');
+      return acceptClick(click);
+    };
+    const skills = registerHighLevelSkills({}, () => bot);
+    const requested = completedDrops ? 2 : 64;
+    const result = await skills.give_to_player({ player: 'Kid', item: 'cobblestone', count: requested });
+    assert.equal(server.slots[9], null, 'the installed transfer picked up the source stack');
+    assert.deepEqual(contents(server).slice(10), before.slice(10), 'unrelated items stay unchanged');
+    const remaining = copy(source);
+    remaining.count -= completedDrops;
+    assert.deepEqual(Item.toNotch(bot.inventory.selectedItem), Item.toNotch(remaining));
+    assert.deepEqual(Item.toNotch(server.selectedItem), Item.toNotch(remaining));
+    const owned = bot.inventory.items().filter(i => i.type === source.type).reduce((sum, i) => sum + i.count, 0)
+      + bot.inventory.selectedItem.count;
+    assert.equal(owned, 64 - completedDrops);
+    assert.equal(dropped.reduce((sum, i) => sum + i.count, 0), completedDrops);
+    assert.equal(recipient.reduce((sum, i) => sum + i.count, 0), completedDrops);
+    if (completedDrops) {
+      assert.deepEqual(result.item_transfer, { item: 'cobblestone', requested: 2, tossed: 1, pickup_confirmed: true });
+      assert.equal(actionOutcomeFailed(result), false, 'real partial progress must not invite replay');
+      assert.match(result.result, /stopped after 1 of 2: outside click rejected/i);
+    } else {
+      assert.equal(result.item_transfer, undefined, 'moving a stack to the cursor is not a toss receipt');
+      assert.equal(actionOutcomeFailed(result), true);
+      assert.match(result.result, /couldn't toss.*outside click rejected/i);
+    }
+    const packetCount = packets.length;
+    const next = await skills.give_to_player({ player: 'Kid', item: 'diamond', count: 1 });
+    assert.equal(next.item_transfer, undefined);
+    assert.equal(actionOutcomeFailed(next), true);
+    assert.match(next.result, /cursor is occupied/i);
+    assert.equal(packets.length, packetCount, 'the next gift refuses to borrow the retained cursor');
+    assert.deepEqual(Item.toNotch(bot.inventory.selectedItem), Item.toNotch(remaining));
+  });
+}
 
 test('a native error after one drop reports that quantity without losing the remainder', async () => {
   const { bot, server, recipient, source } = inventoryBot();

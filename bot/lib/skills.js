@@ -634,8 +634,12 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   const plannedCount = Math.min(requestedCount, stack.count);
   if (!Number.isSafeInteger(plannedCount) || plannedCount < 1) return { result: `No ${item} in my inventory to give.` };
   const sourceType = stack.type;
+  // transfer() can fail after picking up the source but before dropping it.
+  // A stack retained on the cursor is still owned, including after a partial
+  // outside drop; leave that cursor untouched rather than inventing a receipt.
   const countOwned = () => inventory.items()
-    .filter(i => i.type === sourceType).reduce((sum, i) => sum + i.count, 0);
+    .filter(i => i.type === sourceType).reduce((sum, i) => sum + i.count, 0)
+    + (inventory.selectedItem?.type === sourceType ? inventory.selectedItem.count : 0);
   const beforeCount = countOwned();
   // Register before toss so fast LAN pickups cannot fire before we listen.
   let receivedCount = 0;

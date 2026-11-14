@@ -6,12 +6,54 @@ import pathfinderPkg from 'mineflayer-pathfinder';
 import AStar from 'mineflayer-pathfinder/lib/astar.js';
 import Move from 'mineflayer-pathfinder/lib/move.js';
 import { Vec3 } from 'vec3';
-import { physicalBuildMovements } from '../lib/skills.js';
+import { createNavigationMovements, physicalBuildMovements } from '../lib/skills.js';
 
 const registry = minecraftData('1.21.11');
 const Block = prismarineBlock(registry);
 const { Movements, goals } = pathfinderPkg;
 const damagingSupport = new Set(['magma_block', 'campfire', 'soul_campfire', 'cactus']);
+
+function defaultNavigation({ openPassage = false } = {}) {
+  const bot = {
+    registry,
+    entity: { effects: {} },
+    inventory: { items: () => [] },
+    game: { minY: -64 },
+    pathfinder: {
+      bestHarvestTool: () => null,
+    },
+    blockAt(position) {
+      const p = position.floored();
+      if (Math.abs(p.x) > 3 || Math.abs(p.z) > 3 || p.y < 60 || p.y > 70) return null;
+      let name = p.y <= 63 ? 'stone' : 'air';
+      const inRoom = Math.abs(p.x) <= 2 && Math.abs(p.z) <= 2;
+      if (inRoom && (p.y === 67 || (p.y >= 64 && p.y <= 66
+        && (Math.abs(p.x) === 2 || Math.abs(p.z) === 2)))) name = 'glass';
+      if (openPassage && p.x === -2 && p.z === 0 && [64, 65].includes(p.y)) name = 'air';
+      const block = Block.fromStateId(registry.blocksByName[name].defaultState, 0);
+      block.position = p;
+      return block;
+    },
+  };
+  const movements = createNavigationMovements(bot);
+  assert.equal(movements.allowSprinting, true);
+  assert.equal(movements.allowParkour, true);
+  assert.equal(movements.maxDropDown, 4, 'default navigation retains its native drop policy');
+  const goal = new goals.GoalBlock(0, 64, 0);
+  return new AStar(new Move(-3, 64, 0, 0), movements, goal, 1000, 1000, 16).compute();
+}
+
+test('default spawned navigation cannot tunnel through a closed glass shelter', () => {
+  const result = defaultNavigation();
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'noPath');
+});
+
+test('default spawned navigation reaches the shelter through an open passage without digging', () => {
+  const result = defaultNavigation({ openPassage: true });
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'success');
+});
 
 function nativeWorld({ hazard, stepUp = false, actor } = {}) {
   const bot = {
@@ -86,5 +128,80 @@ test('native physical step-ups do not route through an intermediate player', () 
   for (const node of result.path) {
     assert.ok(Math.abs(node.x + .5 - actor.x) >= .8 || Math.abs(node.z + .5 - actor.z) >= .8
       || Math.abs(node.y - actor.y) >= 2, 'intermediate step enters the player hitbox');
+  }
+});
+
+// A single-cell-wide stair prevents a diagonal detour from concealing a
+// rejected cardinal descent in the native pathfinder.
+function nativeDescent({ drop = 1, hazard, unknownSupport = false, wall = false, gap = false } = {}) {
+  const bot = {
+    registry,
+    players: {},
+    inventory: { items: () => [] },
+    game: { minY: -64 },
+    blockAt(position) {
+      const p = position.floored();
+      if (p.x < 0 || p.x > 3 || p.z !== 0 || p.y < 60 || p.y > 69) return null;
+      const floorY = p.x === 0 ? 64 : 64 - drop;
+      if (unknownSupport && p.x === 1 && p.y === floorY) return null;
+      let name = p.y <= floorY ? 'stone' : 'air';
+      if (p.x === 1) {
+        if (gap && p.y <= floorY) name = 'air';
+        if (hazard && p.y === floorY) name = hazard;
+        if (wall && p.y > floorY && p.y <= floorY + 3) name = 'stone';
+      }
+      const block = Block.fromStateId(registry.blocksByName[name].defaultState, 0);
+      block.position = p;
+      return block;
+    },
+  };
+  const movements = physicalBuildMovements(bot, new Movements(bot));
+  const start = new Move(0, 65, 0, 0);
+  const goal = new goals.GoalBlock(2, 65 - drop, 0);
+  const result = new AStar(start, movements, goal, 1000, 1000, 8).compute();
+  return { movements, start, goal, result };
+}
+
+test('native physical walking descends a one-block cardinal stair', () => {
+  const { start, goal, result } = nativeDescent();
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'success');
+  assert.ok(goal.isEnd(result.path.at(-1)));
+  let previous = start;
+  for (const node of result.path) {
+    assert.ok(previous.y - node.y <= 1, 'physical walking must not drop more than one foot block');
+    previous = node;
+  }
+});
+
+test('native physical walking refuses a two-block cardinal drop', () => {
+  const { result } = nativeDescent({ drop: 2 });
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'noPath');
+});
+
+for (const hazard of [...damagingSupport, 'water', 'lava', 'fire']) {
+  test(`native physical descent refuses ${hazard} landing support`, () => {
+    const { result } = nativeDescent({ hazard });
+    assertReadOnlyPath(result);
+    assert.equal(result.status, 'noPath');
+  });
+}
+
+test('native physical descent refuses unknown support', () => {
+  const { result } = nativeDescent({ unknownSupport: true });
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'noPath');
+});
+
+test('native physical descent preserves the no-dig and no-parkour policy', () => {
+  for (const options of [{ wall: true }, { gap: true }]) {
+    const { movements, result } = nativeDescent(options);
+    assert.equal(movements.canDig, false);
+    assert.equal(movements.allowParkour, false);
+    assert.equal(movements.allow1by1towers, false);
+    assert.deepEqual(movements.scafoldingBlocks, []);
+    assertReadOnlyPath(result);
+    assert.equal(result.status, 'noPath');
   }
 });

@@ -20,6 +20,7 @@ class GiftBot extends EventEmitter {
     this.toss = async (type, metadata, amount) => {
       this.tosses.push({ type, metadata, amount });
       if (tossFails) throw new Error('toss refused');
+      count -= amount;
       if (pickup) this.emit('playerCollect', this.players.Arsenyzzz.entity, { getDroppedItem: () => ({ name: 'oak_planks', count: amount }) });
     };
   }

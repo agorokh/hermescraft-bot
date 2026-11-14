@@ -920,10 +920,11 @@ test('production quest dispatch owns the real give skill throughout its goal-fre
   bot.registry = minecraftData('1.21.4');
   bot.entity.velocity = new Vec3(0, 0, 0);
   bot.clearControlStates = () => {};
-  bot.inventory = { items: () => [{ name: 'oak_planks', type: 17, count: 8 }] };
+  let giftCount = 8;
+  bot.inventory = { items: () => giftCount ? [{ name: 'oak_planks', type: 17, count: giftCount }] : [] };
   pathfinderPkg.pathfinder(bot);
   bot.lookAt = async () => {};
-  bot.toss = async () => {};
+  bot.toss = async () => { giftCount = 0; };
   const route = synchronousActionHarness(bot, registerHighLevelSkills({}, () => bot));
   await installedClearance(bot, async () => {
     bot.sent.length = 0;

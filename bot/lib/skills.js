@@ -74,6 +74,70 @@ function logPhysicalBuild(bot, event, details) {
   console.log(`[physical-build] ${JSON.stringify({ at: Date.now(), actor: bot.username, event, ...details })}`);
 }
 
+// Observe just one physical equip/hand boundary. Never retain packet payloads,
+// item components or chat, and never change inventory or wrap protocol writes.
+function tracePhysicalHandState(bot, expected, target, sourceSlot) {
+  const itemSummary = item => item ? {
+    name: typeof item.name === 'string' ? item.name.slice(0, 80) : null,
+    count: Number.isSafeInteger(item.count) ? item.count : null,
+    slot: Number.isSafeInteger(item.slot) ? item.slot : null,
+  } : null;
+  const snapshot = () => ({
+    held: itemSummary(bot.heldItem), cursor: itemSummary(bot.inventory?.selectedItem),
+    quickBarSlot: Number.isSafeInteger(bot.quickBarSlot) ? bot.quickBarSlot : null,
+    windowId: Number.isSafeInteger(bot.currentWindow?.id ?? bot.inventory?.id)
+      ? (bot.currentWindow?.id ?? bot.inventory?.id) : null,
+    source: itemSummary(bot.inventory?.slots?.[sourceSlot]),
+  });
+  const beforeEquip = snapshot();
+  let afterEquip = null;
+  let eventsDropped = 0;
+  const events = [], listeners = [];
+  const record = (event, details = {}) => {
+    if (events.length === 16) { events.shift(); eventsDropped++; }
+    events.push({ at: Date.now(), event, ...details, state: snapshot() });
+  };
+  const listen = (emitter, event, fn) => {
+    if (!emitter?.on || !emitter?.removeListener) return;
+    emitter.on(event, fn);
+    listeners.push(() => emitter.removeListener(event, fn));
+  };
+  listen(bot, 'heldItemChanged', () => {
+    // Stack frames contain function/file locations, no arguments. Drop path
+    // directories and bound each frame so this remains a small caller hint.
+    const stack = String(new Error().stack || '').split('\n').slice(2, 8)
+      .map(frame => frame.trim().replace(/(?:file:\/\/)?(?:\/[^()\s]+)+\/([^/\s()]+:\d+:\d+)/g, '$1').slice(0, 200));
+    record('heldItemChanged', { stack });
+  });
+  listen(bot._client, 'held_item_slot', packet => record('held_item_slot', {
+    slot: Number.isSafeInteger(packet?.slot) ? packet.slot : null,
+  }));
+  const relevantSlot = slot => Number.isSafeInteger(slot)
+    && (slot === sourceSlot || slot === -1 || (slot >= 36 && slot <= 44));
+  listen(bot._client, 'set_slot', packet => {
+    if ((packet?.windowId === 0 || packet?.windowId === -1) && relevantSlot(packet.slot)) {
+      record('set_slot', { windowId: packet.windowId, slot: packet.slot,
+        stateId: Number.isSafeInteger(packet.stateId) ? packet.stateId : null });
+    }
+  });
+  listen(bot._client, 'set_player_inventory', packet => {
+    if (relevantSlot(packet?.slotId)) record('set_player_inventory', { slot: packet.slotId });
+  });
+  listen(bot._client, 'window_items', packet => {
+    if (packet?.windowId === 0) record('window_items', { windowId: 0,
+      stateId: Number.isSafeInteger(packet.stateId) ? packet.stateId : null });
+  });
+  return {
+    equipped() { afterEquip = snapshot(); },
+    mismatch() {
+      console.log(`[physical-hand-state] ${JSON.stringify({ at: Date.now(), actor: bot.username,
+        expected, target: { x: target.x, y: target.y, z: target.z }, sourceSlot,
+        beforeEquip, afterEquip, current: snapshot(), events, eventsDropped })}`);
+    },
+    close() { for (const remove of listeners) remove(); },
+  };
+}
+
 function captureStopGen(bot) {
   return bot._stopGeneration || 0;
 }
@@ -495,8 +559,10 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
   const buildOff = findBuildOffBlock(bot, targetPos.x, targetPos.y, targetPos.z);
   if (!buildOff) return { ok: false, reason: `no adjacent block to place against at ${targetPos.x},${targetPos.y},${targetPos.z}` };
 
+  const handTrace = physical ? tracePhysicalHandState(bot, itemName, targetPos, item.slot) : null;
   try {
     await bot.equip(item, 'hand');
+    handTrace?.equipped();
     await bot.lookAt(buildOff.block.position.offset(0.5, 0.5, 0.5));
     if (physical) {
       // Hold the real material visibly before the native hand-placement
@@ -509,6 +575,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       const safe = recheck?.();
       if (safe && !safe.ok) return { ok: false, reason: safe.reason };
       if (!bot.heldItem || normalizeBlockBaseName(bot.heldItem.name) !== normalizeBlockBaseName(itemName)) {
+        handTrace?.mismatch();
         return { ok: false, reason: 'held building material changed' };
       }
       logPhysicalBuild(bot, 'hand', { target: targetPos, item: bot.heldItem.name, position: bot.entity.position });
@@ -525,6 +592,8 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: err.message };
+  } finally {
+    handTrace?.close();
   }
 }
 

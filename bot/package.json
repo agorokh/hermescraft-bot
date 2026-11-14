@@ -20,11 +20,16 @@
     "mineflayer-pathfinder": "^2.4.5",
     "mineflayer-pvp": "^1.3.2",
     "mineflayer-schem": "^1.5.2",
+    "prismarine-item": "1.17.0",
     "prismarine-schematic": "^1.3.0",
     "vec3": "^0.1.10"
   },
   "engines": {
     "node": ">=18"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "prismarine-registry": "1.11.0",
+    "prismarine-windows": "2.9.0"
+  }
 }

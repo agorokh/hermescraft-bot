@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import minecraftData from 'minecraft-data';
 import prismarineBlock from 'prismarine-block';
 import pathfinderPkg from 'mineflayer-pathfinder';
@@ -12,6 +13,52 @@ const registry = minecraftData('1.21.11');
 const Block = prismarineBlock(registry);
 const { Movements, goals } = pathfinderPkg;
 const damagingSupport = new Set(['magma_block', 'campfire', 'soul_campfire', 'cactus']);
+
+function defaultNavigation({ openPassage = false } = {}) {
+  const bot = {
+    registry,
+    entity: { effects: {} },
+    inventory: { items: () => [] },
+    game: { minY: -64 },
+    pathfinder: {
+      bestHarvestTool: () => null,
+      setMovements(movements) { this.movements = movements; },
+    },
+    blockAt(position) {
+      const p = position.floored();
+      if (Math.abs(p.x) > 3 || Math.abs(p.z) > 3 || p.y < 60 || p.y > 70) return null;
+      let name = p.y <= 63 ? 'stone' : 'air';
+      const inRoom = Math.abs(p.x) <= 2 && Math.abs(p.z) <= 2;
+      if (inRoom && (p.y === 67 || (p.y >= 64 && p.y <= 66
+        && (Math.abs(p.x) === 2 || Math.abs(p.z) === 2)))) name = 'glass';
+      if (openPassage && p.x === -2 && p.z === 0 && [64, 65].includes(p.y)) name = 'air';
+      const block = Block.fromStateId(registry.blocksByName[name].defaultState, 0);
+      block.position = p;
+      return block;
+    },
+  };
+  // Execute the real spawn configuration, rather than reconstructing its flags.
+  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const start = server.indexOf('// Configure pathfinder');
+  const endMarker = 'bot.pathfinder.setMovements(moves);';
+  const end = server.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, 'server spawn must install navigation movements');
+  new Function('bot', 'Movements', server.slice(start, end + endMarker.length))(bot, Movements);
+  const goal = new goals.GoalBlock(0, 64, 0);
+  return new AStar(new Move(-3, 64, 0, 0), bot.pathfinder.movements, goal, 1000, 1000, 16).compute();
+}
+
+test('default spawned navigation cannot tunnel through a closed glass shelter', () => {
+  const result = defaultNavigation();
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'noPath');
+});
+
+test('default spawned navigation reaches the shelter through an open passage without digging', () => {
+  const result = defaultNavigation({ openPassage: true });
+  assertReadOnlyPath(result);
+  assert.equal(result.status, 'success');
+});
 
 function nativeWorld({ hazard, stepUp = false, actor } = {}) {
   const bot = {

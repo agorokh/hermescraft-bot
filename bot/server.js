@@ -1225,7 +1225,8 @@ async function createBot() {
       // Configure pathfinder
       const moves = new Movements(bot);
       moves.allowSprinting = true;
-      moves.canDig = true;
+      // Walking to someone must not excavate their builds. Digging is explicit.
+      moves.canDig = false;
       moves.allowParkour = true;
       bot.pathfinder.setMovements(moves);
       bot._stopGeneration = 0;

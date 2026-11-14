@@ -25,6 +25,7 @@
 import pathfinderPkg from 'mineflayer-pathfinder';
 const { goals, Movements } = pathfinderPkg;
 import schematicPkg from 'prismarine-schematic';
+import itemLoader from 'prismarine-item';
 const { Schematic } = schematicPkg;
 import { Vec3 } from 'vec3';
 import fs from 'fs';
@@ -77,6 +78,7 @@ function logPhysicalBuild(bot, event, details) {
 // Observe just one physical equip/hand boundary. Never retain packet payloads,
 // item components or chat, and never change inventory or wrap protocol writes.
 function tracePhysicalHandState(bot, expected, target, sourceSlot) {
+  const Item = itemLoader(bot.registry);
   const itemSummary = item => item ? {
     name: typeof item.name === 'string' ? item.name.slice(0, 80) : null,
     count: Number.isSafeInteger(item.count) ? item.count : null,
@@ -91,6 +93,10 @@ function tracePhysicalHandState(bot, expected, target, sourceSlot) {
   });
   const beforeEquip = snapshot();
   let afterEquip = null;
+  let serverCursor;
+  const cursorSummary = raw => {
+    try { return itemSummary(Item.fromNotch(raw)); } catch { return { unknown: true }; }
+  };
   let eventsDropped = 0;
   const events = [], listeners = [];
   const record = (event, details = {}) => {
@@ -123,19 +129,102 @@ function tracePhysicalHandState(bot, expected, target, sourceSlot) {
   listen(bot._client, 'set_player_inventory', packet => {
     if (relevantSlot(packet?.slotId)) record('set_player_inventory', { slot: packet.slotId });
   });
+  listen(bot._client, 'set_cursor_item', packet => {
+    serverCursor = cursorSummary(packet?.contents ?? packet?.item);
+    record('set_cursor_item', { serverCursor });
+  });
   listen(bot._client, 'window_items', packet => {
-    if (packet?.windowId === 0) record('window_items', { windowId: 0,
-      stateId: Number.isSafeInteger(packet.stateId) ? packet.stateId : null });
+    if (packet?.windowId === 0) {
+      if (packet.carriedItem !== undefined) serverCursor = cursorSummary(packet.carriedItem);
+      record('window_items', { windowId: 0, serverCursor,
+        stateId: Number.isSafeInteger(packet.stateId) ? packet.stateId : null });
+    }
   });
   return {
     equipped() { afterEquip = snapshot(); },
+    assertCursorEmpty() {
+      if (serverCursor) throw new Error('server inventory cursor is occupied or unknown');
+    },
     mismatch() {
       console.log(`[physical-hand-state] ${JSON.stringify({ at: Date.now(), actor: bot.username,
         expected, target: { x: target.x, y: target.y, z: target.z }, sourceSlot,
-        beforeEquip, afterEquip, current: snapshot(), events, eventsDropped })}`);
+        beforeEquip, afterEquip, current: snapshot(), serverCursor, events, eventsDropped })}`);
     },
     close() { for (const remove of listeners) remove(); },
   };
+}
+
+// PrismarineItem's stackSize is the registry default, not a component-aware
+// server limit. Respect a known override conservatively within both limits.
+function validPhysicalStack(bot, item) {
+  const base = bot.registry?.items?.[item?.type];
+  if (!item || base?.name !== item.name || !Array.isArray(item.components)
+      || !Array.isArray(item.removedComponents)) return false;
+  const limits = [base.stackSize, item.stackSize];
+  const removed = item.removedComponents.map(type => typeof type === 'string' ? type.replace(/^minecraft:/, '') : null);
+  if (removed.includes(null) || removed.includes('max_stack_size')) return false;
+  const overrides = item.components.filter(component =>
+    ['max_stack_size', 'minecraft:max_stack_size'].includes(component.type));
+  if (overrides.length > 1) return false;
+  if (overrides.length) limits.push(overrides[0].data);
+  return limits.every(limit => Number.isSafeInteger(limit) && limit >= 1 && limit <= 99)
+    && Number.isSafeInteger(item.count) && item.count >= 1 && item.count <= Math.min(...limits);
+}
+
+function assertPhysicalInventory(bot, inventory, stopGen) {
+  if (skillWasStopped(bot, stopGen)) throw new Error('interrupted while equipping building material');
+  if (bot.inventory !== inventory || inventory?.id !== 0
+      || (bot.currentWindow && bot.currentWindow !== inventory)) throw new Error('physical inventory window changed or is not the player inventory');
+  if (!Array.isArray(inventory.slots) || inventory.inventoryStart !== 9 || inventory.hotbarStart !== 36
+      || inventory.inventoryEnd !== 45 || inventory.slots.length < 45
+      || !Number.isInteger(bot.quickBarSlot) || bot.quickBarSlot < 0 || bot.quickBarSlot > 8) {
+    throw new Error('physical inventory slots are unknown');
+  }
+  if (inventory.selectedItem) throw new Error('physical inventory cursor is occupied');
+}
+
+function physicalEquipPlan(bot, name, stopGen) {
+  const inventory = bot.inventory;
+  assertPhysicalInventory(bot, inventory, stopGen);
+  const matches = item => item && normalizeBlockBaseName(item.name) === normalizeBlockBaseName(name)
+    && validPhysicalStack(bot, item);
+  const hotbar = Array.from({ length: 9 }, (_, i) => 36 + i);
+  const current = 36 + bot.quickBarSlot;
+  const source = [current, ...hotbar.filter(slot => slot !== current)].find(slot => matches(inventory.slots[slot]))
+    ?? Array.from({ length: 27 }, (_, i) => 9 + i).find(slot => matches(inventory.slots[slot]));
+  if (source === undefined) throw new Error(`no valid native ${name} stack to equip`);
+  const destination = source >= 36 ? source
+    : hotbar.find(slot => inventory.slots[slot] === null)
+      ?? hotbar.find(slot => validPhysicalStack(bot, inventory.slots[slot]));
+  if (destination === undefined) throw new Error('no safe hotbar slot for building material');
+  return { inventory, source, destination, item: inventory.slots[source] };
+}
+
+async function equipPhysicalMaterial(bot, plan, stopGen, handTrace) {
+  const { inventory, source, destination } = plan;
+  const check = () => { assertPhysicalInventory(bot, inventory, stopGen); handTrace.assertCursorEmpty(); };
+  const identity = item => JSON.stringify(item && [item.type, item.count, item.metadata, item.nbt, item.components, item.removedComponents]);
+  const original = identity(plan.item), displaced = identity(inventory.slots[destination]);
+  check();
+  if (!validPhysicalStack(bot, inventory.slots[source]) || identity(inventory.slots[source]) !== original
+      || (source !== destination && inventory.slots[destination] !== null && !validPhysicalStack(bot, inventory.slots[destination]))) {
+    throw new Error('building material or safe hotbar slot changed');
+  }
+  if (source !== destination) {
+    // Native number-key swap is atomic and never carries either stack. The
+    // source is in9..35, so clickWindow has no hidden hotbar/dig cooldown await.
+    // Unlike simple_inventory.equip's opaque LRU, it cannot evict a bad stack.
+    if (typeof bot.clickWindow !== 'function') throw new Error('native hotbar swap is unavailable');
+    await bot.clickWindow(source, destination - 36, 2);
+    check();
+    if (identity(inventory.slots[source]) !== displaced || identity(inventory.slots[destination]) !== original) {
+      throw new Error('native hotbar swap readback changed');
+    }
+  }
+  check();
+  if (typeof bot.setQuickBarSlot !== 'function') throw new Error('native hotbar selection is unavailable');
+  bot.setQuickBarSlot(destination - 36);
+  check();
 }
 
 function captureStopGen(bot) {
@@ -553,7 +642,12 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       } catch (e) { /* continue and try place anyway */ }
     }
   }
-  const item = findInventoryItem(bot, itemName);
+  let equipPlan;
+  if (physical) {
+    try { equipPlan = physicalEquipPlan(bot, itemName, stopGen); }
+    catch (err) { return { ok: false, reason: err.message }; }
+  }
+  const item = equipPlan?.item || findInventoryItem(bot, itemName);
   if (!item) return { ok: false, reason: `no ${itemName} in inventory` };
 
   const buildOff = findBuildOffBlock(bot, targetPos.x, targetPos.y, targetPos.z);
@@ -561,7 +655,8 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
 
   const handTrace = physical ? tracePhysicalHandState(bot, itemName, targetPos, item.slot) : null;
   try {
-    await bot.equip(item, 'hand');
+    if (physical) await equipPhysicalMaterial(bot, equipPlan, stopGen, handTrace);
+    else await bot.equip(item, 'hand');
     handTrace?.equipped();
     await bot.lookAt(buildOff.block.position.offset(0.5, 0.5, 0.5));
     if (physical) {
@@ -578,6 +673,9 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
         handTrace?.mismatch();
         return { ok: false, reason: 'held building material changed' };
       }
+      assertPhysicalInventory(bot, equipPlan.inventory, stopGen);
+      handTrace.assertCursorEmpty();
+      if (!validPhysicalStack(bot, bot.heldItem)) return { ok: false, reason: 'held building material is not a valid native stack' };
       logPhysicalBuild(bot, 'hand', { target: targetPos, item: bot.heldItem.name, position: bot.entity.position });
     }
     await bot.placeBlock(buildOff.block, buildOff.faceVec);

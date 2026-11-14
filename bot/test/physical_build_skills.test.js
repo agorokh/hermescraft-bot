@@ -19,8 +19,17 @@ class PhysicalBot extends EventEmitter {
     this.blocks = new Map();
     this.trace = [];
     this.stock = new Map([['cobblestone', 8], ['oak_log', 4], ['campfire', 1]]);
-    this.inventory = { items: () => [...this.stock].filter(([, count]) => count > 0)
-      .map(([name, count]) => ({ name, count })) };
+    this.quickBarSlot = 0;
+    const inventorySlots = () => {
+      const slots = Array(46).fill(null);
+      [...this.stock].forEach(([name, count], i) => {
+        if (count > 0) slots[36 + i] = { name, count, slot: 36 + i, type: registry.itemsByName[name].id,
+          stackSize: registry.itemsByName[name].stackSize, components: [], removedComponents: [] };
+      });
+      return slots;
+    };
+    this.inventory = { id: 0, inventoryStart: 9, inventoryEnd: 45, hotbarStart: 36, selectedItem: null,
+      get slots() { return inventorySlots(); }, items: () => inventorySlots().filter(Boolean) };
     this.pathfinder = {
       movements: new Movements(this), goal: null,
       setMovements: value => { this.pathfinder.movements = value; },
@@ -50,7 +59,9 @@ class PhysicalBot extends EventEmitter {
       queueMicrotask(() => this.emit('message', { toString: () => `Changed the block at ${m[1]}, ${m[2]}, ${m[3]}` }, 'system'));
     }
   }
-  async equip(item) { this.heldItem = item; this.trace.push({ kind: 'equip', item: item.name }); }
+  get heldItem() { return this.inventory.slots[36 + this.quickBarSlot]; }
+  setQuickBarSlot(slot) { this.quickBarSlot = slot; }
+  async equip(item) { this.setQuickBarSlot(item.slot - 36); this.trace.push({ kind: 'equip', item: item.name }); }
   async lookAt(position) { this.trace.push({ kind: 'look', position }); }
   async waitForTicks() {}
   clearControlStates() { this.trace.push({ kind: 'clearControls' }); }

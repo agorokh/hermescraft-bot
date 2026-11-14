@@ -26,6 +26,7 @@ import pathfinderPkg from 'mineflayer-pathfinder';
 const { goals, Movements } = pathfinderPkg;
 import schematicPkg from 'prismarine-schematic';
 import itemLoader from 'prismarine-item';
+import { isDeepStrictEqual } from 'node:util';
 const { Schematic } = schematicPkg;
 import { Vec3 } from 'vec3';
 import fs from 'fs';
@@ -203,10 +204,11 @@ function physicalEquipPlan(bot, name, stopGen) {
 async function equipPhysicalMaterial(bot, plan, stopGen, handTrace) {
   const { inventory, source, destination } = plan;
   const check = () => { assertPhysicalInventory(bot, inventory, stopGen); handTrace.assertCursorEmpty(); };
-  const identity = item => JSON.stringify(item && [item.type, item.count, item.metadata, item.nbt, item.components, item.removedComponents]);
+  const identity = item => structuredClone(item &&
+    [item.type, item.count, item.metadata, item.nbt, item.components, item.removedComponents]);
   const original = identity(plan.item), displaced = identity(inventory.slots[destination]);
   check();
-  if (!validPhysicalStack(bot, inventory.slots[source]) || identity(inventory.slots[source]) !== original
+  if (!validPhysicalStack(bot, inventory.slots[source]) || !isDeepStrictEqual(identity(inventory.slots[source]), original)
       || (source !== destination && inventory.slots[destination] !== null && !validPhysicalStack(bot, inventory.slots[destination]))) {
     throw new Error('building material or safe hotbar slot changed');
   }
@@ -217,7 +219,8 @@ async function equipPhysicalMaterial(bot, plan, stopGen, handTrace) {
     if (typeof bot.clickWindow !== 'function') throw new Error('native hotbar swap is unavailable');
     await bot.clickWindow(source, destination - 36, 2);
     check();
-    if (identity(inventory.slots[source]) !== displaced || identity(inventory.slots[destination]) !== original) {
+    if (!isDeepStrictEqual(identity(inventory.slots[source]), displaced)
+        || !isDeepStrictEqual(identity(inventory.slots[destination]), original)) {
       throw new Error('native hotbar swap readback changed');
     }
   }

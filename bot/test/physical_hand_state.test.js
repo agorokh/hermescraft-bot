@@ -243,6 +243,61 @@ test('a valid matching hotbar material avoids an oversized source of the same ma
   assert.ok(bot.packets.every(packet => packet.slot !== 26));
 });
 
+test('matching hotbar materials preserve legal BigInt components through13 physical placements', async () => {
+  const bot = physicalInventoryBot({ paper: true });
+  const components = [{ type: 'custom_data', data: { type: 'compound', value: {
+    counter: { type: 'long', value: 9007199254740993n },
+  } } }];
+  for (const [slot, name, count] of [[37, 'oak_log', 20], [39, 'campfire', 5]]) {
+    const material = new Item(registry.itemsByName[name].id, count);
+    material.components = structuredClone(components);
+    bot.inventory.updateSlot(slot, material);
+    bot.server.updateSlot(slot, copy(material));
+  }
+  const { result } = await build(bot);
+  assert.match(result.result, /13\/13 blocks placed/);
+  assert.equal(bot.placements.length, 13);
+  assert.deepEqual(bot.packets, [], 'matching hotbar materials need no inventory swap');
+  assert.deepEqual(bot.inventory.slots[37].components, components);
+  assert.deepEqual(bot.inventory.slots[39].components, components);
+  assert.equal(bot.inventory.slots[37].count, 16);
+  assert.equal(bot.inventory.slots[39].count, 4);
+});
+
+test('the installed native swap refuses BigInt slot metadata without writing or mutating inventory', async () => {
+  const bot = physicalInventoryBot({ paper: true });
+  bot.inventory.slots[26].components = [{ type: 'custom_data', data: { type: 'compound', value: {
+    counter: { type: 'long', value: 9007199254740993n },
+  } } }];
+  const before = structuredClone(bot.inventory.slots.map(item => Item.toNotch(item)));
+  // Mineflayer4.37.1's mode2 changed-slot fallback still JSON-clones every slot.
+  // Keep that unsupported native case fail-closed; do not patch the dependency.
+  await assert.rejects(bot.clickWindow(26, 1, 2), /BigInt/);
+  const { result } = await build(bot);
+  assert.equal(result.site_refused, true);
+  assert.match(result.result, /BigInt/);
+  assert.equal(bot.placements.length, 0);
+  assert.deepEqual(bot.packets, []);
+  assert.deepEqual(bot.inventory.slots.map(item => Item.toNotch(item)), before);
+  assert.equal(bot.inventory.selectedItem, null);
+});
+
+test('physical swap readback compares immutable nested component snapshots', async () => {
+  const bot = physicalInventoryBot({ paper: true });
+  bot.inventory.slots[26].components = [{ type: 'custom_data', data: { type: 'compound', value: {
+    marker: { type: 'string', value: 'before' },
+  } } }];
+  bot.server.updateSlot(26, copy(bot.inventory.slots[26]));
+  bot.afterInventoryClick = () => {
+    bot.inventory.slots[37].components[0].data.value.marker.value = 'changed during await';
+  };
+  const { result } = await build(bot);
+  assert.equal(result.site_refused, true);
+  assert.match(result.result, /native hotbar swap readback changed/);
+  assert.equal(bot.placements.length, 0);
+  assert.equal(bot.packets.length, 1);
+});
+
 const listeners = bot => [bot.listenerCount('heldItemChanged'), ...packetEvents.map(name => bot._client.listenerCount(name))];
 async function build(bot) {
   const prior = process.env.HERMESCRAFT_PHYSICAL_BUILDS;

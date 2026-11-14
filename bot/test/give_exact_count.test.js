@@ -17,7 +17,7 @@ const contents = window => window.slots.map(item => structuredClone(Item.toNotch
 // Exercise the installed Mineflayer transfer/toss/clickWindow functions and
 // genuine PrismarineWindow click semantics on both sides of the packet boundary.
 // No connection, server, or hand-written replacement for transfer() is involved.
-function inventoryBot({ item = 'stone_pickaxe', count = 12, full = true, pickupCount, pickup = true } = {}) {
+function inventoryBot({ item = 'stone_pickaxe', count = 12, full = true, pickupCount, pickup = true, sourceSlot = 9 } = {}) {
   const bot = new EventEmitter();
   bot.registry = registry;
   bot.version = '1.21.11';
@@ -38,26 +38,29 @@ function inventoryBot({ item = 'stone_pickaxe', count = 12, full = true, pickupC
     { type: 'custom_data', data: { type: 'compound', value: { marker: { type: 'string', value: 'keep me' } } } },
   ] : [];
   for (let slot = 9; slot < 45; slot++) {
-    const item = slot === 9 ? source : full ? new Item(registry.itemsByName.cobblestone.id, 64) : null;
+    const item = slot === sourceSlot ? source : full ? new Item(registry.itemsByName.cobblestone.id, 64) : null;
     bot.inventory.updateSlot(slot, item && copy(item));
     server.updateSlot(slot, item && copy(item));
   }
+  const serverWindows = new Map([[0, server]]);
   const packets = [], dropped = [], recipient = [];
   bot._client.write = (name, packet) => {
     if (name !== 'window_click') return;
     packets.push(packet);
-    const at = server.slots[packet.slot];
+    const active = serverWindows.get(packet.windowId);
+    const client = packet.windowId === 0 ? bot.inventory : bot.currentWindow;
+    const at = active.slots[packet.slot];
     let drop;
-    if (packet.mode === 0 && packet.slot === -999 && server.selectedItem) {
-      drop = copy(server.selectedItem);
+    if (packet.mode === 0 && packet.slot === -999 && active.selectedItem) {
+      drop = copy(active.selectedItem);
       drop.count = packet.mouseButton === 0 ? drop.count : 1;
-    } else if (packet.mode === 4 && !server.selectedItem && at) {
+    } else if (packet.mode === 4 && !active.selectedItem && at) {
       drop = copy(at);
       drop.count = packet.mouseButton === 0 ? 1 : drop.count;
     }
-    server.acceptClick({ ...packet, item: at });
-    assert.deepEqual(contents(bot.inventory), contents(server), 'client prediction and native window semantics agree');
-    assert.deepEqual(Item.toNotch(bot.inventory.selectedItem), Item.toNotch(server.selectedItem));
+    active.acceptClick({ ...packet, item: at });
+    assert.deepEqual(contents(client), contents(active), 'client prediction and native window semantics agree');
+    assert.deepEqual(Item.toNotch(client.selectedItem), Item.toNotch(active.selectedItem));
     if (drop) {
       dropped.push(copy(drop));
       if (pickup) {
@@ -68,7 +71,17 @@ function inventoryBot({ item = 'stone_pickaxe', count = 12, full = true, pickupC
       }
     }
   };
-  return { bot, server, packets, dropped, recipient, source };
+  function openChest() {
+    const chest = windows.createWindow(7, 'minecraft:generic_9x3', 'Chest');
+    chest.updateSlot(9, new Item(registry.itemsByName.diamond.id, 10));
+    for (let slot = 9; slot < 45; slot++) chest.updateSlot(27 + slot - 9, server.slots[slot] && copy(server.slots[slot]));
+    serverWindows.set(7, chest);
+    bot._client.emit('open_window', { windowId: 7, inventoryType: 'minecraft:generic_9x3', windowTitle: 'Chest', slotCount: 27 });
+    bot._client.emit('window_items', { windowId: 7, items: chest.slots.map(item => Item.toNotch(item)) });
+    assert.equal(bot.currentWindow.id, 7);
+    return chest;
+  }
+  return { bot, server, packets, dropped, recipient, source, openChest };
 }
 
 test('installed Mineflayer toss reproduces the oversized source bug without concurrency', async () => {
@@ -176,4 +189,125 @@ test('a stop while lookAt is pending cannot perform an ordinary gift', async () 
   assert.deepEqual(recipient, []);
   assert.equal(bot.inventory.selectedItem, null);
   assert.match(result.result, /interrupted/i);
+});
+
+for (const count of [1, 12]) {
+  test(`an open chest cannot receive player-inventory gift clicks (source count ${count})`, async () => {
+    const { bot, server, packets, recipient, openChest } = inventoryBot({ count });
+    const chest = openChest(), before = contents(chest), inventory = contents(server);
+    const result = await registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Kid', item: 'stone_pickaxe', count: 1 });
+    assert.deepEqual(contents(chest), before);
+    assert.deepEqual(contents(server), inventory);
+    assert.equal(chest.slots[9].count, 10);
+    assert.deepEqual(packets, []);
+    assert.deepEqual(recipient, []);
+    assert.equal(result.item_transfer, undefined);
+    assert.match(result.result, /window|container/i);
+  });
+}
+
+for (const stage of ['navigation', 'look']) {
+  test(`a chest opened during awaited ${stage} prevents any gift click`, async () => {
+    const { bot, server, packets, openChest } = inventoryBot();
+    let finish;
+    const pause = () => new Promise(resolve => { finish = resolve; });
+    if (stage === 'navigation') bot.pathfinder.goto = pause;
+    else bot.lookAt = pause;
+    const pending = registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Kid', item: 'stone_pickaxe', count: 1 });
+    await new Promise(resolve => setImmediate(resolve));
+    const chest = openChest(), before = contents(chest), inventory = contents(server);
+    finish();
+    const result = await pending;
+    assert.deepEqual(contents(chest), before);
+    assert.deepEqual(contents(server), inventory);
+    assert.deepEqual(packets, []);
+    assert.equal(result.item_transfer, undefined);
+    assert.match(result.result, /window|container/i);
+  });
+}
+
+test('a container opening between repeated native drops preserves the chest and partial receipt', async () => {
+  const { bot, server, packets, recipient, openChest } = inventoryBot();
+  let chest, before;
+  bot.once('playerCollect', () => { chest = openChest(); before = contents(chest); });
+  const result = await registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Kid', item: 'stone_pickaxe', count: 2 });
+  assert.deepEqual(contents(chest), before);
+  assert.equal(server.slots[9].count, 11);
+  assert.equal(packets.length, 1);
+  assert.equal(recipient.reduce((sum, item) => sum + item.count, 0), 1);
+  assert.equal(bot.inventory.selectedItem, null);
+  assert.equal(chest.selectedItem, null);
+  assert.deepEqual(result.item_transfer, { item: 'stone_pickaxe', requested: 2, tossed: 1, pickup_confirmed: true });
+  assert.match(result.result, /window|container/i);
+});
+
+test('a stop during the native hotbar dig cooldown cannot drop a tool', async () => {
+  const { bot, server, packets, recipient } = inventoryBot({ sourceSlot: 36 });
+  const before = contents(server);
+  bot.lastDigTime = Date.now();
+  const pending = registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Kid', item: 'stone_pickaxe', count: 1 });
+  const stop = setTimeout(() => { bot._stopGeneration = 1; bot.interrupt_code = true; }, 20);
+  try {
+    const result = await pending;
+    assert.deepEqual(contents(server), before);
+    assert.deepEqual(packets, []);
+    assert.deepEqual(recipient, []);
+    assert.equal(result.item_transfer, undefined);
+    assert.match(result.result, /interrupted/i);
+  } finally { clearTimeout(stop); }
+});
+
+test('a chest opened during the native hotbar dig cooldown receives no gift clicks', async () => {
+  const { bot, server, packets, openChest } = inventoryBot({ sourceSlot: 36 });
+  const inventory = contents(server);
+  let chest, before;
+  bot.lastDigTime = Date.now();
+  const pending = registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Kid', item: 'stone_pickaxe', count: 1 });
+  const open = setTimeout(() => { chest = openChest(); before = contents(chest); }, 20);
+  try {
+    const result = await pending;
+    assert.deepEqual(contents(chest), before);
+    assert.deepEqual(contents(server), inventory);
+    assert.deepEqual(packets, []);
+    assert.equal(result.item_transfer, undefined);
+    assert.match(result.result, /window|container/i);
+  } finally { clearTimeout(open); }
+});
+
+test('an undisturbed hotbar cooldown settles before exactly one component-preserving drop', async () => {
+  const { bot, server, packets, recipient } = inventoryBot({ sourceSlot: 36 });
+  const before = contents(server);
+  bot.lastDigTime = Date.now();
+  const digTime = bot.lastDigTime;
+  const result = await registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Kid', item: 'stone_pickaxe', count: 1 });
+  assert.ok(Date.now() - digTime >= 500);
+  assert.equal(bot.lastDigTime, digTime, 'the cooldown is observed, never reset');
+  const expected = structuredClone(before);
+  expected[36].itemCount = 11;
+  assert.deepEqual(contents(server), expected);
+  assert.equal(server.selectedItem, null);
+  assert.equal(bot.inventory.selectedItem, null);
+  assert.equal(recipient.length, 1);
+  const given = structuredClone(before[36]);
+  given.itemCount = 1;
+  assert.deepEqual(Item.toNotch(recipient[0]), given);
+  assert.deepEqual(packets.map(p => [p.slot, p.mouseButton, p.mode]), [[36, 0, 4]]);
+  assert.equal(result.item_transfer.tossed, 1);
+  assert.equal(result.item_transfer.pickup_confirmed, true);
+});
+
+test('continuing digs fail closed within a bounded cooldown wait', async () => {
+  const { bot, server, packets } = inventoryBot({ sourceSlot: 36 });
+  const before = contents(server);
+  bot.lastDigTime = Date.now();
+  const digging = setInterval(() => { bot.lastDigTime = Date.now(); }, 20);
+  const start = performance.now();
+  try {
+    const result = await registerHighLevelSkills({}, () => bot).give_to_player({ player: 'Kid', item: 'stone_pickaxe', count: 1 });
+    assert.ok(performance.now() - start < 1500, 'busy digging must not hold the gift indefinitely');
+    assert.deepEqual(contents(server), before);
+    assert.deepEqual(packets, []);
+    assert.equal(result.item_transfer, undefined);
+    assert.match(result.result, /cooldown did not settle/i);
+  } finally { clearInterval(digging); }
 });

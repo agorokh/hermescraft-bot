@@ -589,11 +589,15 @@ async function place_near_player(bot, { player, item, direction = 'side' }) {
 
 async function give_to_player(bot, { player, item, count = 1 }) {
   const stopGen = captureStopGen(bot);
+  const inventory = bot.inventory;
+  const inventoryWindowReady = () => bot.inventory === inventory &&
+    (!bot.currentWindow || bot.currentWindow === inventory);
   if (!player || !item) return { result: `give_to_player needs player + item` };
   const requestedCount = Number(count);
   if (typeof count === 'boolean' || !Number.isSafeInteger(requestedCount) || requestedCount < 1) {
     return { result: 'give_to_player needs a positive whole count' };
   }
+  if (!inventoryWindowReady()) return { result: `Couldn't toss ${item}: a container window is open.` };
   const entity = findPlayerEntity(bot, player);
   if (!entity) return { result: `Can't see ${player} nearby.` };
   let stack = findInventoryItem(bot, item);
@@ -617,9 +621,11 @@ async function give_to_player(bot, { player, item, count = 1 }) {
     }
   }
   if (skillWasStopped(bot, stopGen)) return { result: `give_to_player interrupted` };
+  if (!inventoryWindowReady()) return { result: `Couldn't toss ${item}: inventory window changed.` };
 
   await bot.lookAt(p);
   if (skillWasStopped(bot, stopGen)) return { result: `give_to_player interrupted` };
+  if (!inventoryWindowReady()) return { result: `Couldn't toss ${item}: inventory window changed.` };
   // Navigation may have changed the inventory. Never borrow an existing cursor
   // stack: Mineflayer's transfer() would swap it into the requested source slot.
   stack = findInventoryItem(bot, item);
@@ -628,7 +634,7 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   const plannedCount = Math.min(requestedCount, stack.count);
   if (!Number.isSafeInteger(plannedCount) || plannedCount < 1) return { result: `No ${item} in my inventory to give.` };
   const sourceType = stack.type;
-  const countOwned = () => bot.inventory.items()
+  const countOwned = () => inventory.items()
     .filter(i => i.type === sourceType).reduce((sum, i) => sum + i.count, 0);
   const beforeCount = countOwned();
   // Register before toss so fast LAN pickups cannot fire before we listen.
@@ -652,27 +658,48 @@ async function give_to_player(bot, { player, item, count = 1 }) {
   bot.on('playerCollect', onCollect);
   let transferError;
   try {
+    const slot = stack.slot;
+    const identity = i => JSON.stringify([i.type, i.metadata, i.nbt, i.components, i.removedComponents]);
+    const expected = identity(stack);
+    const assertReady = () => {
+      if (skillWasStopped(bot, stopGen)) throw new Error('interrupted');
+      if (!inventoryWindowReady()) throw new Error('inventory window changed');
+      const current = inventory.slots?.[slot];
+      if (inventory.selectedItem || (Number.isInteger(slot) && (!current || identity(current) !== expected))) {
+        throw new Error('inventory cursor or source item changed');
+      }
+    };
+    const waitForClickReady = async () => {
+      assertReady();
+      // The pinned Mineflayer inventory.js clickWindow waits 500ms after a
+      // hotbar dig BEFORE selecting its window. Settle that wait here so stop,
+      // cursor, source and window checks run after the last await, before its
+      // synchronous packet write. Never reset lastDigTime or bypass the delay.
+      const deadline = performance.now() + 1000;
+      while (slot >= (bot.QUICK_BAR_START ?? 36) && bot.lastDigTime != null && Date.now() - bot.lastDigTime < 500) {
+        if (performance.now() >= deadline) throw new Error('inventory click cooldown did not settle');
+        await sleep(Math.min(50, 500 - (Date.now() - bot.lastDigTime)));
+        assertReady();
+      }
+      assertReady();
+    };
     if (Number.isSafeInteger(stack.stackSize) && stack.count > stack.stackSize) {
       // Mineflayer transfer() accounts an outside left-click as stackSize even
       // though it drops the entire cursor. An oversized 12-tool stack would all
       // be lost when requesting one. Existing native slot-drop-one (mode 4)
       // leaves the remainder, its components, and the cursor in place even when
       // every inventory slot is full. Ordinary legal stacks keep the toss path.
-      const slot = stack.slot;
-      const identity = i => JSON.stringify([i.type, i.metadata, i.nbt, i.components, i.removedComponents]);
-      const expected = identity(stack);
       if (!Number.isInteger(slot) || typeof bot.clickWindow !== 'function') throw new Error('native slot drop is unavailable');
       for (let i = 0; i < plannedCount; i++) {
-        if (skillWasStopped(bot, stopGen)) throw new Error('interrupted');
-        const current = bot.inventory.slots?.[slot];
-        if (bot.inventory.selectedItem || !current || identity(current) !== expected) {
-          throw new Error('inventory cursor or source item changed');
-        }
+        await waitForClickReady();
+        assertReady();
         const beforeDrop = countOwned();
         await bot.clickWindow(slot, 0, 4);
         if (beforeDrop - countOwned() !== 1) throw new Error('native slot drop quantity was not one');
       }
     } else {
+      await waitForClickReady();
+      assertReady();
       await bot.toss(sourceType, null, plannedCount);
     }
   } catch (e) {

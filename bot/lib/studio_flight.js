@@ -171,29 +171,47 @@ export async function flyToPhysicalPlacement(bot, target, { stopped = () => fals
   return { ok: false, reason: failure };
 }
 
+// Slots this module filled, per body, so they can be emptied again afterwards.
+const studioStock = new WeakMap();
+
 // Creative inventory replaces the survival stock check: put one full stack of
-// the material in a hotbar slot when the character holds none. Hand placement
-// in creative does not consume it.
+// the material in an EMPTY hotbar slot when the character holds none. Hand
+// placement in creative does not consume it. Never overwrite a slot: whatever
+// the character already carries (a survival kit, a gift) is not ours to lose.
 export async function ensureCreativeStock(bot, itemName, normalize = name => name) {
   const wanted = normalize(itemName);
   if (bot.inventory.items().some(item => normalize(item.name) === wanted)) return { ok: true };
   const type = bot.registry.itemsByName[wanted];
   if (!type) return { ok: false, reason: `${wanted} is not an item this character can hold` };
-  const hotbar = Array.from({ length: 9 }, (_, i) => 36 + i);
-  const slot = hotbar.find(s => bot.inventory.slots[s] == null)
-    ?? hotbar.find(s => s !== 36 + bot.quickBarSlot) ?? 36;
+  const slot = Array.from({ length: 9 }, (_, i) => 36 + i).find(s => bot.inventory.slots[s] == null);
+  if (slot === undefined) return { ok: false, reason: 'no empty hotbar slot for a creative building material' };
   const Item = itemLoader(bot.registry);
   try {
     await bot.creative.setInventorySlot(slot, new Item(type.id, type.stackSize || 64));
   } catch (error) {
     return { ok: false, reason: `could not take ${wanted} from the creative inventory: ${error.message}` };
   }
+  if (!studioStock.has(bot)) studioStock.set(bot, new Map());
+  studioStock.get(bot).set(slot, wanted);
   const deadline = performance.now() + 1500;
   while (performance.now() < deadline) {
     if (bot.inventory.items().some(item => normalize(item.name) === wanted)) return { ok: true };
     await sleep(50);
   }
   return { ok: false, reason: `the creative inventory did not supply ${wanted}` };
+}
+
+// Hand back what ensureCreativeStock took, so creative materials do not ride
+// home in the character's inventory. Only slots still holding our own stack.
+export async function clearStudioStock(bot, normalize = name => name) {
+  const stocked = studioStock.get(bot);
+  if (!stocked) return;
+  studioStock.delete(bot);
+  for (const [slot, name] of stocked) {
+    const held = bot.inventory.slots[slot];
+    if (!held || normalize(held.name) !== name) continue;
+    try { await bot.creative.setInventorySlot(slot, null); } catch { /* left for the next build to reuse */ }
+  }
 }
 
 const NEIGHBOURS = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]];

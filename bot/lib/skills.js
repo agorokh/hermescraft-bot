@@ -37,6 +37,7 @@ import { findPlayerEntity, itemNameFromCollectEntity, playerNameMatchesResolvedC
 import { findNearbySchematicSite, MAX_FOUNDATION_PLACEMENTS, schematicSiteDimensions, validateSchematicSite } from './schematic_site.js';
 import {
   checkStudioCells,
+  clearStudioStock,
   ensureCreativeStock,
   flyToPhysicalPlacement,
   landBesideBuild,
@@ -610,6 +611,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       if (bot.pathfinder.movements === movement) bot.pathfinder.setMovements(original);
       if (autoEat) bot.autoEat.enableAuto();
       bot._schematicBuildActive = false;
+      if (studioFlightEnabled(bot)) await clearStudioStock(bot, normalizeBlockBaseName);
     }
   }
 
@@ -1935,6 +1937,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       await landBesideBuild(bot, { origin: { x: baseX, y: baseY, z: baseZ }, footprint: [fw, fl] },
         { stopped: () => skillWasStopped(bot, stopGen) });
     }
+    if (studio) await clearStudioStock(bot, normalizeBlockBaseName);
     if (buildMovements && bot.pathfinder.movements === buildMovements) bot.pathfinder.setMovements(originalMovements);
     if (autoEatWasEnabled) bot.autoEat.enableAuto();
     bot._schematicBuildActive = false;

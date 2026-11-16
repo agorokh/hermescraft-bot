@@ -120,8 +120,31 @@ test('studio flight never issues a command, never walks a path, never flies thro
 test('materials come from the creative inventory, one stack per material', { timeout: 20000 }, async () => {
   const bot = new StudioBot();
   await studio(bot, FLAGPOLE);
-  assert.deepEqual(bot.trace.filter(e => e.kind === 'creative_stock').map(e => e.item), ['smooth_quartz', 'red_wool']);
+  assert.deepEqual(bot.trace.filter(e => e.kind === 'creative_stock' && e.item).map(e => e.item), ['smooth_quartz', 'red_wool']);
   assert.ok(hands(bot).every(e => ['smooth_quartz', 'red_wool'].includes(e.item)));
+});
+
+test('creative materials are handed back, and nothing the character carried is touched', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = { name: 'campfire', count: 1, slot: 36, type: registry.itemsByName.campfire.id, stackSize: 64,
+    components: [], removedComponents: [] };
+  bot.inventory.slots[36] = kit;
+  await studio(bot, FLAGPOLE);
+  assert.deepEqual(bot.inventory.items(), [kit]);
+  assert.ok(bot.trace.filter(e => e.kind === 'creative_stock').every(e => e.slot !== 36));
+});
+
+test('a full hotbar is refused rather than overwritten', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  for (let slot = 36; slot <= 44; slot++) {
+    bot.inventory.slots[slot] = { name: 'campfire', count: 1, slot, type: registry.itemsByName.campfire.id,
+      stackSize: 64, components: [], removedComponents: [] };
+  }
+  const result = await studio(bot, FLAGPOLE);
+  assert.equal(result.site_refused, true);
+  assert.match(result.result, /no empty hotbar slot/);
+  assert.deepEqual(bot.trace.filter(e => e.kind === 'creative_stock'), []);
+  assert.equal(bot.inventory.items().length, 9);
 });
 
 test('the character lands beside the finished build and tells the server it stopped flying', { timeout: 20000 }, async () => {

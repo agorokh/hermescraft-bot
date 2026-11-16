@@ -231,6 +231,19 @@
         "beacon": 1,
         "glowstone": 4
       }
+    },
+    "flagpole": {
+      "file": "flagpole.json",
+      "footprint": [
+        3,
+        1
+      ],
+      "height": 17,
+      "summary": "17-tall quartz flagpole with a red flag; creative-studio build, too tall to place on foot",
+      "materials": {
+        "smooth_quartz": 17,
+        "red_wool": 3
+      }
     }
   }
 }

@@ -219,12 +219,20 @@ export async function flyToPhysicalPlacement(bot, target, { stopped = () => fals
 // the material in an EMPTY hotbar slot when the character holds none. Hand
 // placement in creative does not consume it. Never overwrite a slot: whatever
 // the character already carries (a survival kit, a gift) is not ours to lose.
+// With no empty slot left, swap the material into a slot this build stocked
+// itself, so a design with three materials needs one free slot, not three.
 export async function ensureCreativeStock(bot, itemName, normalize = name => name) {
   const wanted = normalize(itemName);
   if (bot.inventory.items().some(item => normalize(item.name) === wanted)) return { ok: true };
   const type = bot.registry.itemsByName[wanted];
   if (!type) return { ok: false, reason: `${wanted} is not an item this character can hold` };
-  const slot = Array.from({ length: 9 }, (_, i) => 36 + i).find(s => bot.inventory.slots[s] == null);
+  let slot = Array.from({ length: 9 }, (_, i) => 36 + i).find(s => bot.inventory.slots[s] == null);
+  if (slot === undefined) {
+    for (const [ours, name] of studioStock.get(bot) || []) {
+      const held = bot.inventory.slots[ours];
+      if (held && normalize(held.name) === name) { slot = ours; break; }
+    }
+  }
   if (slot === undefined) return { ok: false, reason: 'no empty hotbar slot for a creative building material' };
   const Item = itemLoader(bot.registry);
   try {

@@ -51,7 +51,8 @@ test('structures and parts the library does not contain are unsupported', () => 
   for (const [body, reason] of [
     ['build me a pirate ship', 'not_in_library'],
     ['build me a statue of a cat', 'not_in_library'],
-    ['lets build the eiffel tower', 'named:eiffel'],
+    // The Eiffel Tower joined the library in #592; another landmark keeps the rule covered.
+    ['lets build the pisa tower', 'named:pisa'],
     ['Rosie design a castle with a moat', 'feature:moat'],
     ['build me a house boat', 'trailing:boat'],
     ['build a tower bridge', 'trailing:bridge'],
@@ -73,9 +74,9 @@ test('every object of every build verb is checked', () => {
     'build a castle and a moat', 'build a castle and also a moat', 'build a castle plus a moat',
     'build a house and a pirate ship', 'build a house then a pirate ship',
     'build a house. build a pirate ship', 'build a house build a pirate ship',
-    'build me a tower like the eiffel tower',
+    'build me a tower like the pisa tower',
     // Review round 9: bare conjuncts, bare comparisons, a stop in an earlier clause.
-    'build a castle and moat', 'build a house then pirate ship', 'build a tower like eiffel tower',
+    'build a castle and moat', 'build a house then pirate ship', 'build a tower like pisa tower',
     'stop! build me a pirate ship',
   ]) {
     assert.equal(status(body), 'unsupported', body);
@@ -172,6 +173,29 @@ test('framed marks a request to the companion, not narration', () => {
   assert.equal(buildRequestContract('i wanna see you build a house later').framed, false);
 });
 
+test('the Eiffel Tower is a library structure, however a child spells it (#592)', () => {
+  for (const body of [
+    'lets build the eiffel tower', 'can you build the eifle tower', 'build an eifel tower',
+    'Rosie make the eiffel tower', 'build the eiffel',
+    // A comparison to the landmark asks for the landmark, not a plain tower.
+    'build me a tower like the eiffel tower', 'build a tower like eiffel tower',
+  ]) {
+    const contract = buildRequestContract(body, { nlpIntent: 'build_tower' });
+    assert.equal(contract.status, 'supported', body);
+    assert.equal(contract.schematic, 'eiffel_tower', body);
+    assert.equal(contract.capability ?? null, null, `${body}: not the build_tower pillar`);
+  }
+  // A part the design does not have is still refused, and a plain tower is still a plain tower.
+  assert.equal(buildRequestContract('build the eiffel tower with a moat').reason, 'feature:moat');
+  assert.equal(buildRequestContract('build the eiffel tower and a moat').status, 'unsupported');
+  assert.equal(buildRequestContract('build a tower').capability, 'tower');
+  assert.equal(buildRequestContract('build a tower like the castle').schematic ?? null, null);
+  // The comparison replaces only the object it describes, never one named earlier.
+  assert.equal(buildRequestContract('build a house and a tower like the eiffel tower').schematic, 'small_house');
+  assert.equal(buildRequestContract('build something like the eiffel tower').schematic, 'eiffel_tower');
+  assert.deepEqual(Object.keys(buildRequestContract('build a tower like the eiffel tower')).includes('source'), false);
+});
+
 test('the companion name may trail the object', () => {
   assert.equal(status('build me a house rosie'), 'supported');
   assert.equal(status('build me a house pip', { names: ['Pip'] }), 'supported');
@@ -180,8 +204,8 @@ test('the companion name may trail the object', () => {
 test('refusal names the request and offers what the library can build', () => {
   const moat = unsupportedBuildReply(buildRequestContract('Rosie design a castle with a moat'));
   assert.equal(moat, "I can't build a castle with a moat yet. I can build a small tower, though.");
-  const eiffel = unsupportedBuildReply(buildRequestContract('lets build the eiffel tower'));
-  assert.equal(eiffel, "I can't build an eiffel tower yet. I can build a tower, though.");
+  const pisa = unsupportedBuildReply(buildRequestContract('lets build the pisa tower'));
+  assert.equal(pisa, "I can't build a pisa tower yet. I can build a tower, though.");
   const ship = unsupportedBuildReply(buildRequestContract('build me a pirate ship'));
   assert.match(ship, /^I can't build a pirate ship yet\. I can build a house, treehouse, tower/);
   assert.ok(ship.length < 256, 'fits one Minecraft chat line');

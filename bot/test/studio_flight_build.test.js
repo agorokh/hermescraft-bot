@@ -149,6 +149,22 @@ test('a full hotbar is refused rather than overwritten', { timeout: 20000 }, asy
   assert.equal(bot.inventory.items().length, 9);
 });
 
+test('one free hotbar slot is enough: materials swap through the slot the build stocked itself', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = [];
+  for (let slot = 36; slot <= 43; slot++) {
+    bot.inventory.slots[slot] = { name: 'campfire', count: 1, slot, type: registry.itemsByName.campfire.id,
+      stackSize: 64, components: [], removedComponents: [] };
+    kit.push(bot.inventory.slots[slot]);
+  }
+  const result = await studio(bot, FLAGPOLE);
+  assert.match(result.result, /20\/20 blocks placed via physical placement \(flight\)/);
+  const stocked = bot.trace.filter(e => e.kind === 'creative_stock');
+  assert.ok(stocked.every(e => e.slot === 44), 'only the one empty slot is ever written');
+  assert.deepEqual([...new Set(stocked.filter(e => e.item).map(e => e.item))].sort(), ['red_wool', 'smooth_quartz']);
+  assert.deepEqual(bot.inventory.items(), kit, 'the eight carried items are untouched and the stock is handed back');
+});
+
 test('the character lands beside the finished build and tells the server it stopped flying', { timeout: 20000 }, async () => {
   const bot = new StudioBot();
   await studio(bot, FLAGPOLE);

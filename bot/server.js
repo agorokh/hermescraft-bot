@@ -100,7 +100,13 @@ function guardRegexBuildRoute(bot, body, sender, route) {
   return guardRegexBuildRouteLib(bot, body, sender, route, log);
 }
 
+// A routed library build of a studio design (the Eiffel Tower, hermescraft#592)
+// becomes the studio co-build: sections offered to the child, then built by hand.
 async function tryRoute(bot, body, sender) {
+  return adaptStudioRoute(await tryRouteAnyDesign(bot, body, sender), sender);
+}
+
+async function tryRouteAnyDesign(bot, body, sender) {
   if (!NLP_PRIMARY) {
     // tryRouteRegex checks the same stop patterns first, before build routes.
     return routeRegexPrimary(bot, body, sender, tryRouteRegex, log);
@@ -198,6 +204,7 @@ async function shadowRoute(bot, body, sender, primaryResult) {
 }
 import { installQuestEngine, isCompanionSpeaker } from './lib/quests.js';
 import { installFollowOnJoin, trackWorldName } from './lib/follow_on_join.js';
+import { adaptStudioRoute, createStudioCoBuild } from './lib/studio_cobuild.js';
 import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
@@ -205,6 +212,22 @@ let _quest_tear_down = null;
 let _survival_tear_down = null;
 let _follow_tear_down = null;
 let _follow_owner = null; // the bot object the installed follower belongs to
+let _studio = null; // creative-studio co-build of the current bot (hermescraft#592)
+let _studio_tear_down = null;
+let _studio_owner = null;
+
+// Stop the studio co-build of a bot that is going away, and take its action
+// out of the registry: studio_build must not run on a body that has left. With
+// `owner`, only that bot's co-build is torn down (a late 'end' from a replaced
+// bot must not remove the new bot's). The next spawn registers a fresh one.
+function tearDownStudio(owner = null) {
+  if (!_studio_tear_down || (owner && _studio_owner !== owner)) return;
+  try { _studio_tear_down(); } catch {}
+  _studio_tear_down = null;
+  _studio = null;
+  _studio_owner = null;
+  delete ACTIONS.studio_build;
+}
 let _quest_install_gen = 0;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
@@ -974,6 +997,13 @@ async function handleIntentRouterActionResult({ username, route, result, channel
 }
 
 async function handleChat(username, message) {
+  // "mine" / "you do it" while a studio section is on offer (by this character
+  // or by another one) is the answer to that offer, not a line for the router
+  // or the brain.
+  if (_studio?.onChat(username, message)) {
+    log(`[Studio] <${username}> answered an open offer: ${String(message).slice(0, 60)}`);
+    return;
+  }
   const knownNames = buildKnownNames(getMyName(), getNearbyPlayerNames());
   const routing = parseMessageRouting(message, { knownNames });
   let forMe = isMessageForMe(routing, getMyName());
@@ -1189,6 +1219,7 @@ async function createBot() {
     try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch {}
     try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch {}
     try { if (_follow_tear_down) { _follow_tear_down(); _follow_tear_down = null; _follow_owner = null; } } catch {}
+    tearDownStudio();
     try { bot.quit(); } catch {}
     bot = null;
     botReady = false;
@@ -1483,6 +1514,25 @@ async function createBot() {
         log(`follow-on-join install failed: ${e.message}`);
       }
 
+      // Creative-studio co-build (hermescraft#592): "build the eiffel tower"
+      // becomes sections offered to the child and built by hand. It only acts
+      // in a studio session (creative game mode and HERMESCRAFT_STUDIO_FLIGHT=1).
+      try {
+        tearDownStudio();
+        _studio = createStudioCoBuild({
+          bot: thisBot,
+          actions: ACTIONS,
+          log,
+          isBusy: () => currentTask?.status === 'running' || Boolean(thisBot._schematicBuildActive),
+        });
+        const studio = _studio;
+        ACTIONS.studio_build = (body) => studio.start(body);
+        _studio_tear_down = _studio.install();
+        _studio_owner = thisBot;
+      } catch (e) {
+        log(`studio co-build install failed: ${e.message}`);
+      }
+
       // Survival tick — rule-based background loops (hunger/health/torch/
       // unstuck). Zero LLM calls. Enables survival_easy mode by keeping the
       // bot alive between kid-directed turns. SURVIVAL_TICK_ENABLED=0 to
@@ -1493,6 +1543,9 @@ async function createBot() {
           isKidTaskActive: () => !!(
             bot.interrupt_code
             || bot._schematicBuildActive
+            // Between two legs of a studio co-build the character is offering
+            // the next one; a helper's run is not a currentTask (hermescraft#592).
+            || bot._studioPlanActive
             || currentTask?.status === 'running'
             || (bot._hc_intent_action_depth || 0) > 0
           ),
@@ -1620,6 +1673,7 @@ async function createBot() {
         if (_follow_tear_down && _follow_owner === thisBot) {
           _follow_tear_down(); _follow_tear_down = null; _follow_owner = null;
         }
+        tearDownStudio(thisBot);
         try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch (e) {}
         _quest_install_gen++;
         try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch (e) {}

@@ -9,6 +9,11 @@ const ADVANCED_SCHEMATICS = new Set([
   'beacon_plaza',
 ]);
 
+// Spellings a child types for "eiffel". The build-request contract accepts the
+// same words as a modifier of "tower" (lib/build_request_contract.js).
+export const EIFFEL_WORDS = Object.freeze(['eiffel', 'eifel', 'eifle', 'eiffle', 'effiel', 'eifell', 'eiffell', 'effel']);
+const LANDMARK_EIFFEL_RE = new RegExp(`\\b(?:${EIFFEL_WORDS.join('|')})\\b`);
+
 function wantsSchematicList(body) {
   const b = String(body).toLowerCase();
   if (/\b(?:talked about|remember|recall|from memory|from today|later chat|landmarks?)\b/i.test(b)) {
@@ -31,6 +36,8 @@ export function resolveSchematicName(body) {
   if (/\b(ice|frozen|frosty)\b/.test(b) && /\b(castle|fort|house|palace|home|cottage)\b/.test(b)) {
     return 'ice_castle';
   }
+  // Named landmark (hermescraft#592). Must come before the generic "tower" rule.
+  if (LANDMARK_EIFFEL_RE.test(b)) return 'eiffel_tower';
   if (/\b(igloo|snow\s*house|snow\s*home|snow\s*shelter|snow\s*hut)\b/.test(b)) return 'igloo';
   if (/\b(?:wizard|mage|magic|spell)\s*(?:tower|spire|castle)\b/.test(b)
     || /\b(?:tower|spire|castle)\s*(?:of\s+)?(?:wizard|mage|magic|spell)s?\b/.test(b)) return 'wizard_tower';

@@ -347,3 +347,24 @@ test('standalone place_near_player clears creative studio stock after placing', 
     Object.keys(env).forEach((k, i) => { if (prior[i] == null) delete process.env[k]; else process.env[k] = prior[i]; });
   }
 });
+
+test('pre-place recheck occupation during hold counts as an actor wait, not a placement attempt', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  let holds = 0;
+  bot.waitForTicks = async () => {
+    holds++;
+    // Enter the first target cell during the pre-place hold for 4 placeOne calls
+    // (exceeding STUDIO_PLACE_ATTEMPTS=3), clearing before the next approach.
+    if (holds <= 16 && holds % 4 === 0) {
+      bot.players.Steve = { entity: { position: new Vec3(10.5, 64, 10.5) } };
+    }
+  };
+  const origStartFlying = bot.creative.startFlying.bind(bot.creative);
+  bot.creative.startFlying = () => {
+    delete bot.players.Steve;
+    return origStartFlying();
+  };
+  const result = await studio(bot, FLAGPOLE);
+  assert.match(result.result, /20\/20 blocks placed/);
+  assert.equal(holds > 16, true);
+});

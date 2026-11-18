@@ -706,7 +706,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       }
       if (skillWasStopped(bot, stopGen)) return { ok: false, reason: 'interrupted before hand placement' };
       const safe = recheck?.();
-      if (safe && !safe.ok) return { ok: false, reason: safe.reason };
+      if (safe && !safe.ok) return { ok: false, reason: safe.reason, code: safe.code };
       if (!bot.heldItem || normalizeBlockBaseName(bot.heldItem.name) !== normalizeBlockBaseName(itemName)) {
         handTrace?.mismatch();
         return { ok: false, reason: 'held building material changed' };

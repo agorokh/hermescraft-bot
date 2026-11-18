@@ -59,8 +59,42 @@ Block counts are from the server console (`execute if block` per cell), not from
 
 The server log for those sessions has no command, teleport, kick or movement-rejection line.
 
+## Asking in chat
+
+"Rosie build the eiffel tower" (also "eifel", "eifle", "a tower like the eiffel tower") names the
+`eiffel_tower` design. The character that was asked runs the `studio_build` action
+(`bot/lib/studio_cobuild.js`):
+
+- Outside a studio session it says "I can only build the Eiffel Tower in the creative world."
+  and changes nothing.
+- In a studio session it puts the design on the ground 6 blocks east of the child, writes a plan
+  file, and both characters work through the legs. Before each leg a character asks
+  `Next: the north-east leg. Want to build it yourself? Say "mine"!` and waits 8 seconds.
+  "mine" (or "me", "yes") leaves that leg to the child; "you do it" starts it at once.
+- The character that was asked takes legs from the start of the list, the other from the far
+  end. Only one offer is open at a time, so "mine" always means one leg.
+- "Rosie stop" stops both characters. A character that reconnects finishes the leg it had begun.
+- While a plan runs the characters make no idle remarks, and a character never reacts to a block
+  that it or another character placed.
+
+Characters are separate processes and agree through files in `HERMESCRAFT_STUDIO_PLAN_DIR`
+(default `~/.hermescraft/studio-plans`), which both bodies must share.
+
+A character needs one empty hotbar slot. Materials swap through the slot the build stocked
+itself; nothing the character carries is overwritten.
+
+Measured on the same isolated instance, with a third account standing in for the child and
+counts from the server console:
+
+| Trial | Result |
+|---|---|
+| "Rosie build the eiffel tower", child takes one leg | first block 11.5 s after the request; three legs 150 of 150, the child's leg left empty; 234 s |
+| "Steve can you build the eifle tower", then "Rosie stop" after 45 s | both stopped within 3 s; no further blocks |
+| the request while Rosie is in survival | one line, nothing built |
+| "Rosie lets build the eiffel tower", eight carried items per character | 600 of 600 in 246 s; carried items untouched |
+
 ## Not done
 
-- Nothing routes a child's "build the Eiffel Tower" to this design yet.
 - No creative world exists on the family server; these trials ran on a separate instance.
-- Not seen on a Bedrock device.
+- Not seen on a Bedrock device, and not tried with a child.
+- The child cannot yet pick a leg by name ("I want the north-west one"), only answer an offer.

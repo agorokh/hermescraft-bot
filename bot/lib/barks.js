@@ -15,10 +15,13 @@
 //   REACTIVE_COOLDOWN_MS     — min ms between two reactive (event-triggered) barks
 //   PLAYER_PROXIMITY_BLOCKS  — bark/look only when a player is closer than this
 
+import { isCompanionSpeaker } from './quests.js';
+
 const IDLE_BARK_COOLDOWN_MS = 60_000;      // one bark per minute floor
 const IDLE_BARK_JITTER_MS   = 60_000;      // up to +60s of randomness
 const REACTIVE_COOLDOWN_MS  = 8_000;       // 8s between reactive barks
 const PLAYER_PROXIMITY      = 16;          // blocks
+const HAND_REACH_BLOCKS     = 6;           // a body this close to a changed block may have placed it
 const PLAYER_GAZE_DISTANCE  = 24;          // blocks; bot tracks closer players
 
 // Hand-curated bark tables. The kid-NPC research agent's advice was explicit:
@@ -181,6 +184,9 @@ export function installBarksAndPresence(bot, opts = {}) {
   // 1. Idle bark loop
   const idleTimer = setInterval(() => {
     if (stopped || !bot || !bot.entity) return;
+    // A studio co-build has its own lines (offers, one per part); "should make
+    // more tools" in the middle of a tower is noise (hermescraft#592).
+    if (bot._studioPlanActive) return;
     const np = nearestPlayer(bot, PLAYER_PROXIMITY);
     if (!np) return; // only bark when a kid is around — silence in empty world saves tokens
     // Bias: 70% environmental, 30% self
@@ -215,9 +221,27 @@ export function installBarksAndPresence(bot, opts = {}) {
     if (shouldBark('reactive', REACTIVE_COOLDOWN_MS)) sayBark('on_player_leave');
   };
   const isAir = (name) => !name || /air/i.test(name);
+  // The server does not say who changed a block. When the nearest body within
+  // hand reach of it is this character or another character, it is their
+  // block, not a child's: two characters building a tower together reacted to
+  // each other about 45 times per tower (hermescraft#592).
+  const changedByCharacter = (block) => {
+    const at = block?.position;
+    if (!at || typeof at.distanceTo !== 'function') return false;
+    let nearest = null;
+    let nearestDist = HAND_REACH_BLOCKS;
+    for (const e of [bot.entity, ...Object.values(bot.entities || {})]) {
+      if (!e?.position || (e !== bot.entity && e.type !== 'player')) continue;
+      const d = e.position.distanceTo(at);
+      if (d <= nearestDist) { nearest = e; nearestDist = d; }
+    }
+    if (!nearest) return false;
+    return nearest === bot.entity || isCompanionSpeaker(nearest.username, bot.username);
+  };
   const onBlockUpdate = (oldBlock, newBlock) => {
     if (stopped || !bot?.entity) return;
     if (!nearestPlayer(bot, PLAYER_PROXIMITY)) return;
+    if (changedByCharacter(newBlock || oldBlock)) return;
     const wasAir = isAir(oldBlock?.name);
     const nowAir = isAir(newBlock?.name);
     if (wasAir && !nowAir) {

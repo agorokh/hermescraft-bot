@@ -666,9 +666,19 @@ const FROZEN_UNSUPPORTED_BUILDS = [
   'make me a nether portal',
   'build me a pirate ship',
   'build me a statue of a cat',
-  'lets build the eiffel tower',
+  // The Eiffel Tower joined the library in #592; another landmark keeps the rule covered.
+  'lets build the pisa tower',
   'Rosie design a castle with a moat',
 ];
+
+test('#592 "lets build the eiffel tower" dispatches the library design', async () => {
+  for (const body of ['lets build the eiffel tower', 'can you build the eifle tower', 'build me a tower like the eiffel tower']) {
+    const r = await tryRoute(stubBot(), body, 'Kid');
+    assert.equal(r.matched, true, `${body}: zone=${r.nlp_zone}`);
+    assert.equal(r.action, 'build_schematic', body);
+    assert.equal(r.body.name, 'eiffel_tower', body);
+  }
+});
 for (const body of FROZEN_UNSUPPORTED_BUILDS) {
   test(`#501 unsupported build: "${body}" is a handled chat refusal`, async () => {
     const r = await tryRoute(stubBot(), body, 'Adalynn');

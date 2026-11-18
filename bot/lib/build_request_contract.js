@@ -21,7 +21,7 @@
 //     noun ("a house boat").
 // One unsupported object makes the request unsupported.
 
-import { isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
+import { EIFFEL_WORDS, isSpeculativeBuildDiscussion, resolveSchematicName } from './schematic_resolve.js';
 
 // "make" / "create" mean "build" only when the classifier also picked a build
 // intent: "make me a sword" is a crafting ask, while "make me a nether portal"
@@ -48,7 +48,12 @@ const CATALOG_WORDS = new Set([
   'ice', 'frozen', 'frosty', 'snow', 'wizard', 'mage', 'magic', 'spell', 'star',
   'crystal', 'sky', 'beacon', 'gallery', 'light', 'flower', 'tree', 'fire',
   'market', 'village', 'town', 'shopping', 'stargazing', 'telescope', 'grand',
+  ...EIFFEL_WORDS,
 ]);
+
+// Library entries that are one named landmark. "a tower like the eiffel tower"
+// asks for the landmark, not for a plain tower.
+const LANDMARK_SCHEMATICS = new Set(['eiffel_tower']);
 
 // Style / size / material words. They never make a request unsupported, even
 // after "the" ("the tallest tower ever"). Comparatives and superlatives count.
@@ -443,7 +448,12 @@ export function buildRequestContract(body, opts = {}) {
     for (const obj of parseObjects(tokens)) {
       const result = checkObject(obj, names);
       if (result.status === 'unsupported') return { ...result, framed };
-      if (result.status === 'supported' && !firstSupported && !obj.compare) firstSupported = { ...result, framed };
+      if (result.status !== 'supported') continue;
+      if (obj.compare) {
+        if (LANDMARK_SCHEMATICS.has(result.schematic)) firstSupported = { ...result, framed };
+        continue;
+      }
+      if (!firstSupported) firstSupported = { ...result, framed };
     }
   }
   return firstSupported || { status: 'none' };
@@ -464,6 +474,7 @@ const DISPLAY_NAMES = {
   market_square: 'market square',
   sky_bridge: 'sky bridge',
   beacon_plaza: 'beacon plaza',
+  eiffel_tower: 'Eiffel Tower',
 };
 
 const LIBRARY_OFFER = 'a house, treehouse, tower, garden, well, igloo, ice castle, campfire spot, '

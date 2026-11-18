@@ -25,12 +25,20 @@ const guarded = async (bot, body) => guardRegexBuildRoute(bot, body, 'Adalynn', 
 
 test('regex build of an unsupported request becomes a handled refusal', async () => {
   const bot = stubBot();
-  const raw = await tryRouteRegex(bot, 'lets build the eiffel tower', 'Adalynn');
+  const raw = await tryRouteRegex(bot, 'lets build the pisa tower', 'Adalynn');
   assert.equal(raw.action, 'build_tower', 'precondition: the regex router builds the pillar');
-  const r = await guarded(bot, 'lets build the eiffel tower');
+  const r = await guarded(bot, 'lets build the pisa tower');
   assert.equal(r.matched, true);
   assert.equal(r.action, 'chat');
   assert.equal(r.nlp_zone, 'build_unsupported');
+});
+
+test('regex build of the Eiffel Tower is the library design, never the pillar (#592)', async () => {
+  const bot = stubBot();
+  const r = await guarded(bot, 'lets build the eiffel tower');
+  assert.equal(r.matched, true);
+  assert.equal(r.action, 'build_schematic');
+  assert.equal(r.body.name, 'eiffel_tower');
 });
 
 test('regex build of a different structure is remapped to the one the object names', async () => {

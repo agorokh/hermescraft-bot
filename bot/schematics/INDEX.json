@@ -244,6 +244,20 @@
         "smooth_quartz": 17,
         "red_wool": 3
       }
+    },
+    "eiffel_tower": {
+      "file": "eiffel_tower.json",
+      "footprint": [
+        16,
+        16
+      ],
+      "height": 30,
+      "summary": "30-tall iron tower on four legs with three decks and a lit spire, in four 150-block leg sections; creative-studio build, too tall to place on foot",
+      "materials": {
+        "smooth_stone": 180,
+        "iron_block": 408,
+        "sea_lantern": 12
+      }
     }
   }
 }

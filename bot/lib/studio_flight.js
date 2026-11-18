@@ -118,7 +118,35 @@ function setFlyingFlag(bot, flying) {
   try { bot._client?.write?.('abilities', { flags: flying ? 2 : 0 }); } catch { /* cosmetic only */ }
 }
 
-async function flyRoute(bot, route, stopped, deadline) {
+// Slots this module filled, per body, so they can be emptied again afterwards.
+const studioStock = new WeakMap();
+const inFlightHop = new WeakMap();
+
+async function cancelInFlightHop(bot) {
+  const active = inFlightHop.get(bot);
+  if (!active) return;
+  const freeze = bot.entity?.position?.clone?.();
+  if (freeze) active.hop.set(freeze.x, freeze.y, freeze.z);
+  bot.emit?.('move');
+  let timer;
+  await Promise.race([
+    active.promise,
+    new Promise(resolve => {
+      timer = setTimeout(() => {
+        if (freeze) active.hop.set(freeze.x, freeze.y, freeze.z);
+        bot.emit?.('move');
+        resolve();
+      }, 75);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  if (freeze && bot.entity?.position) {
+    bot.entity.position.set(freeze.x, freeze.y, freeze.z);
+  }
+}
+
+async function flyRoute(bot, route, stopped, deadline, hopTimeoutMs = HOP_TIMEOUT_MS) {
+  await cancelInFlightHop(bot);
+  if (inFlightHop.has(bot)) return { ok: false, reason: 'flight timed out', timedOut: true };
   bot.creative.startFlying();
   setFlyingFlag(bot, true);
   for (const waypoint of route) {
@@ -126,16 +154,24 @@ async function flyRoute(bot, route, stopped, deadline) {
     let remaining = waypoint.minus(bot.entity.position);
     while (remaining.norm() > 0.05) {
       if (stopped()) return { ok: false, reason: 'interrupted while flying' };
-      if (performance.now() >= deadline) return { ok: false, reason: 'flight timed out' };
+      if (performance.now() >= deadline) return { ok: false, reason: 'flight timed out', timedOut: true };
       const length = remaining.norm();
-      const hop = length <= HOP_LENGTH ? waypoint
-        : bot.entity.position.plus(remaining.scaled(HOP_LENGTH / length));
+      const hop = (length <= HOP_LENGTH ? waypoint
+        : bot.entity.position.plus(remaining.scaled(HOP_LENGTH / length))).clone();
+      const gen = (inFlightHop.get(bot)?.gen || 0) + 1;
+      const promise = Promise.resolve().then(() => bot.creative.flyTo(hop)).catch(() => {}).finally(() => {
+        if (inFlightHop.get(bot)?.gen === gen) inFlightHop.delete(bot);
+      });
+      inFlightHop.set(bot, { gen, hop, promise });
       let timer;
       const timedOut = await Promise.race([
-        bot.creative.flyTo(hop).then(() => false),
-        new Promise(resolve => { timer = setTimeout(() => resolve(true), HOP_TIMEOUT_MS); }),
+        promise.then(() => false),
+        new Promise(resolve => { timer = setTimeout(() => resolve(true), hopTimeoutMs); }),
       ]).finally(() => clearTimeout(timer));
-      if (timedOut) return { ok: false, reason: 'flight timed out' };
+      if (timedOut) {
+        await cancelInFlightHop(bot);
+        return { ok: false, reason: 'flight timed out', timedOut: true };
+      }
       if (bot.entity.position.distanceTo(hop) > ARRIVAL_TOLERANCE) {
         return { ok: false, reason: 'the server moved the flying body back' };
       }
@@ -147,7 +183,7 @@ async function flyRoute(bot, route, stopped, deadline) {
 
 // Fly to a stance within hand reach of `target`. `skip` stances were already
 // tried for this cell, so a retry looks at the block from somewhere else.
-export async function flyToPhysicalPlacement(bot, target, { stopped = () => false, avoid, center, skip, log } = {}) {
+export async function flyToPhysicalPlacement(bot, target, { stopped = () => false, avoid, center, skip, log, hopTimeoutMs = HOP_TIMEOUT_MS } = {}) {
   const from = bot.entity.position.clone();
   const deadline = performance.now() + FLIGHT_TIMEOUT_MS;
   let failure = 'could not find a clear place to hover near the next block';
@@ -158,9 +194,9 @@ export async function flyToPhysicalPlacement(bot, target, { stopped = () => fals
     const start = bot.entity.position.clone();
     const route = planFlight(bot, start, feet);
     if (!route) { failure = 'could not find a clear way to fly to the next block'; continue; }
-    const flown = await flyRoute(bot, route, stopped, deadline);
+    const flown = await flyRoute(bot, route, stopped, deadline, hopTimeoutMs);
     if (!flown.ok) {
-      if (stopped()) return flown;
+      if (stopped() || flown.timedOut || inFlightHop.has(bot)) return { ok: false, reason: flown.reason };
       failure = flown.reason;
       continue;
     }
@@ -170,9 +206,6 @@ export async function flyToPhysicalPlacement(bot, target, { stopped = () => fals
   }
   return { ok: false, reason: failure };
 }
-
-// Slots this module filled, per body, so they can be emptied again afterwards.
-const studioStock = new WeakMap();
 
 // Creative inventory replaces the survival stock check: put one full stack of
 // the material in an EMPTY hotbar slot when the character holds none. Hand
@@ -198,6 +231,7 @@ export async function ensureCreativeStock(bot, itemName, normalize = name => nam
     if (bot.inventory.items().some(item => normalize(item.name) === wanted)) return { ok: true };
     await sleep(50);
   }
+  await clearStudioStock(bot, normalize);
   return { ok: false, reason: `the creative inventory did not supply ${wanted}` };
 }
 
@@ -259,8 +293,10 @@ export function checkStudioCells(bot, placements, matches) {
 }
 
 // Come down beside the finished work instead of dropping onto it.
-export async function landBesideBuild(bot, { origin, footprint }, { stopped = () => false } = {}) {
+export async function landBesideBuild(bot, { origin, footprint }, { stopped = () => false, hopTimeoutMs = HOP_TIMEOUT_MS } = {}) {
   try {
+    await cancelInFlightHop(bot);
+    if (inFlightHop.has(bot)) return;
     const from = bot.entity.position.clone();
     const [width, length] = footprint;
     const spots = [];
@@ -278,9 +314,12 @@ export async function landBesideBuild(bot, { origin, footprint }, { stopped = ()
     const deadline = performance.now() + FLIGHT_TIMEOUT_MS;
     for (const { feet } of spots.slice(0, 8)) {
       const route = planFlight(bot, bot.entity.position.clone(), feet);
-      if (route && (await flyRoute(bot, route, stopped, deadline)).ok) break;
+      if (!route) continue;
+      const flown = await flyRoute(bot, route, stopped, deadline, hopTimeoutMs);
+      if (flown.ok || flown.timedOut || inFlightHop.has(bot) || stopped()) break;
     }
   } catch { /* landing is a courtesy; never fail a finished build on it */ } finally {
+    await cancelInFlightHop(bot);
     try { bot.creative.stopFlying(); } catch { /* body already gone */ }
     setFlyingFlag(bot, false);
   }

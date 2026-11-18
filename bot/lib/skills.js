@@ -572,17 +572,17 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
   physical = physical || isPhysicalBuild();
   if (physical && !approached) {
     if (bot._schematicBuildActive) return { ok: false, reason: 'another physical build owns the body' };
-    if (studioFlightEnabled(bot)) {
-      const stocked = await ensureCreativeStock(bot, itemName, normalizeBlockBaseName);
-      if (!stocked.ok) return { ok: false, reason: stocked.reason };
-    }
-    if (!findInventoryItem(bot, itemName)) return { ok: false, reason: `no ${itemName} in inventory` };
     if (!bot.pathfinder?.movements || !bot.registry || !bot.waitForTicks) return { ok: false, reason: 'the walking body is not ready' };
     const original = bot.pathfinder.movements;
     const movement = physicalBuildMovements(bot, original);
     const autoEat = bot.autoEat?.enabled === true;
     bot._schematicBuildActive = true;
     try {
+      if (studioFlightEnabled(bot)) {
+        const stocked = await ensureCreativeStock(bot, itemName, normalizeBlockBaseName);
+        if (!stocked.ok) return { ok: false, reason: stocked.reason };
+      }
+      if (!findInventoryItem(bot, itemName)) return { ok: false, reason: `no ${itemName} in inventory` };
       bot.pathfinder.setMovements(movement);
       if (autoEat) bot.autoEat.disableAuto();
       if (bot.autoEat?.isEating) return { ok: false, reason: 'a meal is still in progress' };
@@ -611,7 +611,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       if (bot.pathfinder.movements === movement) bot.pathfinder.setMovements(original);
       if (autoEat) bot.autoEat.enableAuto();
       bot._schematicBuildActive = false;
-      if (studioFlightEnabled(bot)) await clearStudioStock(bot, normalizeBlockBaseName);
+      if (!bot._studioBuildActive && studioFlightEnabled(bot)) await clearStudioStock(bot, normalizeBlockBaseName);
     }
   }
 
@@ -675,23 +675,24 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       } catch (e) { /* continue and try place anyway */ }
     }
   }
-  let equipPlan;
-  if (physical && studioFlightEnabled(bot)) {
-    const stocked = await ensureCreativeStock(bot, itemName, normalizeBlockBaseName);
-    if (!stocked.ok) return { ok: false, reason: stocked.reason };
-  }
-  if (physical) {
-    try { equipPlan = physicalEquipPlan(bot, itemName, stopGen); }
-    catch (err) { return { ok: false, reason: err.message }; }
-  }
-  const item = equipPlan?.item || findInventoryItem(bot, itemName);
-  if (!item) return { ok: false, reason: `no ${itemName} in inventory` };
-
-  const buildOff = findBuildOffBlock(bot, targetPos.x, targetPos.y, targetPos.z);
-  if (!buildOff) return { ok: false, reason: `no adjacent block to place against at ${targetPos.x},${targetPos.y},${targetPos.z}` };
-
-  const handTrace = physical ? tracePhysicalHandState(bot, itemName, targetPos, item.slot) : null;
+  let handTrace = null;
   try {
+    let equipPlan;
+    if (physical && studioFlightEnabled(bot)) {
+      const stocked = await ensureCreativeStock(bot, itemName, normalizeBlockBaseName);
+      if (!stocked.ok) return { ok: false, reason: stocked.reason };
+    }
+    if (physical) {
+      try { equipPlan = physicalEquipPlan(bot, itemName, stopGen); }
+      catch (err) { return { ok: false, reason: err.message }; }
+    }
+    const item = equipPlan?.item || findInventoryItem(bot, itemName);
+    if (!item) return { ok: false, reason: `no ${itemName} in inventory` };
+
+    const buildOff = findBuildOffBlock(bot, targetPos.x, targetPos.y, targetPos.z);
+    if (!buildOff) return { ok: false, reason: `no adjacent block to place against at ${targetPos.x},${targetPos.y},${targetPos.z}` };
+
+    handTrace = physical ? tracePhysicalHandState(bot, itemName, targetPos, item.slot) : null;
     if (physical) await equipPhysicalMaterial(bot, equipPlan, stopGen, handTrace);
     else await bot.equip(item, 'hand');
     handTrace?.equipped();
@@ -729,6 +730,9 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
     return { ok: false, reason: err.message };
   } finally {
     handTrace?.close();
+    if (physical && !bot._studioBuildActive && studioFlightEnabled(bot)) {
+      await clearStudioStock(bot, normalizeBlockBaseName);
+    }
   }
 }
 
@@ -1503,7 +1507,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       site_refused: true, site_code: site.code, site_reason: site.reason };
   }
 
-  const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
+  const buildPlan = createLayeredPlan({ name: buildName, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
   let studioOrder = null;
   let studioAvoid = null;
   if (studio) {
@@ -1582,6 +1586,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
 
   bot._schematicBuildActive = true;
+  bot._studioBuildActive = studio;
   let placed = 0;
   let failed = 0;
   let unverified = 0;
@@ -1653,8 +1658,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     console.log(`[build_schematic] foundation phase: ${foundationPlaced}/${foundationPlacements.length} placed, ${foundationFailed} failed, ${foundationUnverified} unverified`);
   }
 
+  const pendingIds = buildState ? new Set(pendingPlacements(buildPlan, buildState).map((p) => p.id)) : null;
   const sorted = studioOrder
-    ? studioOrder.map((p) => [p.dx, p.dy, p.dz, p.block])
+    ? studioOrder.filter((p) => !pendingIds || pendingIds.has(p.id)).map((p) => [p.dx, p.dy, p.dz, p.block])
     : buildState
     ? pendingPlacements(buildPlan, buildState).map((p) => [p.dx, p.dy, p.dz, p.block])
     : [...blocks].sort((a, b) => {
@@ -1940,6 +1946,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     if (studio) await clearStudioStock(bot, normalizeBlockBaseName);
     if (buildMovements && bot.pathfinder.movements === buildMovements) bot.pathfinder.setMovements(originalMovements);
     if (autoEatWasEnabled) bot.autoEat.enableAuto();
+    bot._studioBuildActive = false;
     bot._schematicBuildActive = false;
   }
 }

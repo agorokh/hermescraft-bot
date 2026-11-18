@@ -6,7 +6,9 @@ import minecraftData from 'minecraft-data';
 import pathfinderPkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
 import { registerHighLevelSkills } from '../lib/skills.js';
-import { orderForHandPlacement, planFlight, segmentClear } from '../lib/studio_flight.js';
+import { flyToPhysicalPlacement, orderForHandPlacement, planFlight, segmentClear } from '../lib/studio_flight.js';
+import { buildStateFileForId, loadBuildState } from '../lib/advanced_build_pipeline.js';
+import { rm } from 'node:fs/promises';
 
 const registry = minecraftData('1.21.11');
 const { Movements } = pathfinderPkg;
@@ -260,4 +262,67 @@ test('orderForHandPlacement builds outward from support and reports floating cel
   assert.deepEqual(floating, []);
   const island = orderForHandPlacement([[0, 0, 0], [5, 5, 5]], solid);
   assert.deepEqual(island.floating, [[5, 5, 5]]);
+});
+
+test('a sectioned studio build records section build_id and resumes only remaining blocks', { timeout: 20000 }, async () => {
+  const origin = { x: 40, y: 64, z: 40 };
+  const stateFile = buildStateFileForId(`flagpole__pole-${origin.x}-${origin.y}-${origin.z}`);
+  await rm(stateFile, { force: true });
+  try {
+    const bot = new StudioBot();
+    let placedCount = 0;
+    const origPlaceBlock = bot.placeBlock.bind(bot);
+    bot.placeBlock = async (reference, face) => {
+      placedCount++;
+      if (placedCount > 5) return;
+      await origPlaceBlock(reference, face);
+    };
+    const partial = await studio(bot, { name: 'flagpole', section: 'pole', ...origin, record_state: true, resume: true });
+    assert.equal(partial.site_refused, true);
+    const saved = await loadBuildState(stateFile);
+    assert.equal(saved?.build_id, `flagpole__pole-${origin.x}-${origin.y}-${origin.z}`);
+    assert.equal(saved?.completed.length, 5);
+
+    bot.placeBlock = origPlaceBlock;
+    bot.trace = [];
+    const resumed = await studio(bot, { name: 'flagpole', section: 'pole', ...origin, record_state: true, resume: true });
+    assert.match(resumed.result, /17\/17 blocks placed/);
+    assert.equal(hands(bot).length, 12);
+  } finally {
+    await rm(stateFile, { force: true });
+  }
+});
+
+test('hop timeout cancels the in-flight flyTo without starting overlapping hops', { timeout: 10000 }, async () => {
+  const bot = new StudioBot();
+  let calls = 0;
+  let cancelledHop = null;
+  bot.creative.flyTo = destination => new Promise(resolve => {
+    calls++;
+    bot.once('move', () => {
+      cancelledHop = destination.clone();
+      resolve();
+    });
+  });
+  const outcome = await flyToPhysicalPlacement(bot, new Vec3(10, 75, 10), { hopTimeoutMs: 30 });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.reason, 'flight timed out');
+  assert.equal(calls, 1);
+  assert.deepEqual(cancelledHop, bot.entity.position);
+});
+
+test('standalone place_near_player clears creative studio stock after placing', { timeout: 10000 }, async () => {
+  const bot = new StudioBot();
+  bot.players.Adalynn = { entity: { position: new Vec3(2.5, 64, 0.5) } };
+  const env = { HERMESCRAFT_PHYSICAL_BUILDS: '1', HERMESCRAFT_STUDIO_FLIGHT: '1' };
+  const prior = Object.keys(env).map(k => process.env[k]);
+  Object.entries(env).forEach(([k, v]) => { process.env[k] = v; });
+  try {
+    const actions = registerHighLevelSkills({}, () => bot);
+    const res = await actions.place_near_player({ player: 'Adalynn', item: 'smooth_quartz' });
+    assert.match(res.result, /Placed smooth_quartz/);
+    assert.deepEqual(bot.inventory.items(), []);
+  } finally {
+    Object.keys(env).forEach((k, i) => { if (prior[i] == null) delete process.env[k]; else process.env[k] = prior[i]; });
+  }
 });

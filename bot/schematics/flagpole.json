@@ -2,6 +2,10 @@
   "_note": "A 17-tall quartz flagpole with a three-block red flag. 20 blocks. Too tall to build on foot: it is the creative-studio flight proof (agorokh/hermescraft#592 stage 0).",
   "footprint": [3, 1],
   "height": 17,
+  "sections": {
+    "pole": { "label": "flagpole pole", "blocks": [0, 17] },
+    "flag": { "label": "flagpole flag", "blocks": [17, 20] }
+  },
   "blocks": [
     [0, 0, 0, "smooth_quartz"], [0, 1, 0, "smooth_quartz"], [0, 2, 0, "smooth_quartz"],
     [0, 3, 0, "smooth_quartz"], [0, 4, 0, "smooth_quartz"], [0, 5, 0, "smooth_quartz"],

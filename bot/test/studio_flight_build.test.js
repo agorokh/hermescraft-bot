@@ -156,7 +156,9 @@ test('the character lands beside the finished build and tells the server it stop
   assert.equal(landing.position.y, 64);
   assert.ok(landing.position.x < 9 || landing.position.x > 14 || landing.position.z < 9 || landing.position.z > 12);
   assert.equal(bot.flying, false);
-  assert.deepEqual(bot.trace.filter(e => e.kind === 'packet').at(-1), { kind: 'packet', name: 'abilities', data: { flags: 0 } });
+  const packets = bot.trace.filter(e => e.kind === 'packet');
+  assert.deepEqual(packets[0], { kind: 'packet', name: 'abilities', data: { flags: 0x0f } });
+  assert.deepEqual(packets.at(-1), { kind: 'packet', name: 'abilities', data: { flags: 0x0d } });
   assert.equal(bot._schematicBuildActive, false);
 });
 
@@ -293,22 +295,41 @@ test('a sectioned studio build records section build_id and resumes only remaini
   }
 });
 
-test('hop timeout cancels the in-flight flyTo without starting overlapping hops', { timeout: 10000 }, async () => {
+test('hop timeout cancels the in-flight flyTo and tries the next hover candidate', { timeout: 10000 }, async () => {
   const bot = new StudioBot();
   let calls = 0;
   let cancelledHop = null;
-  bot.creative.flyTo = destination => new Promise(resolve => {
+  const origFlyTo = bot.creative.flyTo.bind(bot.creative);
+  bot.creative.flyTo = destination => {
     calls++;
-    bot.once('move', () => {
-      cancelledHop = destination.clone();
-      resolve();
-    });
-  });
+    if (calls === 1) {
+      return new Promise(resolve => {
+        bot.once('move', () => {
+          cancelledHop = destination.clone();
+          resolve();
+        });
+      });
+    }
+    return origFlyTo(destination);
+  };
   const outcome = await flyToPhysicalPlacement(bot, new Vec3(10, 75, 10), { hopTimeoutMs: 30 });
-  assert.equal(outcome.ok, false);
-  assert.equal(outcome.reason, 'flight timed out');
-  assert.equal(calls, 1);
-  assert.deepEqual(cancelledHop, bot.entity.position);
+  assert.equal(outcome.ok, true);
+  assert.ok(calls >= 2);
+  assert.deepEqual(cancelledHop, new Vec3(0.5, 64, 0.5));
+});
+
+test('a hung flyTo that outlives cancel grace does not brick subsequent flight attempts', { timeout: 10000 }, async () => {
+  const bot = new StudioBot();
+  let calls = 0;
+  const origFlyTo = bot.creative.flyTo.bind(bot.creative);
+  bot.creative.flyTo = destination => {
+    calls++;
+    if (calls === 1) return new Promise(() => {}); // ignores move and never resolves
+    return origFlyTo(destination);
+  };
+  const outcome = await flyToPhysicalPlacement(bot, new Vec3(10, 75, 10), { hopTimeoutMs: 20 });
+  assert.equal(outcome.ok, true);
+  assert.ok(calls >= 2);
 });
 
 test('standalone place_near_player clears creative studio stock after placing', { timeout: 10000 }, async () => {

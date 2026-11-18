@@ -36,6 +36,15 @@ import { dirname, join } from 'path';
 import { findPlayerEntity, itemNameFromCollectEntity, playerNameMatchesResolvedCollector } from './player_utils.js';
 import { findNearbySchematicSite, MAX_FOUNDATION_PLACEMENTS, schematicSiteDimensions, validateSchematicSite } from './schematic_site.js';
 import {
+  checkStudioCells,
+  clearStudioStock,
+  ensureCreativeStock,
+  flyToPhysicalPlacement,
+  landBesideBuild,
+  orderForHandPlacement,
+  studioFlightEnabled,
+} from './studio_flight.js';
+import {
   blockReadbackMatches,
   buildStateFileForId,
   buildBillOfMaterials,
@@ -68,6 +77,10 @@ const SCHEMATICS_DIR = join(__dirname, '..', 'schematics');
 const SETBLOCK_CHAT_INTERVAL_MS = 150;
 const CAMPFIRE_PLACEMENT_INTERVAL_MS = 1000;
 const PHYSICAL_WALK_TIMEOUT_MS = 8000;
+// Creative-studio builds (#592) re-place a missed block themselves, and wait
+// for another character to move out of the next cell, before giving up.
+const STUDIO_PLACE_ATTEMPTS = 3;
+const STUDIO_ACTOR_WAITS = 20;
 const PHYSICAL_HAZARDS = new Set(['lava', 'water', 'fire', 'soul_fire', 'campfire',
   'soul_campfire', 'magma_block', 'cactus', 'sweet_berry_bush', 'powder_snow']);
 const isPhysicalBuild = () => process.env.HERMESCRAFT_PHYSICAL_BUILDS === '1';
@@ -559,13 +572,17 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
   physical = physical || isPhysicalBuild();
   if (physical && !approached) {
     if (bot._schematicBuildActive) return { ok: false, reason: 'another physical build owns the body' };
-    if (!findInventoryItem(bot, itemName)) return { ok: false, reason: `no ${itemName} in inventory` };
     if (!bot.pathfinder?.movements || !bot.registry || !bot.waitForTicks) return { ok: false, reason: 'the walking body is not ready' };
     const original = bot.pathfinder.movements;
     const movement = physicalBuildMovements(bot, original);
     const autoEat = bot.autoEat?.enabled === true;
     bot._schematicBuildActive = true;
     try {
+      if (studioFlightEnabled(bot)) {
+        const stocked = await ensureCreativeStock(bot, itemName, normalizeBlockBaseName);
+        if (!stocked.ok) return { ok: false, reason: stocked.reason };
+      }
+      if (!findInventoryItem(bot, itemName)) return { ok: false, reason: `no ${itemName} in inventory` };
       bot.pathfinder.setMovements(movement);
       if (autoEat) bot.autoEat.disableAuto();
       if (bot.autoEat?.isEating) return { ok: false, reason: 'a meal is still in progress' };
@@ -594,6 +611,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       if (bot.pathfinder.movements === movement) bot.pathfinder.setMovements(original);
       if (autoEat) bot.autoEat.enableAuto();
       bot._schematicBuildActive = false;
+      if (!bot._studioBuildActive && studioFlightEnabled(bot)) await clearStudioStock(bot, normalizeBlockBaseName);
     }
   }
 
@@ -657,19 +675,24 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       } catch (e) { /* continue and try place anyway */ }
     }
   }
-  let equipPlan;
-  if (physical) {
-    try { equipPlan = physicalEquipPlan(bot, itemName, stopGen); }
-    catch (err) { return { ok: false, reason: err.message }; }
-  }
-  const item = equipPlan?.item || findInventoryItem(bot, itemName);
-  if (!item) return { ok: false, reason: `no ${itemName} in inventory` };
-
-  const buildOff = findBuildOffBlock(bot, targetPos.x, targetPos.y, targetPos.z);
-  if (!buildOff) return { ok: false, reason: `no adjacent block to place against at ${targetPos.x},${targetPos.y},${targetPos.z}` };
-
-  const handTrace = physical ? tracePhysicalHandState(bot, itemName, targetPos, item.slot) : null;
+  let handTrace = null;
   try {
+    let equipPlan;
+    if (physical && studioFlightEnabled(bot)) {
+      const stocked = await ensureCreativeStock(bot, itemName, normalizeBlockBaseName);
+      if (!stocked.ok) return { ok: false, reason: stocked.reason };
+    }
+    if (physical) {
+      try { equipPlan = physicalEquipPlan(bot, itemName, stopGen); }
+      catch (err) { return { ok: false, reason: err.message }; }
+    }
+    const item = equipPlan?.item || findInventoryItem(bot, itemName);
+    if (!item) return { ok: false, reason: `no ${itemName} in inventory` };
+
+    const buildOff = findBuildOffBlock(bot, targetPos.x, targetPos.y, targetPos.z);
+    if (!buildOff) return { ok: false, reason: `no adjacent block to place against at ${targetPos.x},${targetPos.y},${targetPos.z}` };
+
+    handTrace = physical ? tracePhysicalHandState(bot, itemName, targetPos, item.slot) : null;
     if (physical) await equipPhysicalMaterial(bot, equipPlan, stopGen, handTrace);
     else await bot.equip(item, 'hand');
     handTrace?.equipped();
@@ -683,7 +706,7 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
       }
       if (skillWasStopped(bot, stopGen)) return { ok: false, reason: 'interrupted before hand placement' };
       const safe = recheck?.();
-      if (safe && !safe.ok) return { ok: false, reason: safe.reason };
+      if (safe && !safe.ok) return { ok: false, reason: safe.reason, code: safe.code };
       if (!bot.heldItem || normalizeBlockBaseName(bot.heldItem.name) !== normalizeBlockBaseName(itemName)) {
         handTrace?.mismatch();
         return { ok: false, reason: 'held building material changed' };
@@ -707,6 +730,9 @@ async function placeOne(bot, itemName, x, y, z, allowReachRecover = true, { phys
     return { ok: false, reason: err.message };
   } finally {
     handTrace?.close();
+    if (physical && !bot._studioBuildActive && studioFlightEnabled(bot)) {
+      await clearStudioStock(bot, normalizeBlockBaseName);
+    }
   }
 }
 
@@ -1293,15 +1319,27 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
   if (loaded.error) return { result: loaded.error };
   const { entry, data } = loaded;
-  const blocks = data.blocks || [];
-  if (blocks.length === 0) return { result: `Schematic ${name} is empty.` };
+  const allBlocks = data.blocks || [];
+  if (allBlocks.length === 0) return { result: `Schematic ${name} is empty.` };
+  // A design may name contiguous runs of its block list as sections, so two
+  // characters (or a child) can each take one part of the same build (#592).
+  const section = typeof bodyArgs.section === 'string' && bodyArgs.section.trim() ? bodyArgs.section.trim() : null;
+  const sectionEntry = section ? data.sections?.[section] : null;
+  if (section && !(Array.isArray(sectionEntry?.blocks) && sectionEntry.blocks.length === 2
+      && sectionEntry.blocks.every(Number.isInteger) && sectionEntry.blocks[0] >= 0
+      && sectionEntry.blocks[0] < sectionEntry.blocks[1] && sectionEntry.blocks[1] <= allBlocks.length)) {
+    return { result: `Schematic ${name} has no section "${section}". Sections: ${Object.keys(data.sections || {}).join(', ') || 'none'}.` };
+  }
+  const blocks = sectionEntry ? allBlocks.slice(sectionEntry.blocks[0], sectionEntry.blocks[1]) : allBlocks;
+  const buildName = section ? `${name}__${section}` : name;
+  const buildLabel = sectionEntry?.label || name.replace(/_/g, ' ');
 
   let baseX = Math.floor(x), baseZ = Math.floor(z);
   let requestedBaseY = Math.floor(y);
   // baseY is `let` because terrain-aware grounding may adjust it below to
   // sit on the highest sampled ground under the schematic footprint.
   let baseY = requestedBaseY;
-  let buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
+  let buildId = `${buildName}-${baseX}-${requestedBaseY}-${baseZ}`;
   let stateFile = buildStateFileForId(buildId);
   const [fw, fl] = entry.footprint || [data.footprint?.[0] || 5, data.footprint?.[1] || 5];
   const resumeEnabled = bodyFlagEnabled(bodyArgs.resume, false);
@@ -1311,6 +1349,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (savedState && savedState.build_id !== buildId) savedState = null;
   let siteValidated = false;
   const physicalBuild = isPhysicalBuild();
+  // Creative studio: fly to reach each cell, still place every block by hand.
+  const studio = physicalBuild && studioFlightEnabled(bot);
   const occupiedPositions = () => [bot.entity?.position, ...Object.values(bot.players || {}).map(p => p.entity?.position)];
   // The builder walks away before each hand placement. Planning must not reject
   // its initial pose; the unchanged per-cell recheck includes it after walking.
@@ -1326,7 +1366,9 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   // Fresh ordinary builds are validated before even the setblock auth probe.
   // Saved resumes and deliberate aerial/skip-foundation requests retain their
   // established planner semantics; they are not automatic site selection.
-  if (automaticSite || (!savedState && name !== 'sky_bridge' && !bodyFlagEnabled(bodyArgs.skip_foundation, false))) {
+  // An explicit studio origin is checked cell by cell once the plan exists, so
+  // a second section can go up beside the first.
+  if (automaticSite || (!studio && !savedState && name !== 'sky_bridge' && !bodyFlagEnabled(bodyArgs.skip_foundation, false))) {
     const dimensions = schematicSiteDimensions(entry, data);
     const blockAt = (wx, wy, wz) => bot.blockAt(new Vec3(wx, wy, wz));
     const site = bodyArgs.auto_site
@@ -1342,7 +1384,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     baseZ = site.origin.z;
     if (bodyArgs.auto_site) {
       requestedBaseY = baseY;
-      buildId = `${name}-${baseX}-${requestedBaseY}-${baseZ}`;
+      buildId = `${buildName}-${baseX}-${requestedBaseY}-${baseZ}`;
       stateFile = buildStateFileForId(buildId);
     }
   }
@@ -1465,7 +1507,27 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       site_refused: true, site_code: site.code, site_reason: site.reason };
   }
 
-  const buildPlan = createLayeredPlan({ name, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
+  const buildPlan = createLayeredPlan({ name: buildName, blocks, origin: { x: baseX, y: baseY, z: baseZ } });
+  let studioOrder = null;
+  let studioAvoid = null;
+  if (studio) {
+    const cells = checkStudioCells(bot, buildPlan.placements, (wx, wy, wz, block) => blockAtMatches(bot, wx, wy, wz, block));
+    if (!cells.ok) return { result: `Couldn't start "${buildLabel}": ${cells.reason}. Nothing was built.`,
+      site_refused: true, site_code: cells.code, site_reason: cells.reason };
+    const planned = orderForHandPlacement(buildPlan.placements.map(p => [p.x, p.y, p.z, p]), (wx, wy, wz) => {
+      const standing = bot.blockAt(new Vec3(wx, wy, wz));
+      return Boolean(standing) && standing.boundingBox === 'block';
+    });
+    if (planned.floating.length) {
+      return { result: `Couldn't start "${buildLabel}": ${planned.floating.length} of its blocks would have nothing to rest against. Nothing was built.`,
+        site_refused: true, site_code: 'floating', site_reason: 'part of the design would float' };
+    }
+    studioOrder = planned.ordered.map(cell => cell[3]);
+    // No character parks in a cell that any section still has to fill.
+    studioAvoid = new Set(allBlocks.map(b => `${baseX + b[0]},${baseY + b[1]},${baseZ + b[2]}`));
+  }
+  const studioCenter = { x: baseX + fw / 2, z: baseZ + fl / 2 };
+  let studioFlew = false;
   let buildState = null;
   let placementsSinceSave = 0;
   const saveEveryN = bodyArgs.record_state === true ? 1 : BUILD_STATE_SAVE_EVERY_N;
@@ -1490,7 +1552,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     await saveBuildState(savedState, stateFile);
   }
   const resumingBuild = savedState?.build_id === buildId && savedState?.status !== 'done';
-  if ((bodyArgs.foreman === true || physicalBuild) && !resumingBuild) {
+  // A creative character draws each material as it needs it; there is no stock to count.
+  if ((bodyArgs.foreman === true || physicalBuild) && !resumingBuild && !studio) {
     const required = trustedSetblock
       ? {}
       : foremanBillOfMaterials(
@@ -1523,6 +1586,7 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   }
 
   bot._schematicBuildActive = true;
+  bot._studioBuildActive = studio;
   let placed = 0;
   let failed = 0;
   let unverified = 0;
@@ -1594,7 +1658,10 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     console.log(`[build_schematic] foundation phase: ${foundationPlaced}/${foundationPlacements.length} placed, ${foundationFailed} failed, ${foundationUnverified} unverified`);
   }
 
-  const sorted = buildState
+  const pendingIds = buildState ? new Set(pendingPlacements(buildPlan, buildState).map((p) => p.id)) : null;
+  const sorted = studioOrder
+    ? studioOrder.filter((p) => !pendingIds || pendingIds.has(p.id)).map((p) => [p.dx, p.dy, p.dz, p.block])
+    : buildState
     ? pendingPlacements(buildPlan, buildState).map((p) => [p.dx, p.dy, p.dz, p.block])
     : [...blocks].sort((a, b) => {
     if (a[1] !== b[1]) return a[1] - b[1];
@@ -1643,24 +1710,43 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
         }
         continue;
       }
-      const beforeWalk = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
-      const approach = beforeWalk.paused
-        ? { ok: false, reason: `Sentry Mode: ${beforeWalk.reason}` }
-        : await walkToPhysicalPlacement(bot, new Vec3(tx, ty, tz), stopGen);
-      let safe = approach.ok ? recheckCell() : approach;
-      if (safe.ok && sentryEnabled) {
-        const sentry = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
-        if (sentry.paused) safe = { ok: false, reason: `Sentry Mode: ${sentry.reason}` };
-      }
-      if (safe.ok && !skillWasStopped(bot, stopGen)) {
-        const phase = normalizeBlockBaseName(block) === 'campfire' ? 'fire' : dy;
-        if (phase !== announcedLayer) {
-          bot.chat(phase === 'fire' ? "I'm adding the fire now." : "I'm placing this layer by hand.");
-          announcedLayer = phase;
+      const target = new Vec3(tx, ty, tz);
+      const triedStances = new Set();
+      let safe;
+      for (let attempts = 0, waits = 0; ;) {
+        // A studio retry may find that the earlier attempt landed after all.
+        if (studio && attempts + waits > 0 && blockAtMatches(bot, tx, ty, tz, block)) { safe = { ok: true }; break; }
+        const beforeWalk = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
+        let approach;
+        if (beforeWalk.paused) approach = { ok: false, reason: `Sentry Mode: ${beforeWalk.reason}` };
+        else if (studio) {
+          studioFlew = true;
+          approach = await flyToPhysicalPlacement(bot, target, { stopped: () => skillWasStopped(bot, stopGen),
+            avoid: studioAvoid, center: studioCenter, skip: triedStances,
+            log: (event, details) => logPhysicalBuild(bot, event, details) });
+        } else approach = await walkToPhysicalPlacement(bot, target, stopGen);
+        safe = approach.ok ? recheckCell() : approach;
+        if (safe.ok && sentryEnabled) {
+          const sentry = await waitWhileSentryRequired(bot, { maxPauseMs: 8000, checkIntervalMs: 1000 });
+          if (sentry.paused) safe = { ok: false, reason: `Sentry Mode: ${sentry.reason}` };
         }
-        safe = await placeOne(bot, normalizeBlockBaseName(block), tx, ty, tz, false,
-          { physical: true, stopGen, expected: block, recheck: recheckCell, approached: true });
-      } else if (safe.ok) safe = { ok: false, reason: 'interrupted before hand placement' };
+        if (safe.ok && !skillWasStopped(bot, stopGen)) {
+          const phase = studio ? 'studio' : normalizeBlockBaseName(block) === 'campfire' ? 'fire' : dy;
+          if (phase !== announcedLayer) {
+            bot.chat(studio ? `I'm building the ${buildLabel} by hand.`
+              : phase === 'fire' ? "I'm adding the fire now." : "I'm placing this layer by hand.");
+            announcedLayer = phase;
+          }
+          safe = await placeOne(bot, normalizeBlockBaseName(block), tx, ty, tz, false,
+            { physical: true, stopGen, expected: block, recheck: recheckCell, approached: true });
+        } else if (safe.ok) safe = { ok: false, reason: 'interrupted before hand placement' };
+        if (safe.ok || !studio || skillWasStopped(bot, stopGen)) break;
+        const waiting = safe.code === 'occupied_player';
+        if (waiting ? ++waits >= STUDIO_ACTOR_WAITS : ++attempts >= STUDIO_PLACE_ATTEMPTS) break;
+        if (!waiting && approach.stance) triedStances.add(approach.stance);
+        logPhysicalBuild(bot, 'retry', { target, attempts, waits, reason: safe.reason });
+        await sleep(waiting ? 1000 : 250);
+      }
       if (!safe.ok) {
         if (buildState) {
           buildState.status = 'partial';
@@ -1830,7 +1916,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
       + `${foundationUnverified > 0 ? `, ${foundationUnverified} unverified` : ''}`
       + `${foundationPlaced > 0 ? ` (depth ${foundationStats?.maxDepth || '?'})` : ''}.`
     : '';
-  const mode = useChatCommand ? ' via /setblock (op)' : ' via physical placement';
+  const mode = useChatCommand ? ' via /setblock (op)'
+    : `${studio ? ' via physical placement (flight)' : ' via physical placement'}${section ? `, section ${section}` : ''}`;
   const total = buildPlan.totalBlocks;
   const placedCount = totalPlacedSoFar();
   if (placedCount === total && total > 0) {
@@ -1852,8 +1939,14 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
     result: `Built ${placedCount}/${total} of "${name}" at ${baseX},${baseY},${baseZ}${mode}.${foundationStr}${missingStr}${unverifiedStr}`,
   };
   } finally {
+    if (studioFlew) {
+      await landBesideBuild(bot, { origin: { x: baseX, y: baseY, z: baseZ }, footprint: [fw, fl] },
+        { stopped: () => skillWasStopped(bot, stopGen) });
+    }
+    if (studio) await clearStudioStock(bot, normalizeBlockBaseName);
     if (buildMovements && bot.pathfinder.movements === buildMovements) bot.pathfinder.setMovements(originalMovements);
     if (autoEatWasEnabled) bot.autoEat.enableAuto();
+    bot._studioBuildActive = false;
     bot._schematicBuildActive = false;
   }
 }

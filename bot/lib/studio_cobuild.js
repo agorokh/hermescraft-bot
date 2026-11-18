@@ -39,6 +39,7 @@ export const STUDIO_COBUILD_DEFAULTS = Object.freeze({
   watchMs: 1000,          // a building character looks for the cancel marker this often
   planTtlMs: 45 * 60 * 1000,
   joinRadius: 96,         // blocks from the site: farther characters do not join
+  answerRadius: 32,       // a player other than the plan's child must be this near to answer an offer
   siteGap: 6,             // blocks between the child and the near face of the build
 });
 
@@ -146,15 +147,62 @@ export function planState(dir, plan) {
   };
 }
 
-/** A plan somebody may still be working on. */
-export function planIsLive(dir, plan, now = Date.now(), ttlMs = STUDIO_COBUILD_DEFAULTS.planTtlMs) {
-  if (!plan || now - plan.created_at > ttlMs) return false;
-  const state = planState(dir, plan);
-  if (state.cancelled || state.closed) return false;
-  return state.open.length > 0 || state.building.length > 0;
+/** When the plan last moved: its creation, or the newest claim / done marker. */
+function lastActivity(dir, plan) {
+  let latest = plan.created_at;
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return latest; }
+  for (const name of names) {
+    if (!name.startsWith(`${plan.id}.`) || !/\.(?:claim|done)$/.test(name)) continue;
+    try { latest = Math.max(latest, fs.statSync(path.join(dir, name)).mtimeMs); } catch { /* removed meanwhile */ }
+  }
+  return latest;
 }
 
-/** Replace whatever plan was there with a new one. False when another character got there first. */
+/**
+ * A plan somebody may still be working on. The time limit runs from the last
+ * claim or finished section, not from the start: a long co-build stays live,
+ * while a section claimed by a process that died stops blocking new requests.
+ */
+export function planIsLive(dir, plan, now = Date.now(), ttlMs = STUDIO_COBUILD_DEFAULTS.planTtlMs) {
+  if (!plan) return false;
+  const state = planState(dir, plan);
+  if (state.cancelled || state.closed) return false;
+  if (state.open.length === 0 && state.building.length === 0) return false;
+  return now - lastActivity(dir, plan) <= ttlMs;
+}
+
+/**
+ * Run `fn` while holding the directory's start lock, so "is a plan live?" and
+ * "replace it" are one step across processes. Null when another character
+ * holds the lock.
+ */
+export function withStartLock(dir, who, fn, now = Date.now(), ttlMs = 10000) {
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'start.lock');
+  if (!createExclusive(file, { by: who, at: now })) {
+    const held = readJson(file);
+    let at = held?.at;
+    if (!Number.isFinite(at)) {
+      try { at = fs.statSync(file).mtimeMs; } catch { return null; }
+    }
+    // A lock this old belonged to a process that died inside it.
+    if (now - at > ttlMs) {
+      try { fs.unlinkSync(file); } catch { /* another character removed it */ }
+    }
+    return null;
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.unlinkSync(file); } catch { /* already gone */ }
+  }
+}
+
+/**
+ * Replace whatever plan was there with a new one. Call it inside withStartLock,
+ * after checking that the old plan is not live. False when the file exists.
+ */
 export function writeNewPlan(dir, plan) {
   fs.mkdirSync(dir, { recursive: true });
   for (const name of fs.readdirSync(dir)) {
@@ -237,10 +285,11 @@ export function createStudioCoBuild({ bot, actions, log = () => {}, isBusy = () 
     try { bot.chat(text); } catch { /* chat can fail while reconnecting */ }
   };
 
-  function waitForAnswer(stopped) {
+  function waitForAnswer(stopped, child) {
     return new Promise((resolve) => {
       const started = Date.now();
       const offer = {
+        child,
         finish(answer) {
           if (pendingOffer !== offer) return;
           pendingOffer = null;
@@ -256,13 +305,40 @@ export function createStudioCoBuild({ bot, actions, log = () => {}, isBusy = () 
     });
   }
 
-  /** Feed every chat line here. True when the line answered this character's open offer. */
+  const sameName = (a, b) => String(a ?? '').toLowerCase().replace(/^\./, '') === String(b ?? '').toLowerCase().replace(/^\./, '');
+
+  /**
+   * Who may answer an offer: the child the plan is for, or a player standing
+   * near this character. Chat is server-wide, so "ok" from another world must
+   * not take a leg.
+   */
+  function mayAnswer(username, child) {
+    if (!username || isCompanionSpeaker(username, bot.username)) return false;
+    if (child && sameName(username, child)) return true;
+    const entity = findPlayerEntity(bot, username);
+    return Boolean(entity?.position && bot.entity?.position
+      && entity.position.distanceTo(bot.entity.position) <= cfg.answerRadius);
+  }
+
+  /**
+   * Feed every chat line here. True when the line answers an open offer: this
+   * character's own (it then acts on it), or another character's (the line is
+   * then not this character's to route or hand to the brain).
+   */
   function onChat(username, message) {
-    if (!pendingOffer || !username || isCompanionSpeaker(username, bot.username)) return false;
     const kind = classifyStudioAnswer(message);
     if (!kind) return false;
-    pendingOffer.finish({ kind, from: username });
-    return true;
+    if (pendingOffer) {
+      if (!mayAnswer(username, pendingOffer.child)) return false;
+      pendingOffer.finish({ kind, from: username });
+      return true;
+    }
+    if (!studioFlightEnabled(bot)) return false;
+    const plan = readPlan(planDir);
+    if (!plan || !planIsLive(planDir, plan, Date.now(), cfg.planTtlMs)) return false;
+    const offer = readJson(marker(planDir, plan, 'offer'));
+    if (!offer || !Number.isFinite(offer.at) || Date.now() - offer.at > cfg.offerLockTtlMs) return false;
+    return mayAnswer(username, plan.child);
   }
 
   function sayClosingOnce(plan) {
@@ -305,7 +381,7 @@ export function createStudioCoBuild({ bot, actions, log = () => {}, isBusy = () 
             // Another character may have taken it while this one waited its turn to ask.
             if (planState(planDir, plan).claims.has(section.name)) continue;
             say(`Next: the ${section.label}. Want to build it yourself? Say "mine"!`);
-            const answer = await waitForAnswer(halted);
+            const answer = await waitForAnswer(halted, plan.child);
             if (answer.kind === 'stopped') continue;
             if (answer.kind === 'mine') {
               if (claimSection(planDir, plan, section.name, answer.from, true)) say(`The ${section.label} is yours!`);
@@ -369,11 +445,12 @@ export function createStudioCoBuild({ bot, actions, log = () => {}, isBusy = () 
       say(`I can only build the ${label} in the creative world.`);
       return { result: `Studio co-build ${design} declined: this is not a creative studio session.` };
     }
-    const existing = readPlan(planDir);
-    if (active || (existing && planIsLive(planDir, existing, Date.now(), cfg.planTtlMs))) {
-      say(`We're already building the ${existing?.label || label}. Come and help!`);
+    const alreadyBuilding = (plan) => {
+      say(`We're already building the ${plan?.label || label}. Come and help!`);
       return { result: `Studio co-build ${design} declined: a plan is already under way.` };
-    }
+    };
+    const before = readPlan(planDir);
+    if (active || (before && planIsLive(planDir, before, Date.now(), cfg.planTtlMs))) return alreadyBuilding(before);
     const loaded = loadDesignFn(design);
     if (!loaded) return { error: `Studio design "${design}" has no sections.` };
     const anchor = findPlayerEntity(bot, player)?.position || bot.entity?.position;
@@ -389,10 +466,14 @@ export function createStudioCoBuild({ bot, actions, log = () => {}, isBusy = () 
       created_at: Date.now(),
       sections: loaded.sections,
     };
-    if (!writeNewPlan(planDir, plan)) {
-      say(`We're already building the ${label}. Come and help!`);
-      return { result: `Studio co-build ${design} declined: another character started the plan.` };
-    }
+    // Check and replace under one lock: two characters asked in the same moment
+    // must not each delete the other's plan and both start one.
+    const written = withStartLock(planDir, bot.username, () => {
+      const current = readPlan(planDir);
+      if (current && planIsLive(planDir, current, Date.now(), cfg.planTtlMs)) return { live: current };
+      return writeNewPlan(planDir, plan) ? { ok: true } : { live: readPlan(planDir) };
+    });
+    if (!written?.ok) return alreadyBuilding(written?.live || readPlan(planDir));
     log(`[studio] ${bot.username} leads ${design} at ${plan.origin.x},${plan.origin.y},${plan.origin.z} for ${player || 'nobody'}`);
     say(`Yes! The ${label}. We build it by hand, one part at a time.`);
     return run(plan, 'lead');
@@ -400,14 +481,21 @@ export function createStudioCoBuild({ bot, actions, log = () => {}, isBusy = () 
 
   /** Let an idle character join a plan another character started. Returns a teardown. */
   function install() {
-    const timer = setInterval(() => {
-      if (active || !bot.entity || !studioFlightEnabled(bot) || isBusy()) return;
+    // A live plan at this character's site, or null.
+    const planHere = () => {
+      if (!bot.entity || !studioFlightEnabled(bot)) return null;
       const plan = readPlan(planDir);
-      if (!plan || !planIsLive(planDir, plan, Date.now(), cfg.planTtlMs)) return;
+      if (!plan || !planIsLive(planDir, plan, Date.now(), cfg.planTtlMs)) return null;
       const here = currentWorldName(bot);
-      if (plan.world && here && plan.world !== here) return;
+      if (plan.world && here && plan.world !== here) return null;
       const origin = new Vec3(plan.origin.x, plan.origin.y, plan.origin.z);
-      if (bot.entity.position.distanceTo(origin) > cfg.joinRadius) return;
+      return bot.entity.position.distanceTo(origin) <= cfg.joinRadius ? plan : null;
+    };
+    const timer = setInterval(() => {
+      const plan = planHere();
+      // A character whose own legs are done stays quiet until the others finish theirs.
+      bot._studioPlanNearby = Boolean(plan);
+      if (!plan || active || isBusy()) return;
       const state = planState(planDir, plan);
       if (!pickSection(plan, state, bot.username, 'helper')) return;
       run(plan, plan.lead === bot.username ? 'lead' : 'helper')
@@ -416,6 +504,7 @@ export function createStudioCoBuild({ bot, actions, log = () => {}, isBusy = () 
     }, cfg.joinTickMs);
     return () => {
       clearInterval(timer);
+      bot._studioPlanNearby = false;
       tornDown = true;
       if (pendingOffer) pendingOffer.finish({ kind: 'stopped' });
     };

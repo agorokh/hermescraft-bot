@@ -984,10 +984,11 @@ async function handleIntentRouterActionResult({ username, route, result, channel
 }
 
 async function handleChat(username, message) {
-  // "mine" / "you do it" while this character has a studio section on offer
-  // is the answer to that offer, not a line for the router or the brain.
+  // "mine" / "you do it" while a studio section is on offer (by this character
+  // or by another one) is the answer to that offer, not a line for the router
+  // or the brain.
   if (_studio?.onChat(username, message)) {
-    log(`[Studio] <${username}> answered the open offer: ${String(message).slice(0, 60)}`);
+    log(`[Studio] <${username}> answered an open offer: ${String(message).slice(0, 60)}`);
     return;
   }
   const knownNames = buildKnownNames(getMyName(), getNearbyPlayerNames());

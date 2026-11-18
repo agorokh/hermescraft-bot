@@ -186,7 +186,7 @@ export function installBarksAndPresence(bot, opts = {}) {
     if (stopped || !bot || !bot.entity) return;
     // A studio co-build has its own lines (offers, one per part); "should make
     // more tools" in the middle of a tower is noise (hermescraft#592).
-    if (bot._studioPlanActive) return;
+    if (bot._studioPlanActive || bot._studioPlanNearby) return;
     const np = nearestPlayer(bot, PLAYER_PROXIMITY);
     if (!np) return; // only bark when a kid is around — silence in empty world saves tokens
     // Bias: 70% environmental, 30% self

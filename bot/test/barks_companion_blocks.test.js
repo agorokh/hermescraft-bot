@@ -61,6 +61,10 @@ test('no idle remark while a studio co-build is under way', (t) => {
   t.mock.timers.tick(15_000);
   assert.deepEqual(bot.lines, []);
   bot._studioPlanActive = false;
+  bot._studioPlanNearby = true; // its own legs are done, the other character is still building
+  t.mock.timers.tick(15_000);
+  assert.deepEqual(bot.lines, []);
+  bot._studioPlanNearby = false;
   t.mock.timers.tick(15_000);
   assert.equal(bot.lines.length, 1, 'idle remarks resume afterwards');
 });

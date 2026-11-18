@@ -7,12 +7,15 @@ import path from 'node:path';
 import { Vec3 } from 'vec3';
 import {
   adaptStudioRoute,
+  claimSection,
   classifyStudioAnswer,
   createStudioCoBuild,
   planIsLive,
   planState,
   readPlan,
   studioSiteFor,
+  withStartLock,
+  writeNewPlan,
 } from '../lib/studio_cobuild.js';
 
 const TIMING = { offerMs: 60, pollMs: 5, joinTickMs: 10, watchMs: 10 };
@@ -200,6 +203,8 @@ test('two characters split the legs from opposite ends and build each exactly on
   }
   const closing = [...rosie.lines, ...steve.lines].filter(l => l === 'The Eiffel Tower is finished!');
   assert.equal(closing.length, 1, 'one closing line between them');
+  await sleep(3 * TIMING.joinTickMs);
+  assert.equal(steve._studioPlanNearby, false, 'the quiet flag clears once the plan is finished');
 });
 
 test('a second request while a plan is under way does not start a second tower', { timeout: 20000 }, async (t) => {
@@ -278,4 +283,100 @@ test('a character that reconnects finishes the leg it had claimed without asking
   assert.deepEqual(built.map(b => b.section), ['leg_ne', 'leg_ne', 'leg_se', 'leg_sw', 'leg_nw']);
   assert.equal(again.lines.filter(l => l.includes('north-east leg')).length, 0, 'no second offer for its own leg');
   assert.equal(again.lines.at(-1), 'The Eiffel Tower is finished!');
+});
+
+const DESIGN = {
+  footprint: [16, 16],
+  sections: [
+    { name: 'leg_ne', label: 'north-east leg' }, { name: 'leg_se', label: 'south-east leg' },
+    { name: 'leg_sw', label: 'south-west leg' }, { name: 'leg_nw', label: 'north-west leg' },
+  ],
+};
+
+test('the start lock admits one holder and clears a dead one', (t) => {
+  const dir = studioEnv(t);
+  let inner = 'unset';
+  const outer = withStartLock(dir, 'Rosie', () => {
+    inner = withStartLock(dir, 'Steve', () => 'second');
+    return 'first';
+  });
+  assert.equal(outer, 'first');
+  assert.equal(inner, null, 'a second character cannot enter while the first is inside');
+  assert.equal(withStartLock(dir, 'Steve', () => 'free again'), 'free again');
+  fs.writeFileSync(path.join(dir, 'start.lock'), JSON.stringify({ by: 'Rosie', at: Date.now() - 60000 }));
+  assert.equal(withStartLock(dir, 'Steve', () => 'too soon'), null, 'a dead lock is cleared, not entered, on this call');
+  assert.equal(withStartLock(dir, 'Steve', () => 'entered'), 'entered');
+});
+
+test('two characters asked in the same moment start one plan, not two', { timeout: 20000 }, async (t) => {
+  const dir = studioEnv(t);
+  const rosie = character('Rosie');
+  const steve = character('Steve');
+  const built = [];
+  const lead = createStudioCoBuild({ bot: rosie, actions: builder(rosie, built), dir, timing: TIMING });
+  let racing = null;
+  // Steve has already seen "no plan" when Rosie's plan lands: the gap the lock closes.
+  const late = createStudioCoBuild({ bot: steve, actions: builder(steve, built), dir, timing: TIMING,
+    loadDesignFn: () => { racing = lead.start({ name: 'eiffel_tower', player: 'Kid' }); return DESIGN; } });
+  const result = await late.start({ name: 'eiffel_tower', player: 'Kid' });
+  assert.match(result.result, /already under way/);
+  assert.deepEqual(steve.lines, ["We're already building the Eiffel Tower. Come and help!"]);
+  assert.equal(readPlan(dir).lead, 'Rosie', "Rosie's plan was not deleted and replaced");
+  await racing;
+  assert.deepEqual(built.map(b => `${b.by} ${b.section}`),
+    ['Rosie leg_ne', 'Rosie leg_se', 'Rosie leg_sw', 'Rosie leg_nw']);
+});
+
+test("an answer counts from the plan's child or a player standing near, not from across the server", { timeout: 20000 }, async (t) => {
+  const dir = studioEnv(t);
+  const bot = character('Rosie');
+  bot.players.Sibling = { entity: { username: 'Sibling', type: 'player', position: new Vec3(5.5, 64, 0.5) } };
+  bot.players.Faraway = { entity: null }; // in another world: on the player list, no body here
+  const built = [];
+  const studio = createStudioCoBuild({ bot, actions: builder(bot, built), dir, timing: TIMING });
+  const seen = {};
+  bot.onLine = (text) => {
+    if (text.startsWith('Next: the north-east leg')) {
+      seen.faraway = studio.onChat('Faraway', 'ok');
+      seen.stranger = studio.onChat('Stranger', 'mine');
+    }
+    if (text.startsWith('Next: the south-east leg')) setTimeout(() => { seen.sibling = studio.onChat('Sibling', 'mine'); }, 5);
+  };
+  await studio.start({ name: 'eiffel_tower', player: 'Kid' });
+  assert.deepEqual(seen, { faraway: false, stranger: false, sibling: true });
+  assert.deepEqual(built.map(b => b.section), ['leg_ne', 'leg_sw', 'leg_nw']);
+  assert.equal(planState(dir, readPlan(dir)).claims.get('leg_se').by, 'Sibling');
+});
+
+test("a character that is not offering keeps the answer to another character's offer away from its router", { timeout: 20000 }, async (t) => {
+  const dir = studioEnv(t);
+  const rosie = character('Rosie');
+  const steve = character('Steve');
+  const lead = createStudioCoBuild({ bot: rosie, actions: builder(rosie, []), dir, timing: TIMING });
+  const other = createStudioCoBuild({ bot: steve, actions: builder(steve, []), dir, timing: TIMING });
+  assert.equal(other.onChat('Kid', 'mine'), false, 'no plan, so the line is ordinary chat');
+  const seen = {};
+  rosie.onLine = (text) => {
+    if (!text.startsWith('Next: the north-east leg')) return;
+    seen.answer = other.onChat('Kid', 'you do it');
+    seen.chatter = other.onChat('Kid', 'look at that lantern');
+    seen.companion = other.onChat('Rosie', 'mine');
+  };
+  await lead.start({ name: 'eiffel_tower', player: 'Kid' });
+  assert.deepEqual(seen, { answer: true, chatter: false, companion: false });
+  assert.deepEqual(steve.lines, [], 'it says nothing and takes nothing');
+  assert.equal(other.onChat('Kid', 'mine'), false, 'the plan is finished, so the line is ordinary chat again');
+});
+
+test('a plan stays live while it keeps moving, and stops blocking once its last step is old', (t) => {
+  const dir = studioEnv(t);
+  const old = Date.now() - 2 * 60 * 60 * 1000;
+  const plan = { id: String(old), design: 'eiffel_tower', label: 'Eiffel Tower', origin: { x: 0, y: 64, z: 0 },
+    world: null, child: 'Kid', lead: 'Rosie', created_at: old, sections: DESIGN.sections.slice(0, 2) };
+  assert.equal(writeNewPlan(dir, plan), true);
+  assert.equal(planIsLive(dir, plan), false, 'nothing has moved for two hours');
+  assert.equal(claimSection(dir, plan, 'leg_ne', 'Rosie'), true);
+  assert.equal(planIsLive(dir, plan), true, 'a long co-build whose section was claimed just now is live');
+  fs.utimesSync(path.join(dir, `${plan.id}.leg_ne.claim`), old / 1000, old / 1000);
+  assert.equal(planIsLive(dir, plan), false, 'a claim left by a process that died long ago no longer blocks');
 });

@@ -73,6 +73,11 @@ The server log for those sessions has no command, teleport, kick or movement-rej
   "mine" (or "me", "yes") leaves that leg to the child; "you do it" starts it at once.
 - The character that was asked takes legs from the start of the list, the other from the far
   end. Only one offer is open at a time, so "mine" always means one leg.
+- An answer counts from the child who asked, or from a player standing within 32 blocks of the
+  offering character. Chat is server-wide; "ok" from another world takes nothing.
+- Two requests in the same moment start one plan: the check and the new plan file are written
+  under one lock. A plan stops blocking new requests 45 minutes after its last claimed or
+  finished leg.
 - "Rosie stop" stops both characters. A character that reconnects finishes the leg it had begun.
 - While a plan runs the characters make no idle remarks, and a character never reacts to a block
   that it or another character placed.

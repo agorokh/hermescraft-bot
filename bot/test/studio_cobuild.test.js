@@ -73,13 +73,18 @@ function builder(bot, log, { ms = 15, fail = null } = {}) {
 }
 
 test('short answers to an open offer', () => {
-  for (const line of ['mine', 'Mine!', 'me', 'yes', 'ok', 'i want it', "i'll do it", 'let me', 'Rosie: mine', 'yes, me']) {
+  for (const line of ['mine', 'Mine!', 'me', 'yes', 'ok mine', 'i want it', "i'll do it", 'let me', 'Rosie: mine', 'yes, me',
+    'can i do it', 'no, me', 'my turn', 'i want that one']) {
     assert.equal(classifyStudioAnswer(line), 'mine', line);
   }
-  for (const line of ['no', 'nah', 'you do it', 'no you', 'go ahead', 'Rosie, you build it', 'ok you do it']) {
+  for (const line of ['no', 'nah', 'you do it', 'no you', 'go ahead', 'Rosie, you build it', 'ok you do it',
+    'do it', 'no thanks', 'can you do it', 'u do it', 'i want you to do it']) {
     assert.equal(classifyStudioAnswer(line), 'yours', line);
   }
-  for (const line of ['', 'stop', 'Rosie stop', 'wait', 'what is that', 'look at the lantern on top',
+  // Ordinary chat that happens to carry an answer word is not an answer.
+  for (const line of ['', 'stop', 'Rosie stop', 'wait', 'wait for me', 'what is that', 'look at the lantern on top',
+    'look at me', 'excuse me', 'what are u doing', 'you are funny', 'is it tall', 'not me', 'ok stop',
+    'ok', 'okay', 'sure', // could mean either answer: the offer runs out and the character builds
     'can you make it a lot taller than the last one please']) {
     assert.equal(classifyStudioAnswer(line), null, line);
   }
@@ -304,8 +309,19 @@ test('the start lock admits one holder and clears a dead one', (t) => {
   assert.equal(inner, null, 'a second character cannot enter while the first is inside');
   assert.equal(withStartLock(dir, 'Steve', () => 'free again'), 'free again');
   fs.writeFileSync(path.join(dir, 'start.lock'), JSON.stringify({ by: 'Rosie', at: Date.now() - 60000 }));
-  assert.equal(withStartLock(dir, 'Steve', () => 'too soon'), null, 'a dead lock is cleared, not entered, on this call');
-  assert.equal(withStartLock(dir, 'Steve', () => 'entered'), 'entered');
+  assert.equal(withStartLock(dir, 'Steve', () => 'entered'), 'entered', 'a dead lock is cleared and taken on the same call');
+  assert.equal(fs.existsSync(path.join(dir, 'start.lock')), false, 'and released afterwards');
+});
+
+test('a lock left by a dead process does not turn the next request away', { timeout: 20000 }, async (t) => {
+  const dir = studioEnv(t);
+  fs.writeFileSync(path.join(dir, 'start.lock'), JSON.stringify({ by: 'Steve', at: Date.now() - 60000 }));
+  const bot = character('Rosie');
+  const built = [];
+  const studio = createStudioCoBuild({ bot, actions: builder(bot, built), dir, timing: TIMING });
+  await studio.start({ name: 'eiffel_tower', player: 'Kid' });
+  assert.equal(bot.lines[0], 'Yes! The Eiffel Tower. We build it by hand, one part at a time.');
+  assert.equal(built.length, 4);
 });
 
 test('two characters asked in the same moment start one plan, not two', { timeout: 20000 }, async (t) => {
@@ -337,7 +353,7 @@ test("an answer counts from the plan's child or a player standing near, not from
   const seen = {};
   bot.onLine = (text) => {
     if (text.startsWith('Next: the north-east leg')) {
-      seen.faraway = studio.onChat('Faraway', 'ok');
+      seen.faraway = studio.onChat('Faraway', 'mine');
       seen.stranger = studio.onChat('Stranger', 'mine');
     }
     if (text.startsWith('Next: the south-east leg')) setTimeout(() => { seen.sibling = studio.onChat('Sibling', 'mine'); }, 5);

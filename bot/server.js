@@ -1530,6 +1530,9 @@ async function createBot() {
           isKidTaskActive: () => !!(
             bot.interrupt_code
             || bot._schematicBuildActive
+            // Between two legs of a studio co-build the character is offering
+            // the next one; a helper's run is not a currentTask (hermescraft#592).
+            || bot._studioPlanActive
             || currentTask?.status === 'running'
             || (bot._hc_intent_action_depth || 0) > 0
           ),

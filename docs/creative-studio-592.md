@@ -71,6 +71,8 @@ The server log for those sessions has no command, teleport, kick or movement-rej
   file, and both characters work through the legs. Before each leg a character asks
   `Next: the north-east leg. Want to build it yourself? Say "mine"!` and waits 8 seconds.
   "mine" (or "me", "yes") leaves that leg to the child; "you do it" starts it at once.
+  Only a line that is nothing but an answer counts: "look at me" is ordinary chat, and a bare
+  "ok" is left to run out, so the character builds.
 - The character that was asked takes legs from the start of the list, the other from the far
   end. Only one offer is open at a time, so "mine" always means one leg.
 - An answer counts from the child who asked, or from a player standing within 32 blocks of the

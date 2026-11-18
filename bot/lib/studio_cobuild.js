@@ -68,14 +68,36 @@ export function classifyStudioAnswer(text) {
     .replace(/[^a-z' ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!line || line.split(' ').length > 6) return null;
-  if (/\b(?:stop|cancel|wait|quit|nvm|never ?mind)\b/.test(line)) return null;
-  if (/\b(?:no|nope|nah|you|u|yours|go ahead|go on)\b/.test(line)) return 'yours';
-  if (/\b(?:mine|me|yes|yeah|yep|yup|ok|okay|sure|i will|i'll|ill|i want|i wanna|let me|my turn|i can|i got it|myself)\b/.test(line)) {
-    return 'mine';
-  }
+  const words = line ? line.split(' ') : [];
+  if (words.length === 0 || words.length > 6) return null;
+  // The whole line has to be an answer. "look at me", "excuse me" and "what
+  // are u doing" carry an answer word but are ordinary chat: one word outside
+  // the answer vocabulary makes the line not an answer.
+  if (!words.every(word => ANSWER_WORDS.has(word))) return null;
+  const has = set => words.some(word => set.has(word));
+  if (has(ANSWER_YOU)) return 'yours';
+  if (has(ANSWER_ME)) return 'mine';
+  if (has(ANSWER_NO)) return 'yours';
+  if (has(ANSWER_YES)) return 'mine';
+  // "go ahead", "do it", "build it"
+  if (words.includes('ahead') || (words.includes('it') && (words.includes('do') || words.includes('build')))) return 'yours';
   return null;
 }
+
+const ANSWER_YOU = new Set(['you', 'u', 'yours']);
+const ANSWER_ME = new Set(['mine', 'me', 'myself', 'i', "i'll", 'ill', 'my']);
+const ANSWER_NO = new Set(['no', 'nope', 'nah']);
+const ANSWER_YES = new Set(['yes', 'yeah', 'yep', 'yup']);
+// Words that may surround an answer word without changing what the line is.
+// "stop", "wait" and "cancel" are deliberately absent: those lines are never answers.
+// A bare "ok" could mean either answer, so it is only filler: the offer then
+// runs out and the character builds the section, which a child can watch,
+// rather than leaving her a leg she did not ask for.
+const ANSWER_WORDS = new Set([
+  ...ANSWER_YOU, ...ANSWER_ME, ...ANSWER_NO, ...ANSWER_YES,
+  'ok', 'okay', 'sure', 'please', 'pls', 'thanks', 'it', 'its', "it's", 'is', 'do', 'build', 'can', 'will', 'want', 'wanna',
+  'to', 'that', 'this', 'one', 'the', 'leg', 'let', 'turn', 'got', 'go', 'ahead', 'on', 'take', 'have',
+]);
 
 /** Where the design goes: on the ground, a few blocks east of the child, centred on them. */
 export function studioSiteFor(bot, anchor, footprint, gap = STUDIO_COBUILD_DEFAULTS.siteGap) {
@@ -186,11 +208,11 @@ export function withStartLock(dir, who, fn, now = Date.now(), ttlMs = 10000) {
     if (!Number.isFinite(at)) {
       try { at = fs.statSync(file).mtimeMs; } catch { return null; }
     }
-    // A lock this old belonged to a process that died inside it.
-    if (now - at > ttlMs) {
-      try { fs.unlinkSync(file); } catch { /* another character removed it */ }
-    }
-    return null;
+    if (now - at <= ttlMs) return null;
+    // A lock this old belonged to a process that died inside it: clear it and
+    // take it now, so the request that found it is not turned away.
+    try { fs.unlinkSync(file); } catch { /* another character removed it */ }
+    if (!createExclusive(file, { by: who, at: now })) return null;
   }
   try {
     return fn();

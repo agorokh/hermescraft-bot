@@ -445,18 +445,28 @@ export function buildRequestContract(body, opts = {}) {
 
     const prefixWords = prefix.split(/\s+/).filter(Boolean);
     const framed = prefixWords.every((w) => REQUEST_FRAME_WORDS.has(w) || names.has(w));
+    // The object a "like ..." comparison describes: the one right before it.
+    let compared = null;
     for (const obj of parseObjects(tokens)) {
       const result = checkObject(obj, names);
       if (result.status === 'unsupported') return { ...result, framed };
-      if (result.status !== 'supported') continue;
       if (obj.compare) {
-        if (LANDMARK_SCHEMATICS.has(result.schematic)) firstSupported = { ...result, framed };
+        // "a tower like the eiffel tower" is the landmark. It replaces only
+        // the object it describes: in "a house and a tower like the eiffel
+        // tower" the house, named first, is still what gets built.
+        if (result.status === 'supported' && LANDMARK_SCHEMATICS.has(result.schematic)
+          && (!firstSupported || firstSupported.source === compared)) {
+          firstSupported = { ...result, framed, source: obj };
+        }
         continue;
       }
-      if (!firstSupported) firstSupported = { ...result, framed };
+      compared = obj;
+      if (result.status === 'supported' && !firstSupported) firstSupported = { ...result, framed, source: obj };
     }
   }
-  return firstSupported || { status: 'none' };
+  if (!firstSupported) return { status: 'none' };
+  const { source: _source, ...contract } = firstSupported;
+  return contract;
 }
 
 const DISPLAY_NAMES = {

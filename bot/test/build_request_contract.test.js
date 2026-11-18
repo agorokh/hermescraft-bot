@@ -190,6 +190,10 @@ test('the Eiffel Tower is a library structure, however a child spells it (#592)'
   assert.equal(buildRequestContract('build the eiffel tower and a moat').status, 'unsupported');
   assert.equal(buildRequestContract('build a tower').capability, 'tower');
   assert.equal(buildRequestContract('build a tower like the castle').schematic ?? null, null);
+  // The comparison replaces only the object it describes, never one named earlier.
+  assert.equal(buildRequestContract('build a house and a tower like the eiffel tower').schematic, 'small_house');
+  assert.equal(buildRequestContract('build something like the eiffel tower').schematic, 'eiffel_tower');
+  assert.deepEqual(Object.keys(buildRequestContract('build a tower like the eiffel tower')).includes('source'), false);
 });
 
 test('the companion name may trail the object', () => {

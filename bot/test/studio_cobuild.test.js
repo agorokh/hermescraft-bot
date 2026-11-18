@@ -290,6 +290,19 @@ test('a character that reconnects finishes the leg it had claimed without asking
   assert.equal(again.lines.at(-1), 'The Eiffel Tower is finished!');
 });
 
+test('a character whose connection ended does not start a plan', async (t) => {
+  const dir = studioEnv(t);
+  const bot = character('Rosie');
+  const built = [];
+  const studio = createStudioCoBuild({ bot, actions: builder(bot, built), dir, timing: TIMING });
+  studio.install()(); // installed, then the connection ended
+  const result = await studio.start({ name: 'eiffel_tower', player: 'Kid' });
+  assert.match(result.error, /not connected/);
+  assert.deepEqual(bot.lines, []);
+  assert.deepEqual(built, []);
+  assert.equal(readPlan(dir), null);
+});
+
 const DESIGN = {
   footprint: [16, 16],
   sections: [

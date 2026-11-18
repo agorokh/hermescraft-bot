@@ -215,6 +215,19 @@ let _follow_owner = null; // the bot object the installed follower belongs to
 let _studio = null; // creative-studio co-build of the current bot (hermescraft#592)
 let _studio_tear_down = null;
 let _studio_owner = null;
+
+// Stop the studio co-build of a bot that is going away, and take its action
+// out of the registry: studio_build must not run on a body that has left. With
+// `owner`, only that bot's co-build is torn down (a late 'end' from a replaced
+// bot must not remove the new bot's). The next spawn registers a fresh one.
+function tearDownStudio(owner = null) {
+  if (!_studio_tear_down || (owner && _studio_owner !== owner)) return;
+  try { _studio_tear_down(); } catch {}
+  _studio_tear_down = null;
+  _studio = null;
+  _studio_owner = null;
+  delete ACTIONS.studio_build;
+}
 let _quest_install_gen = 0;
 
 // Per-bot locations file to prevent race conditions in multi-agent mode
@@ -1206,7 +1219,7 @@ async function createBot() {
     try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch {}
     try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch {}
     try { if (_follow_tear_down) { _follow_tear_down(); _follow_tear_down = null; _follow_owner = null; } } catch {}
-    try { if (_studio_tear_down) { _studio_tear_down(); _studio_tear_down = null; _studio = null; _studio_owner = null; } } catch {}
+    tearDownStudio();
     try { bot.quit(); } catch {}
     bot = null;
     botReady = false;
@@ -1505,7 +1518,7 @@ async function createBot() {
       // becomes sections offered to the child and built by hand. It only acts
       // in a studio session (creative game mode and HERMESCRAFT_STUDIO_FLIGHT=1).
       try {
-        if (_studio_tear_down) _studio_tear_down();
+        tearDownStudio();
         _studio = createStudioCoBuild({
           bot: thisBot,
           actions: ACTIONS,
@@ -1660,10 +1673,7 @@ async function createBot() {
         if (_follow_tear_down && _follow_owner === thisBot) {
           _follow_tear_down(); _follow_tear_down = null; _follow_owner = null;
         }
-        if (_studio_tear_down && _studio_owner === thisBot) {
-          try { _studio_tear_down(); } catch (e) {}
-          _studio_tear_down = null; _studio = null; _studio_owner = null;
-        }
+        tearDownStudio(thisBot);
         try { if (_bark_tear_down) { _bark_tear_down(); _bark_tear_down = null; } } catch (e) {}
         _quest_install_gen++;
         try { if (_quest_tear_down) { _quest_tear_down(); _quest_tear_down = null; } } catch (e) {}

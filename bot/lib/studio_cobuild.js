@@ -461,6 +461,9 @@ export function createStudioCoBuild({ bot, actions, log = () => {}, isBusy = () 
   /** The `studio_build` action: start a co-build of a studio design for a player. */
   async function start({ name, player } = {}) {
     const design = String(name ?? '');
+    // A torn-down instance belongs to a body that has left the server: it must
+    // not write a plan that nobody then works on.
+    if (tornDown) return { error: 'This character is not connected.' };
     if (!isStudioDesign(design)) return { error: `"${design}" is not a studio design.` };
     const label = STUDIO_DESIGNS[design];
     if (!studioFlightEnabled(bot)) {

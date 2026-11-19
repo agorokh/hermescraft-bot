@@ -232,6 +232,7 @@ if d and isinstance(d, dict):
         p = d['position']
         print(f\"  ♥ Health: {d['health']}/20  Food: {d['food']}/20  Sat: {d.get('saturation', '?')}\")
         print(f\"  ⊕ Position: {p['x']}, {p['y']}, {p['z']}  ({d.get('dimension','?')}, {d.get('biome','?')})\")
+        if d.get('sky_note'): print(f\"  ☁ Sky: {d['sky_note']}\")
         tp = d.get('timePhase','?')
         rain = ' 🌧' if d.get('isRaining') else ''
         print(f\"  ☀ Time: {d.get('time','?')} ({tp}){rain}\")
@@ -285,6 +286,7 @@ if d and isinstance(d, dict):
             n = b.get('nearest', {})
             loc = f\" nearest:{n.get('x','')},{n.get('y','')},{n.get('z','')}\" if n else ''
             print(f\"    {b['name']} x{b['count']}{loc}\")
+        if d.get('sky_note'): print(f\"  ☁ Sky: {d['sky_note']}\")
 
     # Chat messages
     elif 'messages' in d:

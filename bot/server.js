@@ -1988,11 +1988,7 @@ function briefState() {
   };
   // Every action's status line shows Pos; say whether there is sky overhead
   // so a flat world's Y -60 is not read as underground (#592).
-  try {
-    state.sky = skyAboveBot(bot);
-    const note = skyNote(bot.entity.position.y, state.sky);
-    if (note) state.sky_note = note;
-  } catch { /* perception only */ }
+  Object.assign(state, skyFields(bot));
 
   if (recentChat.length > 0) state.new_chat = recentChat;
   if (pending.length > 0) state.pending_commands = pending.length;
@@ -2109,7 +2105,7 @@ function getFullState() {
     time: time,
     isDay: time < 12000,
     timePhase: time < 6000 ? 'morning' : time < 12000 ? 'afternoon' : time < 18000 ? 'evening' : 'night',
-    sky: skyAboveBot(b),
+    ...skyFields(b),
     holding: bot.heldItem ? itemStr(bot.heldItem) : 'empty',
     experience: { level: b.experience?.level || 0 },
     inventory: inv.map(i => ({ name: i.name, count: i.count })),
@@ -2216,7 +2212,8 @@ function getNearby(radius = 32) {
     .slice(0, 25)
     .map(([name, info]) => ({ name, count: info.count, nearest: info.nearest }));
 
-  return { entities, blocks, scanRadius: scanR };
+  // A flat world shows bedrock 4 blocks down; say there is sky overhead (#592).
+  return { entities, blocks, scanRadius: scanR, ...skyFields(b) };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2390,6 +2387,17 @@ function getCardinal(dx, dz) {
   if (angle > -157.5 && angle <= -112.5) return 'SW';
   if (angle > -112.5 && angle <= -67.5) return 'W';
   return 'NW';
+}
+
+// `sky` plus the worded `sky_note` that `mc status` / `mc nearby` print (#592).
+function skyFields(b = ensureBot()) {
+  try {
+    const sky = skyAboveBot(b);
+    const note = skyNote(b.entity.position.y, sky);
+    return note ? { sky, sky_note: note } : { sky };
+  } catch {
+    return {};
+  }
 }
 
 // Sky above the bot: 'open' | 'covered' | 'underground' | 'unknown' (#592).

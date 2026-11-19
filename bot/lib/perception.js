@@ -169,3 +169,11 @@ export function describeHeight(y, exposure) {
   }
   return `Y:${fy}.`;
 }
+
+// Short form for the status line every `mc` action prints (#592).
+export function skyNote(y, exposure) {
+  if (exposure === 'open') return Math.floor(y) < 50 ? 'Open sky (ground level, not underground)' : 'Open sky';
+  if (exposure === 'covered') return 'Under cover';
+  if (exposure === 'underground') return 'Underground';
+  return null;
+}

@@ -203,6 +203,9 @@ if state:
         parts.append(f\"Pos:{p['x']},{p['y']},{p['z']}\")
     if 'holding' in state: parts.append(f\"Hold:{state['holding']}\")
     if 'isDay' in state: parts.append('☀ Day' if state['isDay'] else '☾ Night')
+    # Sky overhead as the bot words it (#592): a flat world's ground is at
+    # Y -60, and a bare low Y reads as underground.
+    if state.get('sky_note'): parts.append(str(state['sky_note']))
     if parts:
         print(f\"  [{' | '.join(parts)}]\")
     # Show new chat that arrived during action

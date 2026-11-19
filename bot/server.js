@@ -55,6 +55,7 @@ import {
   roofDistanceAbove,
   skyExposure,
   describeHeight,
+  skyNote,
 } from './lib/perception.js';
 // Square-zero rebuild (2026-05-16): high-level Mindcraft-shaped skill
 // primitives + idle bark / presence loop. Each module is self-contained;
@@ -1987,7 +1988,11 @@ function briefState() {
   };
   // Every action's status line shows Pos; say whether there is sky overhead
   // so a flat world's Y -60 is not read as underground (#592).
-  try { state.sky = skyAboveBot(bot); } catch { /* perception only */ }
+  try {
+    state.sky = skyAboveBot(bot);
+    const note = skyNote(bot.entity.position.y, state.sky);
+    if (note) state.sky_note = note;
+  } catch { /* perception only */ }
 
   if (recentChat.length > 0) state.new_chat = recentChat;
   if (pending.length > 0) state.pending_commands = pending.length;

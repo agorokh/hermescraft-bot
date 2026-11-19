@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { skyNote } from '../lib/perception.js';
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL('../../bin/mc', import.meta.url));
@@ -38,20 +39,23 @@ async function statusLine(t, state) {
 
 const base = { health: 20, food: 16, holding: 'torch', isDay: true };
 
-test('open sky at a flat world Y -60 says ground level, not underground', async (t) => {
-  const line = await statusLine(t, { ...base, position: { x: -2.5, y: -60, z: -65.5 }, sky: 'open' });
+test('the bot\'s sky note is printed as it comes', async (t) => {
+  const line = await statusLine(t, {
+    ...base, position: { x: -2.5, y: -60, z: -65.5 }, sky: 'open', sky_note: skyNote(-60, 'open'),
+  });
   assert.match(line, /Pos:-2\.5,-60,-65\.5/);
-  assert.match(line, /Open sky \(ground level, not underground\)/);
+  assert.match(line, /\| Open sky \(ground level, not underground\)\]/);
 });
 
-test('open sky at a normal height needs no explanation', async (t) => {
-  const line = await statusLine(t, { ...base, position: { x: 0, y: 70, z: 0 }, sky: 'open' });
-  assert.match(line, /\| Open sky\]/);
-});
-
-test('underground and covered are named, and a missing sky adds nothing', async (t) => {
-  assert.match(await statusLine(t, { ...base, position: { x: 0, y: 11, z: 0 }, sky: 'underground' }), /\| Underground\]/);
-  assert.match(await statusLine(t, { ...base, position: { x: 0, y: -60, z: 0 }, sky: 'covered' }), /\| Under cover\]/);
-  const bare = await statusLine(t, { ...base, position: { x: 0, y: -60, z: 0 } });
+test('a state without a sky note prints as before', async (t) => {
+  const bare = await statusLine(t, { ...base, position: { x: 0, y: -60, z: 0 }, sky: 'open' });
   assert.match(bare, /☀ Day\]$/);
+});
+
+test('skyNote words each exposure', () => {
+  assert.equal(skyNote(-60, 'open'), 'Open sky (ground level, not underground)');
+  assert.equal(skyNote(70, 'open'), 'Open sky');
+  assert.equal(skyNote(-60, 'covered'), 'Under cover');
+  assert.equal(skyNote(11, 'underground'), 'Underground');
+  assert.equal(skyNote(11, 'unknown'), null);
 });

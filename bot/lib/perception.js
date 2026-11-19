@@ -118,19 +118,21 @@ const SKY_PASSABLE = new Set([
 ]);
 
 // Distance in blocks to the first solid block above the head, or null when
-// the column is clear up to `scanUp` blocks or the world top. A block that is
-// not loaded is reported as unknown (undefined).
+// the column is clear all the way to the world top. Unknown (undefined) when
+// a block is not loaded or the scan stopped at `scanUp` short of the top, so
+// sky light decides (a Nether ceiling can be more than 64 blocks up).
 export function roofDistanceAbove(blockAt, { x, y, z }, { scanUp = 64, worldTop = 320 } = {}) {
   const fx = Math.floor(x);
   const fz = Math.floor(z);
   const head = Math.floor(y) + 1;
-  const top = Math.min(head + scanUp, worldTop);
+  const limit = head + scanUp;
+  const top = Math.min(limit, worldTop);
   for (let wy = head + 1; wy < top; wy++) {
     const block = blockAt(fx, wy, fz);
     if (!block) return undefined;
     if (!SKY_PASSABLE.has(block.name)) return wy - head;
   }
-  return null;
+  return limit < worldTop ? undefined : null;
 }
 
 // 'open' (sky overhead), 'underground' (a roof and little skylight) or

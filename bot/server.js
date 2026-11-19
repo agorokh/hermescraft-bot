@@ -2392,7 +2392,9 @@ function skyAboveBot(b = ensureBot()) {
   const roofDistance = roofDistanceAbove(
     (x, y, z) => b.blockAt(new Vec3(x, y, z)),
     pos,
-    { worldTop: minY + height },
+    // Scan to the world top: from a flat world's Y -60 a 64-block cap stops
+    // near Y 5, under any taller build. A few hundred lookups at most.
+    { worldTop: minY + height, scanUp: height },
   );
   const feet = b.blockAt(pos.floored());
   return skyExposure({ roofDistance, skyLight: feet?.skyLight });

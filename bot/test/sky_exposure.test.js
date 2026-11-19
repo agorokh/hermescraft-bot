@@ -8,7 +8,7 @@ function column({ solid = {}, loadedUpTo = 400 } = {}) {
 }
 
 test('a flat world at Y -60 with nothing overhead is open sky, not underground', () => {
-  const roof = roofDistanceAbove(column(), { x: 0.5, y: -60, z: -63.5 }, { worldTop: 320 });
+  const roof = roofDistanceAbove(column(), { x: 0.5, y: -60, z: -63.5 }, { scanUp: 384, worldTop: 320 });
   assert.equal(roof, null);
   const exposure = skyExposure({ roofDistance: roof, skyLight: 15 });
   assert.equal(exposure, 'open');
@@ -33,7 +33,7 @@ test('a roof with daylight reaching in is covered, not underground', () => {
 
 test('blocks the character can see through do not count as a roof', () => {
   const solid = { [-57]: 'cave_air', [-50]: 'light', [-40]: 'structure_void' };
-  assert.equal(roofDistanceAbove(column({ solid }), { x: 0, y: -60, z: 0 }), null);
+  assert.equal(roofDistanceAbove(column({ solid }), { x: 0, y: -60, z: 0 }, { scanUp: 384 }), null);
 });
 
 test('an unloaded column falls back to skylight, and unknown says only Y', () => {
@@ -54,9 +54,21 @@ test('the scan stops at the world top', () => {
 
 test('water or lava overhead is not a roof', () => {
   const solid = { 63: 'water', 64: 'flowing_water', 70: 'lava', 71: 'bubble_column' };
-  const roof = roofDistanceAbove(column({ solid }), { x: 0, y: 60, z: 0 });
+  const roof = roofDistanceAbove(column({ solid }), { x: 0, y: 60, z: 0 }, { scanUp: 384 });
   assert.equal(roof, null);
   assert.equal(skyExposure({ roofDistance: roof, skyLight: 12 }), 'open');
   const iced = roofDistanceAbove(column({ solid: { 63: 'water', 64: 'ice' } }), { x: 0, y: 60, z: 0 });
   assert.equal(iced, 3);
+});
+
+test('a scan cut short before the world top is unknown, and sky light decides', () => {
+  // Roof at Y 30, 89 blocks above a flat-world head at Y -59: past a 64 cap.
+  const solid = { 30: 'stone' };
+  const capped = roofDistanceAbove(column({ solid }), { x: 0, y: -60, z: 0 }, { scanUp: 64, worldTop: 320 });
+  assert.equal(capped, undefined);
+  assert.equal(skyExposure({ roofDistance: capped, skyLight: 0 }), 'underground');
+  assert.equal(skyExposure({ roofDistance: capped, skyLight: 15 }), 'open');
+  // Scanning to the top finds the roof.
+  const full = roofDistanceAbove(column({ solid }), { x: 0, y: -60, z: 0 }, { scanUp: 384, worldTop: 320 });
+  assert.equal(full, 89);
 });

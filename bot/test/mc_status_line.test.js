@@ -95,3 +95,31 @@ test('mc nearby prints the sky after the blocks, and nothing without a note', as
   const bare = await runMc(t, ['nearby'], { ok: true, data });
   assert.doesNotMatch(bare, /Sky:/);
 });
+
+// Rosie's cave session carried "deep underground" through a teleport; the
+// arrival note sits under the status line and in `mc status` (#592).
+const moved = 'You were just moved here from 1658,59,1718 in world; what you saw before no longer applies. '
+  + 'Here: Open sky (ground level, not underground).';
+
+test('an action prints the arrival note right under the status line', async (t) => {
+  const out = await runMc(t, ['chat', 'hi'], {
+    ok: true, result: 'Sent: hi',
+    state: { ...base, position: { x: 3.5, y: -60, z: -65.5 }, sky: 'open', sky_note: skyNote(-60, 'open'), arrival_note: moved },
+  });
+  const lines = out.split('\n');
+  const at = lines.findIndex((l) => l.includes('Pos:3.5,-60,-65.5'));
+  assert.ok(at >= 0, out);
+  assert.equal(lines[at + 1].trim(), `📍 ${moved}`);
+  const bare = await runMc(t, ['chat', 'hi'], { ok: true, result: 'Sent: hi', state: { ...base, position: { x: 0, y: 64, z: 0 } } });
+  assert.doesNotMatch(bare, /📍/);
+});
+
+test('mc status prints the arrival note under the sky', async (t) => {
+  const out = await runMc(t, ['status'], {
+    ok: true, data: { ...full, sky: 'open', sky_note: skyNote(-60, 'open'), arrival_note: moved },
+  });
+  const lines = out.split('\n');
+  const at = lines.findIndex((l) => l.includes('☁ Sky:'));
+  assert.ok(at >= 0, out);
+  assert.equal(lines[at + 1].trim(), `📍 ${moved}`);
+});

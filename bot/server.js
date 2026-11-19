@@ -56,6 +56,9 @@ import {
   skyExposure,
   describeHeight,
   skyNote,
+  isArrival,
+  arrivalNote,
+  ARRIVAL_NOTE_MS,
 } from './lib/perception.js';
 // Square-zero rebuild (2026-05-16): high-level Mindcraft-shaped skill
 // primitives + idle bark / presence loop. Each module is self-contained;
@@ -207,7 +210,7 @@ async function shadowRoute(bot, body, sender, primaryResult) {
   }
 }
 import { installQuestEngine, isCompanionSpeaker } from './lib/quests.js';
-import { installFollowOnJoin, trackWorldName } from './lib/follow_on_join.js';
+import { installFollowOnJoin, trackWorldName, currentWorldName } from './lib/follow_on_join.js';
 import { adaptStudioRoute, createStudioCoBuild } from './lib/studio_cobuild.js';
 import { startSurvivalTick } from './lib/survival.js';
 
@@ -1240,6 +1243,7 @@ async function createBot() {
       auth: config.mc.auth,
     });
     trackWorldName(bot);
+    trackArrivals(bot);
     const thisBot = bot; // the module-level `bot` may be a newer one by the time 'end' fires
 
     const timeout = setTimeout(() => {
@@ -1989,6 +1993,7 @@ function briefState() {
   // Every action's status line shows Pos; say whether there is sky overhead
   // so a flat world's Y -60 is not read as underground (#592).
   Object.assign(state, skyFields(bot));
+  Object.assign(state, arrivalFields(bot, state.sky_note));
 
   if (recentChat.length > 0) state.new_chat = recentChat;
   if (pending.length > 0) state.pending_commands = pending.length;
@@ -2094,6 +2099,7 @@ function getFullState() {
     ago: Math.round((Date.now() - m.time) / 1000) + 's',
   })) : [];
 
+  const sky = skyFields(b);
   return {
     health: fmt(b.health),
     maxHealth: 20,
@@ -2105,7 +2111,8 @@ function getFullState() {
     time: time,
     isDay: time < 12000,
     timePhase: time < 6000 ? 'morning' : time < 12000 ? 'afternoon' : time < 18000 ? 'evening' : 'night',
-    ...skyFields(b),
+    ...sky,
+    ...arrivalFields(b, sky.sky_note),
     holding: bot.heldItem ? itemStr(bot.heldItem) : 'empty',
     experience: { level: b.experience?.level || 0 },
     inventory: inv.map(i => ({ name: i.name, count: i.count })),
@@ -2387,6 +2394,36 @@ function getCardinal(dx, dz) {
   if (angle > -157.5 && angle <= -112.5) return 'SW';
   if (angle > -112.5 && angle <= -67.5) return 'W';
   return 'NW';
+}
+
+// The last far move the server made (teleport, world change, respawn), so the
+// brain is told its earlier surroundings no longer apply (#592).
+let _arrival = null; // { bot, time, from }
+
+function trackArrivals(b) {
+  const here = () => {
+    const p = b.entity?.position;
+    return p ? { x: p.x, y: p.y, z: p.z, world: currentWorldName(b) } : null;
+  };
+  let spawned = false;
+  let left = null; // where the bot stood when the server started moving it
+  const leaving = () => { if (spawned && !left) left = here(); };
+  b.on('spawn', () => { spawned = true; });
+  // Prepended so they run before mineflayer and trackWorldName rewrite the
+  // position or the world name: by 'forcedMove' (and on every 'move') the
+  // position is already the new one, so the old spot must be read here.
+  b._client?.prependListener('respawn', leaving);
+  b._client?.prependListener('position', leaving);
+  b.on('forcedMove', () => {
+    const now = here();
+    if (isArrival(left, now)) _arrival = { bot: b, time: Date.now(), from: left };
+    left = null;
+  });
+}
+
+function arrivalFields(b, hereNote) {
+  if (!_arrival || _arrival.bot !== b || Date.now() - _arrival.time > ARRIVAL_NOTE_MS) return {};
+  return { arrival_note: arrivalNote(_arrival.from, hereNote) };
 }
 
 // `sky` plus the worded `sky_note` that `mc status` / `mc nearby` print (#592).

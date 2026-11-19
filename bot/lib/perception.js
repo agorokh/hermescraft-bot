@@ -125,14 +125,25 @@ export function roofDistanceAbove(blockAt, { x, y, z }, { scanUp = 64, worldTop 
   const fx = Math.floor(x);
   const fz = Math.floor(z);
   const head = Math.floor(y) + 1;
-  const limit = head + scanUp;
-  const top = Math.min(limit, worldTop);
+  // Blocks head+1 .. head+scanUp, never past the world's top (exclusive).
+  const end = head + scanUp + 1;
+  const top = Math.min(end, worldTop);
   for (let wy = head + 1; wy < top; wy++) {
     const block = blockAt(fx, wy, fz);
     if (!block) return undefined;
-    if (!SKY_PASSABLE.has(block.name)) return wy - head;
+    if (isRoofBlock(block)) return wy - head;
   }
-  return limit < worldTop ? undefined : null;
+  return end < worldTop ? undefined : null;
+}
+
+// A roof is a full solid block (leaves, glass and stone count; torches,
+// vines, signs, carpet and fluids do not). Same solidity test as
+// studio_flight's passable(); the name set covers blocks without a bounding
+// box (test doubles).
+function isRoofBlock(block) {
+  if (SKY_PASSABLE.has(block.name)) return false;
+  if (typeof block.boundingBox === 'string') return block.boundingBox === 'block';
+  return true;
 }
 
 // 'open' (sky overhead), 'underground' (a roof and little skylight) or

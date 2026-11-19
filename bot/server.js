@@ -1985,6 +1985,9 @@ function briefState() {
     time: bot.time.timeOfDay,
     isDay: bot.time.timeOfDay < 12000,
   };
+  // Every action's status line shows Pos; say whether there is sky overhead
+  // so a flat world's Y -60 is not read as underground (#592).
+  try { state.sky = skyAboveBot(bot); } catch { /* perception only */ }
 
   if (recentChat.length > 0) state.new_chat = recentChat;
   if (pending.length > 0) state.pending_commands = pending.length;

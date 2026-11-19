@@ -361,10 +361,13 @@ test('an idle character picks up a player whose character went away', async () =
     const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
     const rosie = fakeBot('Rosie', { players: ['Rosie', 'Steve', 'KidOne'] });
     const steve = fakeBot('Steve', { players: ['Rosie', 'Steve', 'KidOne'] });
-    const downRosie = installFollowOnJoin(rosie, () => {}, { env, claimDir: dir, config: FAST });
-    const downSteve = installFollowOnJoin(steve, () => {}, { env, claimDir: dir, config: FAST });
+    // FAST's 60 ms stagger let a loaded CI runner fire Steve's first scan
+    // before Rosie's, so Steve owned the claim (hermescraft-bot#44 CI).
+    const config = { ...FAST, claimStaggerMs: 300 };
+    const downRosie = installFollowOnJoin(rosie, () => {}, { env, claimDir: dir, config });
+    const downSteve = installFollowOnJoin(steve, () => {}, { env, claimDir: dir, config });
     try {
-      await wait(1400);
+      await wait(1700);
       assert.equal(rosie._hc_follow.child(), 'KidOne');
       assert.equal(steve._hc_follow.child(), 'KidOne');
       assert.equal(readClaim(dir, 'KidOne').character, 'Rosie');

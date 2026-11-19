@@ -208,6 +208,8 @@ if state:
     if state.get('sky_note'): parts.append(str(state['sky_note']))
     if parts:
         print(f\"  [{' | '.join(parts)}]\")
+    # A teleport just moved the bot; the old place no longer applies (#592).
+    if state.get('arrival_note'): print(f\"  📍 {state['arrival_note']}\")
     # Show new chat that arrived during action
     if 'new_chat' in state:
         for msg in state['new_chat']:
@@ -233,6 +235,7 @@ if d and isinstance(d, dict):
         print(f\"  ♥ Health: {d['health']}/20  Food: {d['food']}/20  Sat: {d.get('saturation', '?')}\")
         print(f\"  ⊕ Position: {p['x']}, {p['y']}, {p['z']}  ({d.get('dimension','?')}, {d.get('biome','?')})\")
         if d.get('sky_note'): print(f\"  ☁ Sky: {d['sky_note']}\")
+        if d.get('arrival_note'): print(f\"  📍 {d['arrival_note']}\")
         tp = d.get('timePhase','?')
         rain = ' 🌧' if d.get('isRaining') else ''
         print(f\"  ☀ Time: {d.get('time','?')} ({tp}){rain}\")

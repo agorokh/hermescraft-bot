@@ -177,3 +177,23 @@ export function skyNote(y, exposure) {
   if (exposure === 'underground') return 'Underground';
   return null;
 }
+
+// A teleport, world change or respawn moves the bot far in one step. A brain
+// that spent its session in a cave kept saying "deep underground" after being
+// moved onto open grass, though every status line said open sky (#592).
+export const ARRIVAL_MIN_DISTANCE = 24;
+export const ARRIVAL_NOTE_MS = 180000;
+
+// prev/next: { x, y, z, world }.
+export function isArrival(prev, next, { minDistance = ARRIVAL_MIN_DISTANCE } = {}) {
+  if (!prev || !next) return false;
+  if (prev.world && next.world && prev.world !== next.world) return true;
+  return Math.hypot(next.x - prev.x, next.y - prev.y, next.z - prev.z) >= minDistance;
+}
+
+export function arrivalNote(from, hereNote) {
+  const where = [from.x, from.y, from.z].map((v) => Math.floor(v)).join(',');
+  const there = from.world ? `${where} in ${from.world}` : where;
+  const note = `You were just moved here from ${there}; what you saw before no longer applies.`;
+  return hereNote ? `${note} Here: ${hereNote}.` : note;
+}

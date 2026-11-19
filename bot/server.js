@@ -52,6 +52,9 @@ import {
   makeBlockMemoryKey,
   summarizeVisibleBlocks,
   summarizeSceneText,
+  roofDistanceAbove,
+  skyExposure,
+  describeHeight,
 } from './lib/perception.js';
 // Square-zero rebuild (2026-05-16): high-level Mindcraft-shaped skill
 // primitives + idle bark / presence loop. Each module is self-contained;
@@ -2098,6 +2101,7 @@ function getFullState() {
     time: time,
     isDay: time < 12000,
     timePhase: time < 6000 ? 'morning' : time < 12000 ? 'afternoon' : time < 18000 ? 'evening' : 'night',
+    sky: skyAboveBot(b),
     holding: bot.heldItem ? itemStr(bot.heldItem) : 'empty',
     experience: { level: b.experience?.level || 0 },
     inventory: inv.map(i => ({ name: i.name, count: i.count })),
@@ -2380,6 +2384,22 @@ function getCardinal(dx, dz) {
   return 'NW';
 }
 
+// Sky above the bot: 'open' | 'covered' | 'underground' | 'unknown' (#592).
+function skyAboveBot(b = ensureBot()) {
+  const pos = b.entity.position;
+  const minY = Number.isFinite(b.game?.minY) ? b.game.minY : -64;
+  const height = Number.isFinite(b.game?.height) ? b.game.height : 384;
+  const roofDistance = roofDistanceAbove(
+    (x, y, z) => b.blockAt(new Vec3(x, y, z)),
+    pos,
+    // Scan to the world top: from a flat world's Y -60 a 64-block cap stops
+    // near Y 5, under any taller build. A few hundred lookups at most.
+    { worldTop: minY + height, scanUp: height },
+  );
+  const feet = b.blockAt(pos.floored());
+  return skyExposure({ roofDistance, skyLight: feet?.skyLight });
+}
+
 // Generate a narrative description of surroundings — like what a human would SEE
 function generateLookAround() {
   const b = ensureBot();
@@ -2398,10 +2418,8 @@ function generateLookAround() {
   parts.push(`Standing on ${ground} in ${biome.replace(/_/g, ' ')}.`);
   
   // Height context (above/below ground level approximation)
-  const y = Math.floor(pos.y);
-  if (y > 90) parts.push(`High up (Y:${y}).`);
-  else if (y < 50) parts.push(`Underground (Y:${y}).`);
-  else parts.push(`Y:${y}.`);
+  const sky = skyAboveBot(b);
+  parts.push(describeHeight(pos.y, sky));
   
   // Scan each cardinal direction for notable features
   const directions = [
@@ -2508,7 +2526,13 @@ function generateLookAround() {
     position: posObj(),
     biome: biome.replace(/_/g, ' '),
     time_phase: phase,
-    light_level: b.blockAt(pos)?.light || 0,
+    // Block light alone is 0 on open ground at noon; count daylight too (#592).
+    // Sky light already falls off under a roof, so it needs no exposure gate.
+    light_level: Math.max(
+      b.blockAt(pos)?.light || 0,
+      time < 12000 ? (b.blockAt(pos)?.skyLight ?? 0) : 0,
+    ),
+    sky,
   };
 }
 
@@ -2537,6 +2561,11 @@ const ACTIONS = {
     const lines = [];
     const weather = data.isRaining ? 'rain' : (data.weather || 'clear');
     lines.push(`## you are at ${fmt(pos.x)},${fmt(pos.y)},${fmt(pos.z)} in ${data.biome || 'unknown'}; time=${data.time || '?'} (${data.timePhase || '?'}); hp=${data.health || '?'}/20 food=${data.food || '?'}/20; weather=${weather}`);
+    // Say whether there is sky overhead: a flat world's ground is at Y -60,
+    // and without this the brain reads a low Y as "deep underground" (#592).
+    if (data.sky && data.sky !== 'unknown') {
+      lines.push(`## above you: ${describeHeight(pos.y ?? 0, data.sky)}`);
+    }
     // Inventory
     const inv = (data.inventory || []).slice(0, 12);
     if (inv.length === 0) {

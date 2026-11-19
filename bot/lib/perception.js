@@ -104,3 +104,68 @@ export function summarizeSceneText({ lookingAt, visibleBlocks = [], visibleEntit
   parts.push('Unknown areas remain hidden behind terrain and outside the current view cone.');
   return parts.join(' ');
 }
+
+// Whether there is sky above the character, read from the blocks overhead
+// rather than guessed from Y. A flat world's ground sits at Y -60 and the
+// overworld's floor is below 0, so a low Y alone does not mean underground:
+// in the #592 studio both characters called open grassland at Y -60 "deep
+// underground" and "in the dark" (hermescraft#592).
+// Air-like blocks and fluids: open water or lava overhead is not a roof
+// (a character swimming in a lake is not underground).
+const SKY_PASSABLE = new Set([
+  'air', 'cave_air', 'void_air', 'light', 'structure_void',
+  'water', 'flowing_water', 'lava', 'flowing_lava', 'bubble_column',
+]);
+
+// Distance in blocks to the first solid block above the head, or null when
+// the column is clear all the way to the world top. Unknown (undefined) when
+// a block is not loaded or the scan stopped at `scanUp` short of the top, so
+// sky light decides (a Nether ceiling can be more than 64 blocks up).
+export function roofDistanceAbove(blockAt, { x, y, z }, { scanUp = 64, worldTop = 320 } = {}) {
+  const fx = Math.floor(x);
+  const fz = Math.floor(z);
+  const head = Math.floor(y) + 1;
+  // Blocks head+1 .. head+scanUp, never past the world's top (exclusive).
+  const end = head + scanUp + 1;
+  const top = Math.min(end, worldTop);
+  for (let wy = head + 1; wy < top; wy++) {
+    const block = blockAt(fx, wy, fz);
+    if (!block) return undefined;
+    if (isRoofBlock(block)) return wy - head;
+  }
+  return end < worldTop ? undefined : null;
+}
+
+// A roof is a full solid block (leaves, glass and stone count; torches,
+// vines, signs, carpet and fluids do not). Same solidity test as
+// studio_flight's passable(); the name set covers blocks without a bounding
+// box (test doubles).
+function isRoofBlock(block) {
+  if (SKY_PASSABLE.has(block.name)) return false;
+  if (typeof block.boundingBox === 'string') return block.boundingBox === 'block';
+  return true;
+}
+
+// 'open' (sky overhead), 'underground' (a roof and little skylight) or
+// 'covered' (a roof but daylight reaches in: under trees, a build, an overhang).
+export function skyExposure({ roofDistance, skyLight }) {
+  if (roofDistance === null) return 'open';
+  const sky = Number.isFinite(skyLight) ? skyLight : null;
+  if (roofDistance === undefined) {
+    if (sky === null) return 'unknown';
+    return sky >= 12 ? 'open' : sky <= 4 ? 'underground' : 'covered';
+  }
+  return sky !== null && sky > 4 ? 'covered' : 'underground';
+}
+
+export function describeHeight(y, exposure) {
+  const fy = Math.floor(y);
+  if (exposure === 'underground') return `Underground (Y:${fy}).`;
+  if (exposure === 'covered') return `Under cover, daylight reaching in (Y:${fy}).`;
+  if (exposure === 'open') {
+    if (fy > 90) return `High up, open sky (Y:${fy}).`;
+    if (fy < 50) return `Outdoors under open sky at ground level (Y:${fy}; a low Y here is just how this world is built, not underground).`;
+    return `Outdoors under open sky (Y:${fy}).`;
+  }
+  return `Y:${fy}.`;
+}

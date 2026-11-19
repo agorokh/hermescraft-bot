@@ -2412,9 +2412,14 @@ function trackArrivals(b) {
   // Prepended so they run before mineflayer and trackWorldName rewrite the
   // position or the world name: by 'forcedMove' (and on every 'move') the
   // position is already the new one, so the old spot must be read here.
-  b._client?.prependListener('respawn', leaving);
-  b._client?.prependListener('position', leaving);
+  // mineflayer.createBot sets _client synchronously; without it, fail loudly
+  // rather than never noticing a teleport.
+  b._client.prependListener('respawn', leaving);
+  b._client.prependListener('position', leaving);
   b.on('forcedMove', () => {
+    // After a death mineflayer defers forcedMove 1.5 s and never cancels it,
+    // so a replaced bot can still fire one; it must not overwrite the live note.
+    if (b !== bot) return;
     const now = here();
     if (isArrival(left, now)) _arrival = { bot: b, time: Date.now(), from: left };
     left = null;

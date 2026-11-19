@@ -2525,9 +2525,10 @@ function generateLookAround() {
     biome: biome.replace(/_/g, ' '),
     time_phase: phase,
     // Block light alone is 0 on open ground at noon; count daylight too (#592).
+    // Sky light already falls off under a roof, so it needs no exposure gate.
     light_level: Math.max(
       b.blockAt(pos)?.light || 0,
-      sky === 'open' && time < 12000 ? (b.blockAt(pos)?.skyLight ?? 0) : 0,
+      time < 12000 ? (b.blockAt(pos)?.skyLight ?? 0) : 0,
     ),
     sky,
   };

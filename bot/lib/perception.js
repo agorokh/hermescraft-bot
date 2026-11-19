@@ -110,7 +110,12 @@ export function summarizeSceneText({ lookingAt, visibleBlocks = [], visibleEntit
 // overworld's floor is below 0, so a low Y alone does not mean underground:
 // in the #592 studio both characters called open grassland at Y -60 "deep
 // underground" and "in the dark" (hermescraft#592).
-const SKY_PASSABLE = new Set(['air', 'cave_air', 'void_air', 'light', 'structure_void']);
+// Air-like blocks and fluids: open water or lava overhead is not a roof
+// (a character swimming in a lake is not underground).
+const SKY_PASSABLE = new Set([
+  'air', 'cave_air', 'void_air', 'light', 'structure_void',
+  'water', 'flowing_water', 'lava', 'flowing_lava', 'bubble_column',
+]);
 
 // Distance in blocks to the first solid block above the head, or null when
 // the column is clear up to `scanUp` blocks or the world top. A block that is

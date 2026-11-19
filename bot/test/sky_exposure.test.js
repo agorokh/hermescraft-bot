@@ -51,3 +51,12 @@ test('the scan stops at the world top', () => {
   assert.match(describeHeight(300, 'open'), /^High up, open sky/);
   assert.equal(describeHeight(70, 'open'), 'Outdoors under open sky (Y:70).');
 });
+
+test('water or lava overhead is not a roof', () => {
+  const solid = { 63: 'water', 64: 'flowing_water', 70: 'lava', 71: 'bubble_column' };
+  const roof = roofDistanceAbove(column({ solid }), { x: 0, y: 60, z: 0 });
+  assert.equal(roof, null);
+  assert.equal(skyExposure({ roofDistance: roof, skyLight: 12 }), 'open');
+  const iced = roofDistanceAbove(column({ solid: { 63: 'water', 64: 'ice' } }), { x: 0, y: 60, z: 0 });
+  assert.equal(iced, 3);
+});

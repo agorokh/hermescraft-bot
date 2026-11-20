@@ -88,6 +88,11 @@ The server log for those sessions has no command, teleport, kick or movement-rej
 Characters are separate processes and agree through files in `HERMESCRAFT_STUDIO_PLAN_DIR`
 (default `~/.hermescraft/studio-plans`), which both bodies must share.
 
+A whole build of a studio design (`build_schematic` or `build_schematic_advanced` without a
+section) is refused: the design is built only through the co-build, one section at a time, so a
+section the child took stays hers. On the family server on 2026-11-20 a brain's whole build after
+the co-build filled 127 of the 150 blocks of the child's leg.
+
 Materials swap through one hotbar slot: an empty one if there is one. A character that has
 played for weeks carries all 36 slots (both characters on the family server did on 2026-11-19).
 Then the build sets aside one hotbar stack that is only a type and a count, with no name,

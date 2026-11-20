@@ -358,19 +358,27 @@ async function giveBackBorrowed(bot, normalize) {
   if (!type) return false;
   let slot = record.slot;
   const held = bot.inventory.slots[slot];
-  if (held?.name === record.name && held.count === record.count) {
+  // Back already: the same stack, or (after a give-back whose readback timed out)
+  // the same type, some of it since used, e.g. torches the survival tick placed.
+  if (held?.name === record.name && (held.count === record.count || record.givingBack)) {
     dropBorrow(bot);
     return true;
   }
-  if (held && !record.materials.includes(normalize(held.name))) {
-    // Something else of the character's is there now: use any empty slot.
+  if (held && (held.name === record.name || !record.materials.includes(normalize(held.name)))) {
+    // Something else of the character's is there now, or the same type at another
+    // count before any give-back was sent (the character's own new stack): the
+    // set-aside stack is still owed, so it goes to an empty slot.
     slot = Array.from({ length: 36 }, (_, i) => 9 + i).find(s => bot.inventory.slots[s] == null);
     if (slot === undefined) return false;
   }
   const Item = itemLoader(bot.registry);
   try {
+    writeBorrow(bot, { ...record, slot, givingBack: true });
     await bot.creative.setInventorySlot(slot, new Item(type.id, record.count));
   } catch {
+    if (!bot.inventory.slots[slot]) {
+      try { writeBorrow(bot, { ...record, givingBack: false }); } catch { /* the flag only widens the match */ }
+    }
     return false;
   }
   const deadline = performance.now() + 1500;

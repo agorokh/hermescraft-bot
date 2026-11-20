@@ -224,6 +224,35 @@ test('a set-aside stack that cannot be given back stays noted for the next build
   assert.equal(fs.existsSync(borrowFile('Rosie')), false);
 });
 
+test('a give-back whose readback timed out is not repeated after some of the stack is used', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit44 = fullInventory(bot).find(k => k.slot === 44);
+  // The give-back reached the server; the record still says it was in flight.
+  // Since then the survival tick used 3 of the stack.
+  bot.inventory.slots[44] = { name: kit44.name, count: kit44.count - 3, slot: 44, type: registry.itemsByName[kit44.name].id,
+    stackSize: 64, components: [], removedComponents: [] };
+  fs.writeFileSync(borrowFile('Rosie'), JSON.stringify({ ...kit44, materials: ['smooth_quartz'], givingBack: true }));
+  await studio(bot, FLAGPOLE);
+  assert.equal(bot.inventory.items().filter(i => i.name === kit44.name && i.slot !== 44).length,
+    fullInventory(new StudioBot()).filter(k => k.name === kit44.name && k.slot !== 44).length, 'no second copy is written');
+  assert.equal(bot.inventory.slots[44].count, kit44.count - 3);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+
+test('a same-type stack found before any give-back was sent is the character\'s own; the owed stack goes elsewhere', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit44 = fullInventory(bot).find(k => k.slot === 44);
+  bot.inventory.slots[44] = { name: kit44.name, count: 5, slot: 44, type: registry.itemsByName[kit44.name].id,
+    stackSize: 64, components: [], removedComponents: [] };
+  bot.inventory.slots[9] = null; // one empty slot to give the owed stack back into
+  fs.writeFileSync(borrowFile('Rosie'), JSON.stringify({ ...kit44, materials: ['smooth_quartz'] }));
+  await studio(bot, FLAGPOLE);
+  assert.equal(bot.inventory.slots[44].count, 5);
+  assert.equal(bot.inventory.slots[9]?.name, kit44.name);
+  assert.equal(bot.inventory.slots[9]?.count, kit44.count);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+
 test('one free hotbar slot is enough: materials swap through the slot the build stocked itself', { timeout: 20000 }, async () => {
   const bot = new StudioBot();
   const kit = [];

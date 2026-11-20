@@ -9,6 +9,13 @@ import { registerHighLevelSkills } from '../lib/skills.js';
 import { flyToPhysicalPlacement, orderForHandPlacement, planFlight, segmentClear } from '../lib/studio_flight.js';
 import { buildStateFileForId, loadBuildState } from '../lib/advanced_build_pipeline.js';
 import { rm } from 'node:fs/promises';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// Stacks set aside for a build are noted here, never in the real home directory.
+process.env.HERMESCRAFT_STUDIO_BORROW_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-studio-borrow-'));
+const borrowFile = name => path.join(process.env.HERMESCRAFT_STUDIO_BORROW_DIR, `${name}.json`);
 
 const registry = minecraftData('1.21.11');
 const { Movements } = pathfinderPkg;
@@ -136,17 +143,146 @@ test('creative materials are handed back, and nothing the character carried is t
   assert.ok(bot.trace.filter(e => e.kind === 'creative_stock').every(e => e.slot !== 36));
 });
 
-test('a full hotbar is refused rather than overwritten', { timeout: 20000 }, async () => {
+test('a full hotbar with nothing plain to set aside is refused rather than overwritten', { timeout: 20000 }, async () => {
   const bot = new StudioBot();
   for (let slot = 36; slot <= 44; slot++) {
+    // A named stack: putting back a bare stack of the same type would lose the name.
     bot.inventory.slots[slot] = { name: 'campfire', count: 1, slot, type: registry.itemsByName.campfire.id,
-      stackSize: 64, components: [], removedComponents: [] };
+      stackSize: 64, components: [{ type: 'custom_name', data: 'Gift' }], removedComponents: [] };
   }
   const result = await studio(bot, FLAGPOLE);
   assert.equal(result.site_refused, true);
   assert.match(result.result, /no empty hotbar slot/);
   assert.deepEqual(bot.trace.filter(e => e.kind === 'creative_stock'), []);
   assert.equal(bot.inventory.items().length, 9);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+
+// What a character has carried for weeks on the family server: all 36 slots full.
+function fullInventory(bot) {
+  const names = ['oak_log', 'cobblestone', 'bread', 'torch', 'oak_planks', 'campfire'];
+  const kit = [];
+  for (let slot = 9; slot <= 44; slot++) {
+    const name = names[slot % names.length];
+    bot.inventory.slots[slot] = { name, count: 1 + (slot % 60), slot, type: registry.itemsByName[name].id,
+      stackSize: 64, components: [], removedComponents: [] };
+    kit.push({ slot, name, count: 1 + (slot % 60) });
+  }
+  return kit;
+}
+const carried = bot => bot.inventory.items().map(({ slot, name, count }) => ({ slot, name, count }));
+
+test('a full inventory sets one plain hotbar stack aside and gives the same stack back', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = fullInventory(bot);
+  const result = await studio(bot, FLAGPOLE);
+  assert.match(result.result, /20\/20 blocks placed via physical placement \(flight\)/);
+  const stocked = bot.trace.filter(e => e.kind === 'creative_stock');
+  assert.ok(stocked.every(e => e.slot === 44), 'only the one set-aside slot is ever written');
+  assert.deepEqual(carried(bot), kit, 'every slot holds what it held before, same type and count');
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false, 'nothing is left waiting to be given back');
+});
+
+test('a stack set aside by a body that died mid-build goes back at the next studio build', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = fullInventory(bot);
+  const kit44 = kit.find(k => k.slot === 44);
+  // The previous process put red wool where that stack was, then died.
+  bot.inventory.slots[44] = { name: 'red_wool', count: 64, slot: 44, type: registry.itemsByName.red_wool.id,
+    stackSize: 64, components: [], removedComponents: [] };
+  fs.writeFileSync(borrowFile('Rosie'), JSON.stringify({ ...kit44, materials: ['red_wool'] }));
+  const result = await studio(bot, FLAGPOLE);
+  assert.match(result.result, /20\/20 blocks placed/);
+  assert.deepEqual(stockedNames(bot)[0], { slot: 44, item: kit44.name }, 'the stack goes back before anything is stocked');
+  assert.deepEqual(carried(bot), kit);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+const stockedNames = bot => bot.trace.filter(e => e.kind === 'creative_stock').map(({ slot, item }) => ({ slot, item }));
+
+test('a set-aside stack that cannot be given back stays noted for the next build', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit44 = fullInventory(bot).find(k => k.slot === 44);
+  const original = bot.creative.setInventorySlot;
+  let writes = 0;
+  bot.creative.setInventorySlot = async (slot, item) => {
+    writes++;
+    if (writes > 1) bot.creativeRefused = true; // switched to survival after the first stock
+    return original(slot, item);
+  };
+  await studio(bot, FLAGPOLE);
+  const record = JSON.parse(fs.readFileSync(borrowFile('Rosie'), 'utf8'));
+  assert.equal(record.slot, 44);
+  assert.equal(record.name, kit44.name);
+  assert.equal(record.count, kit44.count);
+  // Back in creative: the next studio build returns it first.
+  bot.creativeRefused = false;
+  bot.creative.setInventorySlot = original;
+  bot.blocks.clear();
+  await studio(bot, FLAGPOLE);
+  assert.equal(bot.inventory.slots[44].name, kit44.name);
+  assert.equal(bot.inventory.slots[44].count, kit44.count);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+
+test('a give-back whose readback timed out is not repeated after some of the stack is used', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit44 = fullInventory(bot).find(k => k.slot === 44);
+  // The give-back reached the server; the record still says it was in flight.
+  // Since then the survival tick used 3 of the stack.
+  bot.inventory.slots[44] = { name: kit44.name, count: kit44.count - 3, slot: 44, type: registry.itemsByName[kit44.name].id,
+    stackSize: 64, components: [], removedComponents: [] };
+  fs.writeFileSync(borrowFile('Rosie'), JSON.stringify({ ...kit44, materials: ['smooth_quartz'], givingBack: true }));
+  await studio(bot, FLAGPOLE);
+  assert.equal(bot.inventory.items().filter(i => i.name === kit44.name && i.slot !== 44).length,
+    fullInventory(new StudioBot()).filter(k => k.name === kit44.name && k.slot !== 44).length, 'no second copy is written');
+  assert.equal(bot.inventory.slots[44].count, kit44.count - 3);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+
+test('a same-type stack found before any give-back was sent is the character\'s own; the owed stack goes elsewhere', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit44 = fullInventory(bot).find(k => k.slot === 44);
+  bot.inventory.slots[44] = { name: kit44.name, count: 5, slot: 44, type: registry.itemsByName[kit44.name].id,
+    stackSize: 64, components: [], removedComponents: [] };
+  bot.inventory.slots[9] = null; // one empty slot to give the owed stack back into
+  fs.writeFileSync(borrowFile('Rosie'), JSON.stringify({ ...kit44, materials: ['smooth_quartz'] }));
+  await studio(bot, FLAGPOLE);
+  assert.equal(bot.inventory.slots[44].count, 5);
+  assert.equal(bot.inventory.slots[9]?.name, kit44.name);
+  assert.equal(bot.inventory.slots[9]?.count, kit44.count);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+
+test('a failed material write after a set-aside gives the stack straight back and does not block the build', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = fullInventory(bot);
+  const original = bot.creative.setInventorySlot;
+  let writes = 0;
+  bot.creative.setInventorySlot = async (slot, item) => {
+    writes++;
+    if (writes === 1) { bot.inventory.slots[slot] = null; throw new Error('timed out'); } // slot emptied, write lost
+    return original(slot, item);
+  };
+  const result = await studio(bot, FLAGPOLE);
+  assert.match(result.result, /20\/20 blocks placed/, 'later cells still get their material');
+  assert.deepEqual(carried(bot), kit);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+
+test('a set-aside record with an out-of-range slot or count is ignored', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = fullInventory(bot);
+  for (const bad of [{ slot: 5, count: 1 }, { slot: 44, count: 0 }, { slot: 44, count: 999 }, { slot: 46, count: 1 }]) {
+    fs.writeFileSync(borrowFile('Rosie'), JSON.stringify({ name: 'torch', materials: ['red_wool'], ...bad }));
+    bot.trace = [];
+    bot.blocks.clear();
+    const result = await studio(bot, FLAGPOLE);
+    assert.match(result.result, /20\/20 blocks placed/, JSON.stringify(bad));
+    // Nothing is "given back" from the bad record: only the build's own slot 44 is written.
+    assert.ok(bot.trace.filter(e => e.kind === 'creative_stock').every(e => e.slot === 44), JSON.stringify(bad));
+    assert.deepEqual(carried(bot), kit, JSON.stringify(bad));
+    assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+  }
 });
 
 test('one free hotbar slot is enough: materials swap through the slot the build stocked itself', { timeout: 20000 }, async () => {

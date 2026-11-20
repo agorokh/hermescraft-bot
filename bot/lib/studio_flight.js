@@ -4,6 +4,9 @@
 // block with the same native hand placement the walking builder uses (#502).
 // Flight replaces only the approach and the material stock; it never places a
 // block. Nothing here issues a command, teleports, or breaks a block.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { Vec3 } from 'vec3';
 import itemLoader from 'prismarine-item';
 
@@ -217,27 +220,57 @@ export async function flyToPhysicalPlacement(bot, target, { stopped = () => fals
 
 // Creative inventory replaces the survival stock check: put one full stack of
 // the material in an EMPTY hotbar slot when the character holds none. Hand
-// placement in creative does not consume it. Never overwrite a slot: whatever
-// the character already carries (a survival kit, a gift) is not ours to lose.
+// placement in creative does not consume it. Whatever the character already
+// carries (a survival kit, a gift) is not ours to lose.
 // With no empty slot left, swap the material into a slot this build stocked
 // itself, so a design with three materials needs one free slot, not three.
+// A character that has played for weeks carries a full hotbar. Then one hotbar
+// slot holding a plain stack (no name, enchantment, wear or other data, so it
+// can be given back exactly) is set aside: the stack is written to disk first,
+// the slot is used for the material, and the same stack goes back when the
+// build ends, or at the next studio build if the body died in between.
 export async function ensureCreativeStock(bot, itemName, normalize = name => name) {
   const wanted = normalize(itemName);
+  await restoreStaleBorrow(bot, normalize);
   if (bot.inventory.items().some(item => normalize(item.name) === wanted)) return { ok: true };
   const type = bot.registry.itemsByName[wanted];
   if (!type) return { ok: false, reason: `${wanted} is not an item this character can hold` };
-  let slot = Array.from({ length: 9 }, (_, i) => 36 + i).find(s => bot.inventory.slots[s] == null);
+  let slot = HOTBAR.find(s => bot.inventory.slots[s] == null);
   if (slot === undefined) {
     for (const [ours, name] of studioStock.get(bot) || []) {
       const held = bot.inventory.slots[ours];
       if (held && normalize(held.name) === name) { slot = ours; break; }
     }
   }
-  if (slot === undefined) return { ok: false, reason: 'no empty hotbar slot for a creative building material' };
+  let borrowed = null;
+  if (slot === undefined) {
+    if (readBorrow(bot)) return { ok: false, reason: 'a hotbar slot set aside earlier has not been given back yet' };
+    slot = [...HOTBAR].reverse().find(s => plainStack(bot, bot.inventory.slots[s]));
+    if (slot === undefined) return { ok: false, reason: 'no empty hotbar slot for a creative building material, and no plain stack to set aside' };
+    const held = bot.inventory.slots[slot];
+    borrowed = { slot, name: held.name, count: held.count, materials: [wanted] };
+    try {
+      writeBorrow(bot, borrowed);
+    } catch (error) {
+      return { ok: false, reason: `could not note the stack set aside for the build: ${error.message}` };
+    }
+  } else {
+    const record = readBorrow(bot);
+    if (record?.slot === slot && !record.materials.includes(wanted)) {
+      try {
+        writeBorrow(bot, { ...record, materials: [...record.materials, wanted] });
+      } catch (error) {
+        return { ok: false, reason: `could not note the stack set aside for the build: ${error.message}` };
+      }
+    }
+  }
   const Item = itemLoader(bot.registry);
   try {
     await bot.creative.setInventorySlot(slot, new Item(type.id, type.stackSize || 64));
   } catch (error) {
+    // A set-aside stack whose slot write failed goes straight back (or stays
+    // noted, untracked, so the next stock gives it back first).
+    if (borrowed) await giveBackBorrowed(bot, normalize);
     return { ok: false, reason: `could not take ${wanted} from the creative inventory: ${error.message}` };
   }
   if (!studioStock.has(bot)) studioStock.set(bot, new Map());
@@ -252,16 +285,113 @@ export async function ensureCreativeStock(bot, itemName, normalize = name => nam
 }
 
 // Hand back what ensureCreativeStock took, so creative materials do not ride
-// home in the character's inventory. Only slots still holding our own stack.
+// home in the character's inventory, and return a stack set aside for the
+// build to its slot. Only slots still holding our own stack are emptied.
 export async function clearStudioStock(bot, normalize = name => name) {
   const stocked = studioStock.get(bot);
-  if (!stocked) return;
   studioStock.delete(bot);
-  for (const [slot, name] of stocked) {
+  for (const [slot, name] of stocked || []) {
     const held = bot.inventory.slots[slot];
     if (!held || normalize(held.name) !== name) continue;
     try { await bot.creative.setInventorySlot(slot, null); } catch { /* left for the next build to reuse */ }
   }
+  await giveBackBorrowed(bot, normalize);
+}
+
+const HOTBAR = Array.from({ length: 9 }, (_, i) => 36 + i);
+
+// A stack that is only an item type and a count: putting a new stack of that
+// type and count back reproduces it exactly.
+function plainStack(bot, item) {
+  if (!item || !bot.registry.itemsByName[item.name] || !(item.count > 0)) return false;
+  if (item.nbt) return false;
+  if (item.components?.length || item.removedComponents?.length || item.componentMap?.size) return false;
+  return true;
+}
+
+export function borrowDirFromEnv(env = process.env) {
+  return env.HERMESCRAFT_STUDIO_BORROW_DIR || path.join(os.homedir(), '.hermescraft', 'studio-borrowed');
+}
+
+function borrowFile(bot) {
+  return path.join(borrowDirFromEnv(), `${String(bot.username || 'body').replace(/[^A-Za-z0-9_]/g, '_')}.json`);
+}
+
+export function readBorrow(bot) {
+  try {
+    const record = JSON.parse(fs.readFileSync(borrowFile(bot), 'utf8'));
+    const type = bot.registry.itemsByName[record?.name];
+    // Only a player storage slot (9..44) and a count one stack can hold.
+    if (!type || !Number.isInteger(record.slot) || record.slot < 9 || record.slot > 44
+      || !Number.isInteger(record.count) || record.count < 1 || record.count > (type.stackSize || 64)
+      || !Array.isArray(record.materials) || !record.materials.every(m => typeof m === 'string' && m)) return null;
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+function writeBorrow(bot, record) {
+  const file = borrowFile(bot);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(record));
+  fs.renameSync(tmp, file);
+}
+
+function dropBorrow(bot) {
+  try { fs.unlinkSync(borrowFile(bot)); } catch { /* already gone */ }
+}
+
+// A set-aside stack this process is not using (the body restarted mid-build,
+// or an earlier give-back failed) goes back before anything else is stocked.
+async function restoreStaleBorrow(bot, normalize) {
+  const record = readBorrow(bot);
+  if (!record || studioStock.get(bot)?.has(record.slot)) return;
+  await giveBackBorrowed(bot, normalize);
+}
+
+async function giveBackBorrowed(bot, normalize) {
+  const record = readBorrow(bot);
+  if (!record) return true;
+  const type = bot.registry.itemsByName[record.name];
+  if (!type) return false;
+  let slot = record.slot;
+  const held = bot.inventory.slots[slot];
+  // Back already: the same stack, or (after a give-back whose readback timed out)
+  // the same type, some of it since used, e.g. torches the survival tick placed.
+  if (held?.name === record.name && (held.count === record.count || record.givingBack)) {
+    dropBorrow(bot);
+    return true;
+  }
+  if (held && (held.name === record.name || !record.materials.includes(normalize(held.name)))) {
+    // Something else of the character's is there now, or the same type at another
+    // count before any give-back was sent (the character's own new stack): the
+    // set-aside stack is still owed, so it goes to an empty slot.
+    slot = Array.from({ length: 36 }, (_, i) => 9 + i).find(s => bot.inventory.slots[s] == null);
+    if (slot === undefined) return false;
+  }
+  const Item = itemLoader(bot.registry);
+  try {
+    writeBorrow(bot, { ...record, slot, givingBack: true });
+    await bot.creative.setInventorySlot(slot, new Item(type.id, record.count));
+  } catch {
+    if (!bot.inventory.slots[slot]) {
+      try { writeBorrow(bot, { ...record, givingBack: false }); } catch { /* the flag only widens the match */ }
+    }
+    return false;
+  }
+  const deadline = performance.now() + 1500;
+  while (performance.now() < deadline) {
+    const back = bot.inventory.slots[slot];
+    if (back?.name === record.name && back.count === record.count) {
+      dropBorrow(bot);
+      studioStock.get(bot)?.delete(slot);
+      return true;
+    }
+    await sleep(50);
+  }
+  return false;
 }
 
 const NEIGHBOURS = [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]];

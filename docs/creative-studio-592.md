@@ -18,8 +18,9 @@ All three must hold, otherwise `build_schematic` behaves exactly as before:
   `creative.flyTo` moves through anything, so every leg is checked clear of blocks first.
 - Never hovers in a cell any section of the design still has to fill, and prefers the outside
   of the structure.
-- Takes each material from the creative inventory into an empty hotbar slot. It never overwrites
-  a slot, and it hands the stacks back when the build ends.
+- Takes each material from the creative inventory into an empty hotbar slot. It hands the stacks
+  back when the build ends. With a full hotbar it sets one plain stack aside (see below) instead
+  of overwriting anything.
 - Places each block with native `placeBlock` and counts only matching world readback.
 - Orders cells so each has a neighbour to be placed against; refuses a design with a floating
   cell; refuses to replace anything already standing in the design space.
@@ -87,8 +88,13 @@ The server log for those sessions has no command, teleport, kick or movement-rej
 Characters are separate processes and agree through files in `HERMESCRAFT_STUDIO_PLAN_DIR`
 (default `~/.hermescraft/studio-plans`), which both bodies must share.
 
-A character needs one empty hotbar slot. Materials swap through the slot the build stocked
-itself; nothing the character carries is overwritten.
+Materials swap through one hotbar slot: an empty one if there is one. A character that has
+played for weeks carries all 36 slots (both characters on the family server did on 2026-11-19).
+Then the build sets aside one hotbar stack that is only a type and a count, with no name,
+enchantment, wear or other data: it writes that stack to
+`$HERMESCRAFT_STUDIO_BORROW_DIR/<name>.json` (default `~/.hermescraft/studio-borrowed`), uses the
+slot, and puts the same type and count back when the build ends. If the body died mid-build, the
+next studio build gives it back first. A hotbar with nothing plain on it is refused at 0 blocks.
 
 Measured on the same isolated instance, with a third account standing in for the child and
 counts from the server console:

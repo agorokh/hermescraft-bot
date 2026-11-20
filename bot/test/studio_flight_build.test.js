@@ -285,6 +285,20 @@ test('a set-aside record with an out-of-range slot or count is ignored', { timeo
   }
 });
 
+test('an over-full stack is never set aside; a plain one beside it is', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = fullInventory(bot);
+  // Slot 44 holds eleven stone pickaxes (stack size 1), as a /give can leave them.
+  bot.inventory.slots[44] = { name: 'stone_pickaxe', count: 11, slot: 44, type: registry.itemsByName.stone_pickaxe.id,
+    stackSize: 1, components: [], removedComponents: [] };
+  const before = carried(bot);
+  const result = await studio(bot, FLAGPOLE);
+  assert.match(result.result, /20\/20 blocks placed/);
+  assert.ok(bot.trace.filter(e => e.kind === 'creative_stock').every(e => e.slot !== 44), 'the over-full slot is never written');
+  assert.deepEqual(carried(bot), before);
+  assert.ok(kit.length === 36);
+});
+
 test('one free hotbar slot is enough: materials swap through the slot the build stocked itself', { timeout: 20000 }, async () => {
   const bot = new StudioBot();
   const kit = [];

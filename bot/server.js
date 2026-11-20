@@ -212,6 +212,7 @@ async function shadowRoute(bot, body, sender, primaryResult) {
 import { installQuestEngine, isCompanionSpeaker } from './lib/quests.js';
 import { installFollowOnJoin, trackWorldName, currentWorldName } from './lib/follow_on_join.js';
 import { adaptStudioRoute, createStudioCoBuild } from './lib/studio_cobuild.js';
+import { cancelBackgroundTask } from './lib/task_cancel.js';
 import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
@@ -4689,15 +4690,9 @@ const httpServer = http.createServer(async (req, res) => {
       // Cancel current task
       if (path === '/task/cancel') {
         const b = ensureBot();
-        b._stopGeneration = (b._stopGeneration || 0) + 1;
-        b._actionEpoch = (b._actionEpoch || 0) + 1;
-        b.interrupt_code = true;
-        b.pathfinder.setGoal(null);
-        try { b.stopDigging(); } catch {}
-        if (currentTask && currentTask.status === 'running') {
-          currentTask.status = 'cancelled';
-        }
-        return respond(res, 200, { ok: true, result: 'Task cancelled.', state: briefState() });
+        const studioActive = _studio_owner === b && Boolean(_studio?.isActive?.());
+        const result = cancelBackgroundTask(b, currentTask, studioActive);
+        return respond(res, 200, { ok: true, result, state: briefState() });
       }
 
       // Background task system: POST /task/ACTION runs async, returns task_id

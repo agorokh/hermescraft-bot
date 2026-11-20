@@ -253,6 +253,38 @@ test('a same-type stack found before any give-back was sent is the character\'s 
   assert.equal(fs.existsSync(borrowFile('Rosie')), false);
 });
 
+test('a failed material write after a set-aside gives the stack straight back and does not block the build', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = fullInventory(bot);
+  const original = bot.creative.setInventorySlot;
+  let writes = 0;
+  bot.creative.setInventorySlot = async (slot, item) => {
+    writes++;
+    if (writes === 1) { bot.inventory.slots[slot] = null; throw new Error('timed out'); } // slot emptied, write lost
+    return original(slot, item);
+  };
+  const result = await studio(bot, FLAGPOLE);
+  assert.match(result.result, /20\/20 blocks placed/, 'later cells still get their material');
+  assert.deepEqual(carried(bot), kit);
+  assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+});
+
+test('a set-aside record with an out-of-range slot or count is ignored', { timeout: 20000 }, async () => {
+  const bot = new StudioBot();
+  const kit = fullInventory(bot);
+  for (const bad of [{ slot: 5, count: 1 }, { slot: 44, count: 0 }, { slot: 44, count: 999 }, { slot: 46, count: 1 }]) {
+    fs.writeFileSync(borrowFile('Rosie'), JSON.stringify({ name: 'torch', materials: ['red_wool'], ...bad }));
+    bot.trace = [];
+    bot.blocks.clear();
+    const result = await studio(bot, FLAGPOLE);
+    assert.match(result.result, /20\/20 blocks placed/, JSON.stringify(bad));
+    // Nothing is "given back" from the bad record: only the build's own slot 44 is written.
+    assert.ok(bot.trace.filter(e => e.kind === 'creative_stock').every(e => e.slot === 44), JSON.stringify(bad));
+    assert.deepEqual(carried(bot), kit, JSON.stringify(bad));
+    assert.equal(fs.existsSync(borrowFile('Rosie')), false);
+  }
+});
+
 test('one free hotbar slot is enough: materials swap through the slot the build stocked itself', { timeout: 20000 }, async () => {
   const bot = new StudioBot();
   const kit = [];

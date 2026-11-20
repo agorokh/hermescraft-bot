@@ -268,12 +268,9 @@ export async function ensureCreativeStock(bot, itemName, normalize = name => nam
   try {
     await bot.creative.setInventorySlot(slot, new Item(type.id, type.stackSize || 64));
   } catch (error) {
-    if (borrowed && bot.inventory.slots[slot]?.name === borrowed.name && bot.inventory.slots[slot]?.count === borrowed.count) {
-      dropBorrow(bot);
-    } else if (borrowed) {
-      if (!studioStock.has(bot)) studioStock.set(bot, new Map());
-      studioStock.get(bot).set(slot, wanted);
-    }
+    // A set-aside stack whose slot write failed goes straight back (or stays
+    // noted, untracked, so the next stock gives it back first).
+    if (borrowed) await giveBackBorrowed(bot, normalize);
     return { ok: false, reason: `could not take ${wanted} from the creative inventory: ${error.message}` };
   }
   if (!studioStock.has(bot)) studioStock.set(bot, new Map());
@@ -323,8 +320,11 @@ function borrowFile(bot) {
 export function readBorrow(bot) {
   try {
     const record = JSON.parse(fs.readFileSync(borrowFile(bot), 'utf8'));
-    if (!Number.isInteger(record?.slot) || typeof record.name !== 'string' || !Number.isInteger(record.count)
-      || !Array.isArray(record.materials)) return null;
+    const type = bot.registry.itemsByName[record?.name];
+    // Only a player storage slot (9..44) and a count one stack can hold.
+    if (!type || !Number.isInteger(record.slot) || record.slot < 9 || record.slot > 44
+      || !Number.isInteger(record.count) || record.count < 1 || record.count > (type.stackSize || 64)
+      || !Array.isArray(record.materials) || !record.materials.every(m => typeof m === 'string' && m)) return null;
     return record;
   } catch {
     return null;

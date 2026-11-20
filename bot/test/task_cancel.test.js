@@ -46,12 +46,16 @@ test('during a co-build, cancel never touches the co-build\'s own task', () => {
   assert.match(result, /^Nothing cancelled: the running task is the studio build\./);
 });
 
-test('during a co-build with nothing running, cancel stops nothing and says how to end it', () => {
+test('during a co-build with nothing running, cancel touches nothing and says how to end it', () => {
   const bot = body();
   const done = { status: 'done' };
   const result = cancelBackgroundTask(bot, done, true);
   assert.equal(done.status, 'done');
   assert.equal(bot._stopGeneration, 4);
+  assert.equal(bot._actionEpoch, 9, 'no interrupt of any kind reaches the co-build');
+  assert.equal(bot.interrupt_code, false);
+  assert.deepEqual(bot.goals, []);
+  assert.equal(bot.digStops, 0);
   assert.match(result, /^No background task to cancel\. .*mc stop ends it/);
   assert.match(cancelBackgroundTask(bot, null, true), /^No background task to cancel/);
 });

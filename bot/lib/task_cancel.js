@@ -20,6 +20,8 @@ export function cancelBackgroundTask(bot, task, studioActive) {
     // The running task is the co-build itself: leave it, and the task slot, as they are.
     return `Nothing cancelled: the running task is the studio build. ${STUDIO_KEEPS_GOING}`;
   }
+  // Nothing of the brain's to cancel: any interrupt would only reach the co-build.
+  if (studioActive && !running) return `No background task to cancel. ${STUDIO_KEEPS_GOING}`;
   // Every interrupt a background task listens for, except the one the co-build reads.
   if (!studioActive) bot._stopGeneration = (bot._stopGeneration || 0) + 1;
   bot._actionEpoch = (bot._actionEpoch || 0) + 1;
@@ -27,6 +29,5 @@ export function cancelBackgroundTask(bot, task, studioActive) {
   try { bot.pathfinder?.setGoal(null); } catch { /* not moving */ }
   try { bot.stopDigging?.(); } catch { /* not digging */ }
   if (running) task.status = 'cancelled';
-  if (!studioActive) return 'Task cancelled.';
-  return running ? `Task cancelled. ${STUDIO_KEEPS_GOING}` : `No background task to cancel. ${STUDIO_KEEPS_GOING}`;
+  return studioActive ? `Task cancelled. ${STUDIO_KEEPS_GOING}` : 'Task cancelled.';
 }

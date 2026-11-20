@@ -212,6 +212,7 @@ async function shadowRoute(bot, body, sender, primaryResult) {
 import { installQuestEngine, isCompanionSpeaker } from './lib/quests.js';
 import { installFollowOnJoin, trackWorldName, currentWorldName } from './lib/follow_on_join.js';
 import { adaptStudioRoute, createStudioCoBuild } from './lib/studio_cobuild.js';
+import { STUDIO_NO_REMOTE_PLACEMENT, studioSessionOn } from './lib/studio_flight.js';
 import { cancelBackgroundTask } from './lib/task_cancel.js';
 import { startSurvivalTick } from './lib/survival.js';
 
@@ -3143,6 +3144,7 @@ const ACTIONS = {
   },
 
   async place_fill({ block: blockName, x1, y1, z1, x2, y2, z2, hollow = false }) {
+    if (studioSessionOn()) return { result: STUDIO_NO_REMOTE_PLACEMENT, refused: true };
     const b = ensureBot();
     const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
     const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);

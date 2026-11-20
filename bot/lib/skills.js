@@ -1339,8 +1339,8 @@ async function build_schematic(bot, { name, x, y, z, ...bodyArgs }) {
   if (!section && isStudioDesign(name)) {
     const label = STUDIO_DESIGNS[name];
     return {
-      result: `The ${label} is built together with the player, one part at a time: it starts when they ask in chat ("build the ${label.toLowerCase()}"), and the parts they take are theirs to build. Not building it on your own.`,
-      site_refused: true,
+      result: `Couldn't build the ${label} on my own: it is built together with the player, one part at a time. It starts when they ask in chat ("build the ${label.toLowerCase()}"), and the parts they take are theirs to build. Nothing was built.`,
+      site_refused: true, site_code: 'studio_cobuild_only',
     };
   }
   const blocks = sectionEntry ? allBlocks.slice(sectionEntry.blocks[0], sectionEntry.blocks[1]) : allBlocks;

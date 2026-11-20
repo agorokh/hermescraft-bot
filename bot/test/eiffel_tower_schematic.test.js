@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import minecraftData from 'minecraft-data';
 import pathfinderPkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
+import { actionOutcomeFailed, publicActionResult } from '../lib/action_outcome.js';
 import { registerHighLevelSkills } from '../lib/skills.js';
 import { orderForHandPlacement, segmentClear } from '../lib/studio_flight.js';
 
@@ -184,7 +185,11 @@ test('the whole design is never built in one go: the legs a child takes stay her
     for (const call of [skills.build_schematic, skills.build_schematic_advanced]) {
       const result = await call({ name: 'eiffel_tower', ...ORIGIN });
       assert.equal(result.site_refused, true);
-      assert.match(result.result, /^The Eiffel Tower is built together with the player, one part at a time/);
+      assert.equal(result.site_code, 'studio_cobuild_only');
+      assert.match(result.result, /^Couldn't build the Eiffel Tower on my own: it is built together with the player, one part at a time\..*Nothing was built\.$/);
+      assert.equal(actionOutcomeFailed(result), true, 'callers see a failure, not a finished build');
+      assert.equal(publicActionResult('build_schematic', result, { failed: true }),
+        "We build that one together, one part at a time. Ask me to build it and I'll offer you a part!");
     }
     assert.equal(world.size, 0, 'nothing placed');
     assert.deepEqual(hands(rosie), []);

@@ -100,6 +100,7 @@ const SITE_RECOVERY = {
   bounds: "That build won't fit at this height. Try another spot.",
   anchor: "I can't see where you are. Come closer and try again.",
   no_room: 'I need a bigger patch of clear natural ground nearby before I can build that.',
+  studio_cobuild_only: "We build that one together, one part at a time. Ask me to build it and I'll offer you a part!",
 };
 
 export function publicActionResult(action, result, opts = {}) {

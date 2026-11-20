@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import minecraftData from 'minecraft-data';
 import pathfinderPkg from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
+import { actionOutcomeFailed, publicActionResult } from '../lib/action_outcome.js';
 import { registerHighLevelSkills } from '../lib/skills.js';
 import { orderForHandPlacement, segmentClear } from '../lib/studio_flight.js';
 
@@ -171,4 +172,29 @@ test('the four legs go up one after another into a whole 600-block tower', { tim
     ["I'm building the north-east leg by hand.", "I'm building the south-east leg by hand."]);
   assert.deepEqual(steve.trace.filter(e => e.kind === 'chat').map(e => e.text),
     ["I'm building the south-west leg by hand.", "I'm building the north-west leg by hand."]);
+});
+
+test('the whole design is never built in one go: the legs a child takes stay hers', { timeout: 30000 }, async () => {
+  const env = { HERMESCRAFT_PHYSICAL_BUILDS: '1', HERMESCRAFT_STUDIO_FLIGHT: '1' };
+  const prior = Object.keys(env).map(k => process.env[k]);
+  Object.assign(process.env, env);
+  try {
+    const world = new Map();
+    const rosie = new StudioBot('Rosie', world, new Vec3(30.5, 64, 4.5));
+    const skills = registerHighLevelSkills({}, () => rosie);
+    for (const call of [skills.build_schematic, skills.build_schematic_advanced]) {
+      const result = await call({ name: 'eiffel_tower', ...ORIGIN });
+      assert.equal(result.site_refused, true);
+      assert.equal(result.site_code, 'studio_cobuild_only');
+      assert.match(result.result, /^Couldn't build the Eiffel Tower on my own: it is built together with the player, one part at a time\..*Nothing was built\.$/);
+      assert.equal(actionOutcomeFailed(result), true, 'callers see a failure, not a finished build');
+      assert.equal(publicActionResult('build_schematic', result, { failed: true }),
+        "We build that one together, one part at a time. Ask me to build it and I'll offer you a part!");
+    }
+    assert.equal(world.size, 0, 'nothing placed');
+    assert.deepEqual(hands(rosie), []);
+    assert.deepEqual(rosie.trace.filter(e => e.kind === 'chat'), []);
+  } finally {
+    Object.keys(env).forEach((k, i) => { if (prior[i] == null) delete process.env[k]; else process.env[k] = prior[i]; });
+  }
 });

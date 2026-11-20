@@ -314,7 +314,12 @@ const HOTBAR = Array.from({ length: 9 }, (_, i) => 36 + i);
 // A stack that is only an item type and a count: putting a new stack of that
 // type and count back reproduces it exactly.
 function plainStack(bot, item) {
-  if (!item || !bot.registry.itemsByName[item.name] || !(item.count > 0)) return false;
+  const type = item && bot.registry.itemsByName[item.name];
+  if (!type || !(item.count > 0)) return false;
+  // An over-full stack (eleven stone pickaxes from a /give) cannot be put back
+  // through a creative slot: on the family server on 2026-11-20 one came back
+  // as a single pickaxe. Only stacks a player could hold are set aside.
+  if (item.count > (type.stackSize || 64)) return false;
   if (item.nbt) return false;
   if (item.components?.length || item.removedComponents?.length || item.componentMap?.size) return false;
   return true;

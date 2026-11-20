@@ -27,6 +27,17 @@ const AIR = new Set(['air', 'cave_air', 'void_air']);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const key = (x, y, z) => `${x},${y},${z}`;
 
+// In a creative-studio session every block is placed by hand (operator decision
+// 2026-11-18 on agorokh/hermescraft#592: flight is the approach only; remote
+// placement stays ruled out). On the family server on 2026-11-20 the brains
+// used `mc fill` (a server /fill) eight times right after a co-build.
+export const STUDIO_NO_REMOTE_PLACEMENT = "Couldn't fill that: in the creative studio every block is placed by hand. "
+  + 'Place blocks one at a time with mc place, or build a part with the player. Nothing was placed.';
+
+export function studioSessionOn(env = process.env) {
+  return env.HERMESCRAFT_STUDIO_FLIGHT === '1';
+}
+
 export function studioFlightEnabled(bot) {
   return process.env.HERMESCRAFT_STUDIO_FLIGHT === '1'
     && bot?.game?.gameMode === 'creative'

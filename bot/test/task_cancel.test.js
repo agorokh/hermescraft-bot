@@ -22,25 +22,35 @@ test('outside a co-build, cancel stops the body as before', () => {
   assert.equal(task.status, 'cancelled');
 });
 
-test('during a co-build, a brain cancelling its own walk ends the walk, not the co-build', () => {
+test('during a co-build, a brain cancelling its own task interrupts it but leaves the co-build running', () => {
   const bot = body();
   const task = { status: 'running', action: 'bg_goto' };
   const result = cancelBackgroundTask(bot, task, true);
   assert.equal(task.status, 'cancelled');
-  assert.deepEqual(bot.goals, [null], 'the walk loses its goal');
+  assert.deepEqual(bot.goals, [null], 'a walk loses its goal');
+  assert.equal(bot.digStops, 1, 'digging stops');
+  assert.equal(bot._actionEpoch, 10, 'epoch-bound loops (fishing, farming) end');
+  assert.equal(bot.interrupt_code, true);
   assert.equal(bot._stopGeneration, 4, 'the co-build sees no stop');
-  assert.equal(bot._actionEpoch, 9);
-  assert.equal(bot.interrupt_code, false);
-  assert.equal(bot.digStops, 0);
   assert.ok(result.endsWith(STUDIO_KEEPS_GOING));
 });
 
-test('during a co-build with nothing running, cancel changes nothing and says how to end it', () => {
+test('during a co-build, cancel never touches the co-build\'s own task', () => {
+  const bot = body();
+  const task = { status: 'running', action: 'studio_build' };
+  const result = cancelBackgroundTask(bot, task, true);
+  assert.equal(task.status, 'running', 'the task slot stays taken, so no second task can start beside it');
+  assert.deepEqual(bot.goals, []);
+  assert.equal(bot._stopGeneration, 4);
+  assert.equal(bot._actionEpoch, 9);
+  assert.match(result, /^Nothing cancelled: the running task is the studio build\./);
+});
+
+test('during a co-build with nothing running, cancel stops nothing and says how to end it', () => {
   const bot = body();
   const done = { status: 'done' };
   const result = cancelBackgroundTask(bot, done, true);
   assert.equal(done.status, 'done');
-  assert.deepEqual(bot.goals, []);
   assert.equal(bot._stopGeneration, 4);
   assert.match(result, /^No background task to cancel\. .*mc stop ends it/);
   assert.match(cancelBackgroundTask(bot, null, true), /^No background task to cancel/);

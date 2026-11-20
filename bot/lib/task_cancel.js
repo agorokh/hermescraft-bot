@@ -16,17 +16,17 @@ export const STUDIO_KEEPS_GOING = 'The studio build with the player keeps going;
  */
 export function cancelBackgroundTask(bot, task, studioActive) {
   const running = Boolean(task && task.status === 'running');
-  if (studioActive) {
-    if (running) task.status = 'cancelled';
-    // A walk ends when its goal is cleared; the co-build flies and does not use one.
-    if (running) { try { bot.pathfinder?.setGoal(null); } catch { /* not moving */ } }
-    return running ? `Task cancelled. ${STUDIO_KEEPS_GOING}` : `No background task to cancel. ${STUDIO_KEEPS_GOING}`;
+  if (studioActive && running && task.action === 'studio_build') {
+    // The running task is the co-build itself: leave it, and the task slot, as they are.
+    return `Nothing cancelled: the running task is the studio build. ${STUDIO_KEEPS_GOING}`;
   }
-  bot._stopGeneration = (bot._stopGeneration || 0) + 1;
+  // Every interrupt a background task listens for, except the one the co-build reads.
+  if (!studioActive) bot._stopGeneration = (bot._stopGeneration || 0) + 1;
   bot._actionEpoch = (bot._actionEpoch || 0) + 1;
   bot.interrupt_code = true;
   try { bot.pathfinder?.setGoal(null); } catch { /* not moving */ }
   try { bot.stopDigging?.(); } catch { /* not digging */ }
   if (running) task.status = 'cancelled';
-  return 'Task cancelled.';
+  if (!studioActive) return 'Task cancelled.';
+  return running ? `Task cancelled. ${STUDIO_KEEPS_GOING}` : `No background task to cancel. ${STUDIO_KEEPS_GOING}`;
 }

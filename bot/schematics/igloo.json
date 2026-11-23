@@ -1,5 +1,5 @@
 {
-  "_note": "5x5 snow igloo. Small dome shelter for emergency night-safety (council skill-gap priority for build_shelter_for_night). Door faces south.",
+  "_note": "5x5 snow shelter with an open entrance. The inner buttress anchors the first roof tier, and the filled roof center supports the cap.",
   "footprint": [
     5,
     5
@@ -248,6 +248,12 @@
     ],
     [
       1,
+      1,
+      1,
+      "snow_block"
+    ],
+    [
+      1,
       2,
       1,
       "snow_block"
@@ -290,6 +296,12 @@
     ],
     [
       3,
+      2,
+      2,
+      "snow_block"
+    ],
+    [
+      2,
       2,
       2,
       "snow_block"

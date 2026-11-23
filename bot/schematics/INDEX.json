@@ -110,7 +110,7 @@
       "height": 4,
       "summary": "5x5 snow igloo \u2014 small dome shelter for emergency night-safety",
       "materials": {
-        "snow_block": 49,
+        "snow_block": 51,
         "torch": 1
       }
     },

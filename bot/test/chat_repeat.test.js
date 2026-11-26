@@ -109,7 +109,7 @@ test('ACTIONS.chat checks for a repeat before every public send, and router repl
   const code = body.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
   assert.equal((code.match(/\bb\.chat\(/g) || []).length, 0, 'public sends go through sendPublicChat');
   const sends = [...body.matchAll(/sendPublicChat\(b, message\)/g)].map((m) => m.index);
-  const guards = [...body.matchAll(/const repeated = refuseRepeatedChat\(message, fromRouter\);\n\s+if \(repeated\) return repeated;/g)].map((m) => m.index);
+  const guards = [...body.matchAll(/const repeated = refusePublicChat\(message, fromRouter\);\n\s+if \(repeated\) return repeated;/g)].map((m) => m.index);
   assert.equal(sends.length, 2);
   assert.equal(guards.length, 2);
   for (let i = 0; i < sends.length; i += 1) assert.ok(guards[i] < sends[i], 'guard before send');

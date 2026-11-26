@@ -189,8 +189,16 @@ function actionBodyForRoute(route) {
 // and slash commands are exempt.
 const chatRepeatGuard = createChatRepeatGuard();
 
-function refuseRepeatedChat(message, fromRouter) {
+function refusePublicChat(message, fromRouter) {
   if (fromRouter === true || String(message).trimStart().startsWith('/')) return null;
+  // Under open sky, "underground" / "dark down here" is wrong (#592 finding 2).
+  let sky = 'unknown';
+  try { sky = skyAboveBot(); } catch {}
+  const skyClaim = refuseSkyClaim(message, sky);
+  if (skyClaim) {
+    log(`[chat-sky] not sent (sky open): ${String(message).slice(0, 80)}`);
+    return skyClaim;
+  }
   const repeat = chatRepeatGuard.check(message);
   if (!repeat) return null;
   log(`[chat-repeat] not sent (said ${repeat.secondsAgo}s ago): ${String(message).slice(0, 80)}`);
@@ -234,6 +242,7 @@ import { adaptStudioRoute, createStudioCoBuild } from './lib/studio_cobuild.js';
 import { STUDIO_NO_REMOTE_PLACEMENT, studioSessionOn } from './lib/studio_flight.js';
 import { cancelBackgroundTask } from './lib/task_cancel.js';
 import { ROUTER_CHAT, chatRepeatRefusal, createChatRepeatGuard } from './lib/chat_repeat.js';
+import { refuseSkyClaim } from './lib/chat_sky_claim.js';
 import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
@@ -3412,7 +3421,7 @@ const ACTIONS = {
         throw err;
       }
       if (qEntry.source === 'chat' || qEntry.source == null) {
-        const repeated = refuseRepeatedChat(message, fromRouter);
+        const repeated = refusePublicChat(message, fromRouter);
         if (repeated) return repeated;
         const b = ensureBot();
         sendPublicChat(b, message);
@@ -3426,7 +3435,7 @@ const ACTIONS = {
       throw err;
     }
     // case C continued: genuine in-game chat reply, no voice turn pending.
-    const repeated = refuseRepeatedChat(message, fromRouter);
+    const repeated = refusePublicChat(message, fromRouter);
     if (repeated) return repeated;
     const b = ensureBot();
     sendPublicChat(b, message);

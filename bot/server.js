@@ -181,7 +181,26 @@ function actionBodyForRoute(route) {
   const message = body.message ?? body.text;
   if (message == null) return body;
   // Router replies are always in-game chat — never auto-steal into voice.
-  return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true };
+  return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true, chat_origin: 'router' };
+}
+
+// Public lines this bot said recently. A brain `mc chat` line that repeats
+// one inside the window is not sent (agorokh/hermescraft#592); router acks
+// and slash commands are exempt.
+const chatRepeatGuard = createChatRepeatGuard();
+
+function refuseRepeatedChat(message, chatOrigin) {
+  if (chatOrigin === 'router' || String(message).trimStart().startsWith('/')) return null;
+  const repeat = chatRepeatGuard.check(message);
+  if (!repeat) return null;
+  log(`[chat-repeat] not sent (said ${repeat.secondsAgo}s ago): ${String(message).slice(0, 80)}`);
+  return { result: chatRepeatRefusal(repeat.secondsAgo), refused: true, repeat_of: repeat.previous };
+}
+
+function sendPublicChat(b, message) {
+  b.chat(message);
+  if (!String(message).trimStart().startsWith('/')) chatRepeatGuard.record(message);
+  rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
 }
 
 async function shadowRoute(bot, body, sender, primaryResult) {
@@ -214,6 +233,7 @@ import { installFollowOnJoin, trackWorldName, currentWorldName } from './lib/fol
 import { adaptStudioRoute, createStudioCoBuild } from './lib/studio_cobuild.js';
 import { STUDIO_NO_REMOTE_PLACEMENT, studioSessionOn } from './lib/studio_flight.js';
 import { cancelBackgroundTask } from './lib/task_cancel.js';
+import { chatRepeatRefusal, createChatRepeatGuard } from './lib/chat_repeat.js';
 import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
@@ -3289,7 +3309,7 @@ const ACTIONS = {
   },
 
   // ── Utility ──────────────────────────────────────
-  async chat({ message, in_reply_to, skip_voice_autocorrelate }) {
+  async chat({ message, in_reply_to, skip_voice_autocorrelate, chat_origin }) {
     // Voice-source routing (issue #54): if this reply addresses a pending
     // voice turn — either explicitly via in_reply_to, or auto-correlated to
     // the oldest dispatched voice turn within VOICE_AUTOCORRELATE_MS — route
@@ -3392,10 +3412,11 @@ const ACTIONS = {
         throw err;
       }
       if (qEntry.source === 'chat' || qEntry.source == null) {
+        const repeated = refuseRepeatedChat(message, chat_origin);
+        if (repeated) return repeated;
         const b = ensureBot();
-        b.chat(message);
+        sendPublicChat(b, message);
         if (qEntry.status === 'pending' || qEntry.status === 'stale') qEntry.status = 'completed';
-        rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
         return { result: `Sent: ${message} (in_reply_to=${replyTo})` };
       }
       // case B: voice turn intended but routing state is gone — fail closed.
@@ -3405,9 +3426,10 @@ const ACTIONS = {
       throw err;
     }
     // case C continued: genuine in-game chat reply, no voice turn pending.
+    const repeated = refuseRepeatedChat(message, chat_origin);
+    if (repeated) return repeated;
     const b = ensureBot();
-    b.chat(message);
-    rememberSocialEvent({ actor: getMyName(), kind: 'sent', channel: 'public', message });
+    sendPublicChat(b, message);
     return { result: `Sent: ${message}` };
   },
 

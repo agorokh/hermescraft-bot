@@ -190,7 +190,9 @@ data = json.load(sys.stdin)
 
 # If there's a 'result' field, print it prominently
 if 'result' in data:
-    print(f\"  ✓ {data['result']}\")
+    # A refused action did nothing in the world (#592); mark it as such.
+    mark = '✗' if data.get('refused') else '✓'
+    print(f\"  {mark} {data['result']}\")
 
 # Print brief state if present
 state = data.get('state')

@@ -12,6 +12,9 @@ export const CHAT_REPEAT_WINDOW_MS_DEFAULT = 120_000;
 // answer different questions and read fine twice.
 export const CHAT_REPEAT_MIN_WORDS = 3;
 const NEAR_REPEAT_JACCARD = 0.8;
+const NEAR_REPEAT_RUN_WORDS = 8;
+const NEAR_REPEAT_CONTAINED = 0.8;
+const NEAR_REPEAT_CONTAINED_MIN_WORDS = 6;
 
 // Marks a chat action body that an intent router built in-process. A Symbol
 // key cannot arrive in an HTTP JSON body, so a caller of /action/chat cannot
@@ -38,17 +41,41 @@ function words(normalized) {
   return normalized ? normalized.split(' ') : [];
 }
 
+// Longest run of words the two lines share in the same order.
+function longestSharedRun(a, b) {
+  let best = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    for (let j = 0; j < b.length; j += 1) {
+      let k = 0;
+      while (i + k < a.length && j + k < b.length && a[i + k] === b[j + k]) k += 1;
+      if (k > best) best = k;
+    }
+  }
+  return best;
+}
+
+// A line repeats another when it is the same line reworded a little:
+// - most of the words of both lines are shared (Jaccard), or
+// - a long phrase is said again word for word, or
+// - nearly all of the shorter line is inside the longer one.
+// Rosie's live near-repeat (2026-11-26, 85 s apart) shared a 10-word run and
+// 83% of the shorter line but only 61% Jaccard.
 export function isRepeatLine(a, b) {
   const na = normalizeChatLine(a);
   const nb = normalizeChatLine(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
-  const wa = new Set(words(na));
-  const wb = new Set(words(nb));
+  const la = words(na);
+  const lb = words(nb);
+  const wa = new Set(la);
+  const wb = new Set(lb);
   let shared = 0;
   for (const w of wa) if (wb.has(w)) shared += 1;
   const union = wa.size + wb.size - shared;
-  return union > 0 && shared / union >= NEAR_REPEAT_JACCARD;
+  if (union > 0 && shared / union >= NEAR_REPEAT_JACCARD) return true;
+  if (longestSharedRun(la, lb) >= NEAR_REPEAT_RUN_WORDS) return true;
+  const smaller = Math.min(wa.size, wb.size);
+  return smaller >= NEAR_REPEAT_CONTAINED_MIN_WORDS && shared / smaller >= NEAR_REPEAT_CONTAINED;
 }
 
 export function chatRepeatRefusal(secondsAgo) {

@@ -79,6 +79,31 @@ test('near-repeats count; different lines and short acks do not', () => {
   assert.equal(guard.check('OK'), null);
 });
 
+test("Rosie's reworded location line is a repeat; nothing else in the live run is", () => {
+  const { lines } = JSON.parse(readFileSync(new URL('./fixtures/chatcheck_2026-11-26.json', import.meta.url), 'utf8'));
+  const flagged = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    for (let j = i + 1; j < lines.length; j += 1) {
+      if (lines[i].who !== lines[j].who) continue;
+      if (isRepeatLine(lines[i].msg, lines[j].msg)) flagged.push(`${lines[i].who} ${lines[i].t}/${lines[j].t}`);
+    }
+  }
+  assert.deepEqual(flagged, ['Rosie 54/139']);
+});
+
+test('a long phrase said again, or a short line inside a longer one, is a repeat', () => {
+  assert.ok(isRepeatLine(
+    "we're at the flat grass world near 0,-60,-63 - it's bright afternoon, not dark at all!",
+    'still nothing new: we are at the flat grass world near 0,-60,-63 today',
+  ));
+  assert.ok(isRepeatLine(
+    'i can mine stone while you design the tower',
+    'sure thing! i can mine stone while you design the tower base, rosie',
+  ));
+  // Under six words, being inside a longer line is not enough.
+  assert.equal(isRepeatLine('what do you want?', 'hey kid! what do you want to build today?'), false);
+});
+
 test('normalizing ignores case, punctuation, apostrophes and spacing', () => {
   assert.equal(normalizeChatLine("  I'M  here, too!! "), 'im here too');
   assert.equal(normalizeChatLine('I’m here too'), 'im here too');

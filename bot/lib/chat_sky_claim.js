@@ -8,8 +8,16 @@
 // that says it is underground or in the dark is not sent, and the tool result
 // tells the brain what to say.
 
-const NEGATION = /\b(?:not|no|isnt|arent|never|nowhere near)\b[^.!?]{0,12}$/;
-const INTENT = /\b(?:go|going|gonna|head|heading|will|ll|could|can|want|wanna|lets|dig|digging|mine|mining|tunnel|explore|find|found|see|look)\b/;
+// Words that make the sentence a plan or a suggestion, not a statement about
+// where the speaker is now ("let's dig underground here", "we're going to
+// mine underground"). Activity verbs (mining, digging, looking) are not here:
+// "i am mining underground" is a claim about now.
+const PLAN = /\b(?:go|going|gonna|head|heading|will|ill|well go|could|can|should|want|wanna|lets|need to|try|maybe)\b/;
+// Words that deny or warn ("open sky, not underground", "don't go underground here").
+const NEGATION = /\b(?:not|no|dont|do not|isnt|arent|never|nowhere near)\b/;
+// For "deep underground": the thing is somewhere else ("found coal deep underground").
+const ELSEWHERE = /\b(?:there|theres|found|find|see|saw|spotted|ore|vein|diamonds?|iron|coal)\b/;
+const PAST = /^[^.!?]{0,25}\b(?:earlier|before|last time|yesterday|ago)\b/;
 
 function normalize(message) {
   return String(message || '')
@@ -19,12 +27,16 @@ function normalize(message) {
     .replace(/\s+/g, ' ');
 }
 
-// Each pattern names the place the speaker is in right now. `gap` (when set)
-// is the text between the speaker and the place: an intent word there
-// ("we're going to mine underground") makes it a plan, not a claim.
-const PAST = /^[^.!?]{0,25}\b(?:earlier|before|last time|yesterday|ago)\b/;
-const ELSEWHERE = /\b(?:there|theres|found|find|see|saw|spotted|mine|mining|dig|digging|ore|vein)\b[^.!?]{0,25}$/;
+// The part of the sentence before the match, back to the last sentence end
+// or clause break (comma, dash, "but"), so "no kids online, we're deep
+// underground" is still a claim while "open sky, not underground" is not.
+function clauseBefore(text, index) {
+  const sentence = text.slice(0, index).split(/[.!?]/).pop();
+  return sentence.split(/,|;|:| - | — | – |\bbut\b/).pop();
+}
 
+// Each pattern names the place the speaker is in right now. `gap` (when set)
+// is the group between the speaker and the place.
 const CLAIMS = [
   { re: /\bdeep underground\b/g, pre: true },
   { re: /\by\s*[=:]?\s*-?\d+\b([^.!?]{0,30})\bunderground\b/g, gap: 1 },
@@ -41,25 +53,32 @@ export function claimsUnderground(message) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(text)) !== null) {
-      const before = text.slice(Math.max(0, m.index - 30), m.index);
+      const before = clauseBefore(text, m.index);
       const after = text.slice(m.index + m[0].length);
-      if (NEGATION.test(before)) continue;
-      if (gap && INTENT.test(m[gap] || '')) continue;
+      if (NEGATION.test(before) || NEGATION.test(m[0])) continue;
+      if (PLAN.test(before) || (gap && PLAN.test(m[gap] || ''))) continue;
       if (pre && ELSEWHERE.test(before)) continue;
       if (PAST.test(after)) continue;
-      if (/\b(?:not|no)\b/.test(m[0])) continue;
       return true;
     }
   }
   return false;
 }
 
-export const SKY_CLAIM_REFUSAL = "Didn't send that: your ☁ Sky line says open sky, so you are outside on the surface "
-  + 'in daylight — Y -60 is ground level in this world. Say where you are from the Sky line '
-  + '(open sky, grass, bright). Nothing was sent.';
+// Built from the body's own reading, so it never states a time or height the
+// bot is not at.
+export function skyClaimRefusal({ y, isDay } = {}) {
+  const when = isDay === true ? ' in daylight' : isDay === false ? ' at night, under the stars' : '';
+  const fy = Number.isFinite(y) ? Math.floor(y) : null;
+  const height = fy !== null && fy < 50
+    ? ` A low Y like ${fy} is ground level in this world, not underground.`
+    : '';
+  return `Didn't send that: your ☁ Sky line says open sky, so you are outside on the surface${when}.${height} `
+    + 'Say where you are from the Sky line. Nothing was sent.';
+}
 
 // sky: the body's own reading ('open' | 'covered' | 'underground' | 'unknown').
-export function refuseSkyClaim(message, sky) {
+export function refuseSkyClaim(message, { sky, y, isDay } = {}) {
   if (sky !== 'open') return null;
-  return claimsUnderground(message) ? { result: SKY_CLAIM_REFUSAL, refused: true } : null;
+  return claimsUnderground(message) ? { result: skyClaimRefusal({ y, isDay }), refused: true } : null;
 }

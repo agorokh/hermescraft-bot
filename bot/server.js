@@ -192,9 +192,15 @@ const chatRepeatGuard = createChatRepeatGuard();
 function refusePublicChat(message, fromRouter) {
   if (fromRouter === true || String(message).trimStart().startsWith('/')) return null;
   // Under open sky, "underground" / "dark down here" is wrong (#592 finding 2).
-  let sky = 'unknown';
-  try { sky = skyAboveBot(); } catch {}
-  const skyClaim = refuseSkyClaim(message, sky);
+  const here = { sky: 'unknown' };
+  try {
+    const b = ensureBot();
+    here.sky = skyAboveBot(b);
+    here.y = b.entity.position.y;
+    // Same day test as the status line (briefState).
+    if (Number.isFinite(b.time?.timeOfDay)) here.isDay = b.time.timeOfDay < 12000;
+  } catch {}
+  const skyClaim = refuseSkyClaim(message, here);
   if (skyClaim) {
     log(`[chat-sky] not sent (sky open): ${String(message).slice(0, 80)}`);
     return skyClaim;

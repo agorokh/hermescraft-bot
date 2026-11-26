@@ -11,8 +11,12 @@ export const CHAT_REPEAT_WINDOW_MS_DEFAULT = 120_000;
 // Lines of two words or fewer ("ok!", "on it!", "yes") stay sendable: they
 // answer different questions and read fine twice.
 export const CHAT_REPEAT_MIN_WORDS = 3;
-const HISTORY_LIMIT = 16;
 const NEAR_REPEAT_JACCARD = 0.8;
+
+// Marks a chat action body that an intent router built in-process. A Symbol
+// key cannot arrive in an HTTP JSON body, so a caller of /action/chat cannot
+// claim the router exemption.
+export const ROUTER_CHAT = Symbol('hermescraft.routerChat');
 
 export function chatRepeatWindowMs(env = process.env) {
   const raw = Number(env.HERMESCRAFT_CHAT_REPEAT_WINDOW_MS);
@@ -59,7 +63,8 @@ export function createChatRepeatGuard({ now = () => Date.now(), windowMs } = {})
 
   function prune(at) {
     const w = window();
-    history = history.filter((entry) => at - entry.time < w).slice(-HISTORY_LIMIT);
+    // Time is the only bound: every line said inside the window stays checkable.
+    history = history.filter((entry) => at - entry.time < w);
   }
 
   return {

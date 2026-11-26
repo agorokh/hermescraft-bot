@@ -181,7 +181,7 @@ function actionBodyForRoute(route) {
   const message = body.message ?? body.text;
   if (message == null) return body;
   // Router replies are always in-game chat — never auto-steal into voice.
-  return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true, chat_origin: 'router' };
+  return { message, in_reply_to: body.in_reply_to, skip_voice_autocorrelate: true, [ROUTER_CHAT]: true };
 }
 
 // Public lines this bot said recently. A brain `mc chat` line that repeats
@@ -189,8 +189,8 @@ function actionBodyForRoute(route) {
 // and slash commands are exempt.
 const chatRepeatGuard = createChatRepeatGuard();
 
-function refuseRepeatedChat(message, chatOrigin) {
-  if (chatOrigin === 'router' || String(message).trimStart().startsWith('/')) return null;
+function refuseRepeatedChat(message, fromRouter) {
+  if (fromRouter === true || String(message).trimStart().startsWith('/')) return null;
   const repeat = chatRepeatGuard.check(message);
   if (!repeat) return null;
   log(`[chat-repeat] not sent (said ${repeat.secondsAgo}s ago): ${String(message).slice(0, 80)}`);
@@ -233,7 +233,7 @@ import { installFollowOnJoin, trackWorldName, currentWorldName } from './lib/fol
 import { adaptStudioRoute, createStudioCoBuild } from './lib/studio_cobuild.js';
 import { STUDIO_NO_REMOTE_PLACEMENT, studioSessionOn } from './lib/studio_flight.js';
 import { cancelBackgroundTask } from './lib/task_cancel.js';
-import { chatRepeatRefusal, createChatRepeatGuard } from './lib/chat_repeat.js';
+import { ROUTER_CHAT, chatRepeatRefusal, createChatRepeatGuard } from './lib/chat_repeat.js';
 import { startSurvivalTick } from './lib/survival.js';
 
 let _bark_tear_down = null;
@@ -3309,7 +3309,7 @@ const ACTIONS = {
   },
 
   // ── Utility ──────────────────────────────────────
-  async chat({ message, in_reply_to, skip_voice_autocorrelate, chat_origin }) {
+  async chat({ message, in_reply_to, skip_voice_autocorrelate, [ROUTER_CHAT]: fromRouter }) {
     // Voice-source routing (issue #54): if this reply addresses a pending
     // voice turn — either explicitly via in_reply_to, or auto-correlated to
     // the oldest dispatched voice turn within VOICE_AUTOCORRELATE_MS — route
@@ -3412,7 +3412,7 @@ const ACTIONS = {
         throw err;
       }
       if (qEntry.source === 'chat' || qEntry.source == null) {
-        const repeated = refuseRepeatedChat(message, chat_origin);
+        const repeated = refuseRepeatedChat(message, fromRouter);
         if (repeated) return repeated;
         const b = ensureBot();
         sendPublicChat(b, message);
@@ -3426,7 +3426,7 @@ const ACTIONS = {
       throw err;
     }
     // case C continued: genuine in-game chat reply, no voice turn pending.
-    const repeated = refuseRepeatedChat(message, chat_origin);
+    const repeated = refuseRepeatedChat(message, fromRouter);
     if (repeated) return repeated;
     const b = ensureBot();
     sendPublicChat(b, message);

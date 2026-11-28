@@ -24,6 +24,7 @@ import {
   saveHome,
   readHome,
   nextFollowAction,
+  unseenRetryMs,
   returnHomeCommand,
   installFollowOnJoin,
   worldNameFromPacket,
@@ -283,6 +284,68 @@ test('when the player leaves, the character goes back where it set out from', as
       const settled = rosie.sent.length;
       await wait(150);
       assert.equal(rosie.sent.length, settled, 'and nothing more is sent');
+    } finally {
+      down();
+    }
+  });
+});
+
+test('teleports to a player who stays out of view are spaced further and further apart', () => {
+  const cfg = FOLLOW_DEFAULTS;
+  assert.deepEqual(
+    [0, 1, 2, 3, 4, 5, 6, 30].map((n) => unseenRetryMs(n, cfg)),
+    [10000, 10000, 20000, 40000, 80000, 120000, 120000, 120000],
+  );
+  assert.equal(unseenRetryMs(undefined, cfg), cfg.stayRetryMs);
+  assert.equal(unseenRetryMs(9, { stayRetryMs: 40 }), 40, 'no cap configured: the old fixed spacing');
+  assert.equal(unseenRetryMs(9, { stayRetryMs: 40, unseenBackoffMaxMs: 10 }), 40, 'a cap below the base never speeds it up');
+
+  const settled = { claimedAt: 0, childVisible: false, distance: Infinity };
+  const t0 = cfg.arriveWindowMs + 600000;
+  assert.equal(nextFollowAction({ ...settled, lastTpAt: t0 - 30000, unseenTps: 3 }, t0, cfg), 'wait');
+  assert.equal(nextFollowAction({ ...settled, lastTpAt: t0 - 40000, unseenTps: 3 }, t0, cfg), 'tp');
+  assert.equal(nextFollowAction({ ...settled, lastTpAt: t0 - 119000, unseenTps: 12 }, t0, cfg), 'wait');
+  assert.equal(nextFollowAction({ ...settled, lastTpAt: t0 - 120000, unseenTps: 12 }, t0, cfg), 'tp');
+  // The backoff is for the settled state only: an arrival still closes the gap at its own pace.
+  assert.equal(nextFollowAction({ ...settled, lastTpAt: 0, unseenTps: 12 }, 6000, cfg), 'tp');
+});
+
+test('a player on the respawn screen is not teleported to every few seconds (#592)', async () => {
+  await withCompanions('Rosie,Steve', async () => {
+    const dir = tmpDir();
+    const env = { HERMESCRAFT_FOLLOW_ON_JOIN: '1', HERMESCRAFT_COMPANION_NAMES: 'Rosie,Steve' };
+    const rosie = fakeBot('Rosie', { players: ['Rosie', 'KidOne'] });
+    const sentAt = [];
+    rosie.chat = (m) => { rosie.sent.push(m); if (m === '/tp KidOne') sentAt.push(performance.now()); };
+    const logs = [];
+    // Online in the tab list, never in view: what a dead player looks like from here.
+    const config = { ...FAST, arriveWindowMs: 80, unseenBackoffMaxMs: 400 };
+    const down = installFollowOnJoin(rosie, (m) => logs.push(m), { env, claimDir: dir, config });
+    try {
+      await wait(1300);
+      assert.equal(rosie._hc_follow.child(), 'KidOne');
+      sentAt.length = 0;
+      await wait(1700);
+      // At the old fixed 40 ms spacing this window holds about 40 teleports.
+      assert.ok(sentAt.length >= 2, `still asks now and then (${sentAt.length})`);
+      assert.ok(sentAt.length <= 7, `but rarely: ${sentAt.length} teleports in 1.7 s`);
+      const gaps = sentAt.slice(1).map((t, i) => t - sentAt[i]);
+      assert.ok(gaps.every((g) => g >= 380), `each at least the cap apart: ${gaps.map(Math.round)}`);
+      assert.ok(logs.some((m) => /\[follow\] tp to KidOne .*unseen after \d+, next in/.test(m)), 'and the log says why');
+
+      // She respawns beside the character: in view again, so the count starts over.
+      rosie.players.KidOne.entity = { id: 9, username: 'KidOne', type: 'player', position: { x: 11, y: 64, z: 11 } };
+      rosie.entity.position.distanceTo = () => 2;
+      await wait(120);
+      sentAt.length = 0;
+      await wait(200);
+      assert.equal(sentAt.length, 0, 'nothing is sent to a player who is right there');
+
+      // Later she goes out of view again (another world): the first teleports go out promptly.
+      delete rosie.players.KidOne.entity;
+      rosie.entity.position.distanceTo = () => Infinity;
+      await wait(150);
+      assert.ok(sentAt.length >= 2, `prompt again after being seen: ${sentAt.length}`);
     } finally {
       down();
     }

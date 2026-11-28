@@ -27,6 +27,7 @@ export const FOLLOW_DEFAULTS = Object.freeze({
   arriveWindowMs: 60000,  // after a claim, close any gap for this long
   arriveRetryMs: 5000,    // spacing of teleports while arriving
   stayRetryMs: 10000,     // spacing of teleports once settled
+  unseenBackoffMaxMs: 120000, // a player who stays out of view after teleports (dead, on the respawn screen) is asked for at most this often
   tickMs: 2000,
   claimStaggerMs: 1500,   // per roster position, so the first-listed character wins ties
   leaveGraceMs: 3000,     // a Bedrock join drops and re-adds the tab-list entry; wait before believing a leave
@@ -279,6 +280,19 @@ export function clearHome(dir, character) {
 }
 
 // What the follower should do on this tick. Pure, so the timing rules are testable.
+// Spacing of settled teleports to a player who stays out of view. A teleport
+// that lands beside a living player makes them visible; one that does not has
+// reached a player with no body to stand next to (dead and on the respawn
+// screen, #592) or was refused. The character cannot tell which, and cannot see
+// a respawn from afar, so it keeps asking, but less and less often: the first
+// two at stayRetryMs, then twice as long each time, up to unseenBackoffMaxMs.
+// Seeing the player again resets the count.
+export function unseenRetryMs(unseenTps, cfg = FOLLOW_DEFAULTS) {
+  const doublings = Math.min(Math.max(0, (unseenTps || 0) - 1), 20);
+  const cap = Math.max(cfg.unseenBackoffMaxMs ?? cfg.stayRetryMs, cfg.stayRetryMs);
+  return Math.min(cfg.stayRetryMs * 2 ** doublings, cap);
+}
+
 export function nextFollowAction(state, now, cfg = FOLLOW_DEFAULTS) {
   const sinceTp = now - (state.lastTpAt || 0);
   const arriving = now - state.claimedAt < cfg.arriveWindowMs;
@@ -287,7 +301,7 @@ export function nextFollowAction(state, now, cfg = FOLLOW_DEFAULTS) {
   // Settled: a child who walked off is still in view, so leave them be. Only a
   // child who is gone from view (another world, or far away) pulls us along.
   if (state.childVisible) return 'wait';
-  return sinceTp >= cfg.stayRetryMs ? 'tp' : 'wait';
+  return sinceTp >= unseenRetryMs(state.unseenTps, cfg) ? 'tp' : 'wait';
 }
 
 export function returnHomeCommand(origin) {
@@ -504,9 +518,18 @@ export function installFollowOnJoin(bot, log, opts = {}) {
       if (!guest) { try { releaseClaim(dir, child, me); } catch { /* best effort */ } }
       return;
     }
-    // Promoting a guest on the same player retains teleport throttling.
+    // Promoting a guest on the same player retains teleport throttling, and the
+    // count of unseen teleports with it: a guest that had backed off for a player
+    // on the respawn screen must not start again at the short spacing as owner.
     const previous = state?.child === child ? state : null;
-    state = { child, guest, claimedAt: previous?.claimedAt ?? Date.now(), lastTpAt: previous?.lastTpAt ?? 0, lastBeatAt: Date.now() };
+    state = {
+      child,
+      guest,
+      claimedAt: previous?.claimedAt ?? Date.now(),
+      lastTpAt: previous?.lastTpAt ?? 0,
+      unseenTps: previous?.unseenTps || 0,
+      lastBeatAt: Date.now(),
+    };
     logFollow(`following ${child} (${result})`);
   }
 
@@ -580,8 +603,12 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     if (isBusy()) return;
     const entity = findPlayerEntity(bot, state.child);
     const distance = entity ? bot.entity.position.distanceTo(entity.position) : Infinity;
+    if (entity) state.unseenTps = 0;
     const action = nextFollowAction(
-      { claimedAt: state.claimedAt, lastTpAt: state.lastTpAt, childVisible: !!entity, distance },
+      {
+        claimedAt: state.claimedAt, lastTpAt: state.lastTpAt, childVisible: !!entity, distance,
+        unseenTps: state.unseenTps,
+      },
       Date.now(),
       cfg,
     );
@@ -597,7 +624,14 @@ export function installFollowOnJoin(bot, log, opts = {}) {
     }
     if (action !== 'tp') return;
     state.lastTpAt = Date.now();
-    logFollow(`tp to ${state.child} (visible=${!!entity}, dim=${currentDim()})`);
+    // Only settled teleports count: while arriving, the player may still be
+    // loading in, and those retries are already bounded by arriveWindowMs.
+    if (state.lastTpAt - state.claimedAt >= cfg.arriveWindowMs) {
+      state.unseenTps = (state.unseenTps || 0) + 1;
+    }
+    const nextMs = unseenRetryMs(state.unseenTps, cfg);
+    logFollow(`tp to ${state.child} (visible=${!!entity}, dim=${currentDim()}`
+      + `${state.unseenTps ? `, unseen after ${state.unseenTps}, next in ${Math.round(nextMs / 1000)}s` : ''})`);
     // Bare /tp on purpose. Where EssentialsX owns it, a player-target teleport
     // refuses an unsafe landing instead of dropping the character into the void
     // under a player who is mid-air, and this tick simply asks again. The trip

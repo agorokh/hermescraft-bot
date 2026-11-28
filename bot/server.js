@@ -1053,6 +1053,12 @@ async function handleChat(username, message) {
   let forMe = isMessageForMe(routing, getMyName());
   const senderIsCompanion = isCompanionSpeaker(username, getMyName());
   const addressedCommand = !routing.isBroadcast || Boolean(broadcastMentionsMe(routing.body, getMyName()));
+  // The speculative router fires an action from a line without asking the
+  // brain. That is for players. Another character's chatter ("steve im here by
+  // the tower") matched build intents and raised towers nobody asked for
+  // (hermescraft#592), so a character's line never reaches the router. One
+  // addressed to us by name still goes to the brain's queue, as before.
+  const routerOpen = !senderIsCompanion;
 
   // Proximity filter: casual broadcasts from other known agents only count when
   // nearby. Direct or mention-style commands must still reach the router.
@@ -1115,8 +1121,12 @@ async function handleChat(username, message) {
       // Safe-by-design: only reversible/non-destructive actions route.
       let route = { matched: false };
       try {
-        route = await tryRoute(bot, routing.body, username);
-        shadowRoute(bot, routing.body, username, route);  // fire-and-forget; doesn't block
+        if (routerOpen) {
+          route = await tryRoute(bot, routing.body, username);
+          shadowRoute(bot, routing.body, username, route);  // fire-and-forget; doesn't block
+        } else {
+          log(`[IntentRouter] skipped: <${username}> is a character; the line goes to the brain`);
+        }
         if (route.matched) {
           const ack = ackFor(route.intent_name);
           if (ack) {
@@ -1186,8 +1196,12 @@ async function handleChat(username, message) {
           // no LLM round-trip when a keyword pattern matches.
           let route = { matched: false };
           try {
-            route = await tryRoute(bot, command, username);
-            shadowRoute(bot, command, username, route);  // fire-and-forget
+            if (routerOpen) {
+              route = await tryRoute(bot, command, username);
+              shadowRoute(bot, command, username, route);  // fire-and-forget
+            } else {
+              log(`[IntentRouter via mention] skipped: <${username}> is a character; the line goes to the brain`);
+            }
             if (route.matched && ACTIONS[route.action]) {
               const ack = ackFor(route.intent_name);
               if (ack) { try { bot.chat(ack); } catch {} }

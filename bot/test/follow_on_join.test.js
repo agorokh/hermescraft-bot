@@ -811,6 +811,38 @@ test('a guest rides out a tab-list flicker and takes over a stale primary withou
   }, { claimDir: dir, config: { ...FAST, rescanMs: 40, claimBeatMs: 40, claimTtlMs: 800 } });
 });
 
+test('a guest that backed off for an unseen player keeps that spacing when it takes over the claim (#592)', async () => {
+  const dir = tmpDir();
+  tryClaim(dir, 'KidOne', 'Rosie'); // Rosie's process is gone: nobody re-stamps this claim
+  const steve = fakeBot('Steve', { players: ['Rosie', 'Steve', 'KidOne'] }); // KidOne online, never in view
+  const sentAt = [];
+  steve.chat = (m) => { steve.sent.push(m); if (m === '/tp KidOne') sentAt.push(performance.now()); };
+  const config = {
+    ...FAST, rescanMs: 40, claimBeatMs: 40, claimTtlMs: 1300, arriveWindowMs: 80, unseenBackoffMaxMs: 400,
+  };
+  const down = installFollowOnJoin(steve, () => {}, { env: FOLLOW_ENV, claimDir: dir, config });
+  try {
+    steve.emit('playerJoined', { username: 'KidOne' });
+    await wait(300);
+    assert.equal(steve._hc_follow.child(), 'KidOne');
+    assert.equal(readClaim(dir, 'KidOne').character, 'Rosie', 'Steve starts as a guest');
+    const deadline = performance.now() + 4000;
+    while (readClaim(dir, 'KidOne')?.character !== 'Steve' && performance.now() < deadline) await wait(20);
+    assert.equal(readClaim(dir, 'KidOne').character, 'Steve', 'the stale claim passes to the guest');
+    assert.ok(sentAt.length >= 5, `the guest had already backed off to the cap (${sentAt.length} teleports)`);
+    const promotedAt = performance.now();
+    await wait(900);
+    const after = sentAt.filter((t) => t >= promotedAt);
+    // Starting over at 40 ms spacing would put about five teleports in this window.
+    assert.ok(after.length <= 3, `as owner it still asks rarely: ${after.length} in 900 ms`);
+    const lastBefore = sentAt.filter((t) => t < promotedAt).at(-1);
+    const gaps = after.map((t, i) => t - (i === 0 ? lastBefore : after[i - 1]));
+    assert.ok(gaps.every((g) => g >= 380), `each still at least the cap apart: ${gaps.map(Math.round)}`);
+  } finally {
+    down();
+  }
+});
+
 test('visible arrival with no loaded safe cell waits rather than falling back to a player teleport', async () => {
   const bot = clearanceBot();
   bot.entity.position = new Vec3(30.5, 64, 10.5);

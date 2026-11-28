@@ -518,9 +518,18 @@ export function installFollowOnJoin(bot, log, opts = {}) {
       if (!guest) { try { releaseClaim(dir, child, me); } catch { /* best effort */ } }
       return;
     }
-    // Promoting a guest on the same player retains teleport throttling.
+    // Promoting a guest on the same player retains teleport throttling, and the
+    // count of unseen teleports with it: a guest that had backed off for a player
+    // on the respawn screen must not start again at the short spacing as owner.
     const previous = state?.child === child ? state : null;
-    state = { child, guest, claimedAt: previous?.claimedAt ?? Date.now(), lastTpAt: previous?.lastTpAt ?? 0, lastBeatAt: Date.now() };
+    state = {
+      child,
+      guest,
+      claimedAt: previous?.claimedAt ?? Date.now(),
+      lastTpAt: previous?.lastTpAt ?? 0,
+      unseenTps: previous?.unseenTps || 0,
+      lastBeatAt: Date.now(),
+    };
     logFollow(`following ${child} (${result})`);
   }
 
